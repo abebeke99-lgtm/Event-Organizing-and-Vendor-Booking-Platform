@@ -1,0 +1,50 @@
+﻿import 'dotenv/config';
+import express from 'express';
+import cookieParser from 'cookie-parser';
+import cors from 'cors';
+import helmet from 'helmet';
+import { rateLimit } from 'express-rate-limit';
+import authRoutes from './routes/auth.js';
+import adminRoutes from './routes/admin.js';
+import platformRoutes from './routes/platform.js';
+import aboutRoutes from './routes/about.js';
+import contactRoutes from './routes/contact.js';
+import vendorRoutes from './routes/vendor.js';
+import customerRoutes from './routes/customer.js';
+import { requireAdmin } from './middleware/requireAdmin.js';
+import { pool } from './db.js';
+
+const app = express();
+const origin = process.env.WEB_ORIGIN || 'http://127.0.0.1:5173';
+app.locals.systemSettings = {
+  platform_status: process.env.PLATFORM_STATUS || 'open',
+  maintenance_mode: process.env.MAINTENANCE_MODE === 'true',
+};
+app.locals.moduleLocks = {};
+app.set('trust proxy', 1);
+app.use(helmet());
+app.use(cors({ origin, credentials: true, methods: ['GET','POST','PATCH','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type'] }));
+app.use(express.json({ limit: '100kb' }));
+app.use(cookieParser());
+app.use((req,res,next) => {
+  if (['POST','PATCH','PUT','DELETE'].includes(req.method) && req.headers.origin && req.headers.origin !== origin) return res.status(403).json({ error: 'Request origin is not allowed.' });
+  next();
+});
+app.get('/api/health', async (req,res,next) => { try { await pool.query('SELECT 1'); res.json({ status: 'ok', mode: 'mysql' }); } catch (error) { res.json({ status: 'ok', mode: 'demo', message: 'Database not configured; demo platform data is active.' }); } });
+app.use('/api/platform', platformRoutes);
+app.use('/api/about', aboutRoutes);
+app.use('/api/contact', contactRoutes);
+app.use('/api/vendor', vendorRoutes);
+app.use('/api/customer', customerRoutes);
+app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false }), authRoutes);
+app.use('/api/admin', requireAdmin, adminRoutes);
+app.use('/api/admin/about', requireAdmin, aboutRoutes);
+app.use('/api/admin/contact', requireAdmin, contactRoutes);
+app.use((req,res) => res.status(404).json({ error: 'Endpoint not found.' }));
+app.use((error,req,res,next) => {
+  if (res.headersSent) return next(error);
+  console.error('Request failed:', error.message);
+  res.status(500).json({ error: 'The request could not be completed.' });
+});
+const port = Number(process.env.PORT || 4000);
+app.listen(port, '127.0.0.1', () => console.log(`Admin API listening on 127.0.0.1:${port}`));
