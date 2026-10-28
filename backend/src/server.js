@@ -46,5 +46,14 @@ app.use((error,req,res,next) => {
   console.error('Request failed:', error.message);
   res.status(500).json({ error: 'The request could not be completed.' });
 });
-const port = Number(process.env.PORT || 4000);
-app.listen(port, '127.0.0.1', () => console.log(`Admin API listening on 127.0.0.1:${port}`));
+const PORT = Number(process.env.PORT) || 4000;
+const HOST = '0.0.0.0';
+
+const server = app.listen(PORT, HOST, () => {
+  console.log(`Admin API listening on ${HOST}:${PORT}`);
+});
+
+server.on('error', (error) => {
+  console.error('Server failed to start:', error.message);
+  process.exitCode = 1;
+});
