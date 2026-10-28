@@ -15,7 +15,13 @@ import { requireAdmin } from './middleware/requireAdmin.js';
 import { pool } from './db.js';
 
 const app = express();
-const origin = process.env.WEB_ORIGIN || 'http://127.0.0.1:5173';
+const localOrigins = ['http://127.0.0.1:5173', 'http://localhost:5173'];
+const configuredOrigins = (process.env.WEB_ORIGIN || '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+const allowedOrigins = new Set([...localOrigins, ...configuredOrigins]);
+const isAllowedOrigin = (requestOrigin) => !requestOrigin || allowedOrigins.has(requestOrigin);
 app.locals.systemSettings = {
   platform_status: process.env.PLATFORM_STATUS || 'open',
   maintenance_mode: process.env.MAINTENANCE_MODE === 'true',
@@ -23,14 +29,29 @@ app.locals.systemSettings = {
 app.locals.moduleLocks = {};
 app.set('trust proxy', 1);
 app.use(helmet());
-app.use(cors({ origin, credentials: true, methods: ['GET','POST','PATCH','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type'] }));
+app.use(cors({
+  origin(requestOrigin, callback) {
+    callback(null, isAllowedOrigin(requestOrigin));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 app.use((req,res,next) => {
-  if (['POST','PATCH','PUT','DELETE'].includes(req.method) && req.headers.origin && req.headers.origin !== origin) return res.status(403).json({ error: 'Request origin is not allowed.' });
+  if (['POST','PATCH','PUT','DELETE'].includes(req.method) && !isAllowedOrigin(req.headers.origin)) return res.status(403).json({ error: 'Request origin is not allowed.' });
   next();
 });
-app.get('/api/health', async (req,res,next) => { try { await pool.query('SELECT 1'); res.json({ status: 'ok', mode: 'mysql' }); } catch (error) { res.json({ status: 'ok', mode: 'demo', message: 'Database not configured; demo platform data is active.' }); } });
+app.get('/api/health', async (req,res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', database: 'healthy' });
+  } catch (error) {
+    console.error('Health check database query failed:', error.code || error.name);
+    res.status(503).json({ status: 'degraded', database: 'unavailable' });
+  }
+});
 app.use('/api/platform', platformRoutes);
 app.use('/api/about', aboutRoutes);
 app.use('/api/contact', contactRoutes);
@@ -51,6 +72,9 @@ const HOST = '0.0.0.0';
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`Admin API listening on ${HOST}:${PORT}`);
+  pool.query('SELECT 1')
+    .then(() => console.log('MySQL connection verified.'))
+    .catch((error) => console.error('MySQL connection unavailable at startup:', error.code || error.name));
 });
 
 server.on('error', (error) => {
