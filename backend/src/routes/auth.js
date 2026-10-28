@@ -5,7 +5,10 @@ import { createSession, hashToken, writeAudit } from '../lib/security.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 
 const router = Router();
-const cookieOptions = () => ({ httpOnly: true, secure: process.env.COOKIE_SECURE === 'true', sameSite: 'strict', path: '/', maxAge: 8 * 60 * 60 * 1000 });
+const cookieOptions = () => {
+  const sameSite = process.env.COOKIE_SAME_SITE === 'none' ? 'none' : 'strict';
+  return { httpOnly: true, secure: process.env.COOKIE_SECURE === 'true' || sameSite === 'none', sameSite, path: '/', maxAge: 8 * 60 * 60 * 1000 };
+};
 
 router.post('/login', async (req, res, next) => {
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';

@@ -1,6 +1,8 @@
 ﻿import mysql from 'mysql2/promise';
 import 'dotenv/config';
 
+const useSsl = process.env.DB_SSL === 'true';
+
 export const pool = mysql.createPool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT || 3306),
@@ -10,7 +12,8 @@ export const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   decimalNumbers: true,
-  charset: 'utf8mb4'
+  charset: 'utf8mb4',
+  ...(useSsl ? { ssl: { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' } } : {})
 });
 
 export async function inTransaction(work) {
