@@ -119,5 +119,10 @@ export function listPublicServices(services = [], filters = {}) {
 export function getPublicServiceById(services = [], serviceId) {
   const parsedId = Number(serviceId);
   if (!Number.isInteger(parsedId)) return null;
-  return listPublicServices(services).services.find((service) => Number(service.id) === parsedId) || null;
+  const record = (Array.isArray(services) ? services : [])
+    .map(normalizeServiceRecord)
+    .find((service) => Number(service.id) === parsedId);
+  if (!record) return null;
+  if (record.visibility === 'private' || record.visibility === 'hidden' || record.status === 'draft' || record.published === false) return null;
+  return record;
 }

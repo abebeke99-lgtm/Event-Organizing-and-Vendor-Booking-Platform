@@ -1,13 +1,17 @@
-INSERT IGNORE INTO roles (name, description, is_admin) VALUES ('Admin','Platform administrator',TRUE),('Customer','Platform customer',FALSE),('Organizer','Event organizer',FALSE),('Vendor','Service provider',FALSE);
-INSERT IGNORE INTO permissions (permission_key,description) VALUES ('admin:*','Full administrator dashboard access');
-INSERT IGNORE INTO role_permissions (role_id,permission_id) SELECT r.id,p.id FROM roles r JOIN permissions p WHERE r.name='Admin' AND p.permission_key='admin:*';
-INSERT IGNORE INTO users (id,full_name,email,password_hash,status) VALUES (1,'EventHub Admin','admin@example.com','$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','active'),(2,'Sample Organizer','organizer@example.com','$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','active'),(3,'Aster Floral Studio','vendor@example.com','$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy','active');
-INSERT IGNORE INTO user_roles (user_id,role_id) SELECT 1,id FROM roles WHERE name='Admin';
-INSERT IGNORE INTO user_roles (user_id,role_id) SELECT 2,id FROM roles WHERE name='Organizer';
-INSERT IGNORE INTO user_roles (user_id,role_id) SELECT 3,id FROM roles WHERE name='Vendor';
-INSERT IGNORE INTO service_categories (id,name,description) VALUES (1,'Catering','Food and beverage services'),(2,'Photography','Event photography'),(3,'Decoration','Floral and venue styling');
-INSERT IGNORE INTO vendor_profiles (id,user_id,business_name,category_id,city,description,verification_status,verified_at) VALUES (1,3,'Aster Floral Studio',3,'Addis Ababa','Event florals and venue styling','verified',NOW());
-INSERT IGNORE INTO services (id,vendor_id,category_id,title,description,price,currency) VALUES (1,1,3,'Luxury Wedding Styling','Floral and table styling package',18000,'ETB'),(2,1,2,'Event Photography','Full-day photo coverage',15000,'ETB');
-INSERT IGNORE INTO events (id,organizer_id,title,event_type,city,start_date,end_date,budget,status,notes) VALUES (1,2,'EventHub Sample Wedding','Wedding','Addis Ababa','2030-11-18 18:00:00','2030-11-19 00:00:00',240000,'active','A public sample event'),(2,2,'EventHub Sample Conference','Conference','Bahir Dar','2030-12-01 09:00:00','2030-12-01 18:00:00',160000,'active','A public sample event');
-INSERT IGNORE INTO site_content (page_key,page_title,content,is_published,language) VALUES ('about_us','About EventHub','{"hero_heading":"About EventHub","hero_subtitle":"Your trusted platform for planning memorable events.","introduction":"EventHub connects customers and event professionals.","mission":"Make event planning simpler.","vision":"Trusted event services for everyone.","values":[],"benefits":[],"steps":[]}',TRUE,'en');
-INSERT IGNORE INTO system_settings (setting_key,setting_value,updated_by) VALUES ('support_email','support@eventhub.example',1),('support_phone','+251 911 000 000',1),('support_address','Addis Ababa, Ethiopia',1),('support_hours','Monday to Friday, 8:00 AM - 6:00 PM',1),('social_links','[]',1);
+INSERT IGNORE INTO service_categories (name, description, is_active) VALUES
+  ('Wedding Venues', 'Ceremony and reception venues for weddings and private celebrations.', TRUE),
+  ('Catering', 'Food and beverage services for events of every size.', TRUE),
+  ('Photography', 'Event photography and visual storytelling coverage.', TRUE),
+  ('Decoration', 'Floral design, venue styling, and ambient decor.', TRUE),
+  ('Entertainment', 'Live performances, DJs, and master of ceremonies support.', TRUE);
+
+INSERT INTO system_settings (setting_key, setting_value, updated_by)
+VALUES
+  ('platform_status', 'open', NULL),
+  ('maintenance_mode', 'false', NULL),
+  ('support_email', 'support@eventhub.example', NULL),
+  ('support_phone', '+251 911 000 000', NULL),
+  ('support_address', 'Addis Ababa, Ethiopia', NULL),
+  ('support_hours', 'Monday to Friday, 8:00 AM - 6:00 PM', NULL),
+  ('social_links', '[]', NULL)
+ON DUPLICATE KEY UPDATE setting_key = setting_key;
