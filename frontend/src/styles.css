@@ -43,6 +43,24 @@
 @keyframes fadeUp{0%{opacity:0;transform:translateY(22px)}100%{opacity:1;transform:translateY(0)}}
 @keyframes zoomPan{0%{transform:scale(1)}100%{transform:scale(1.08)}}
 
+/* Authentication pages intentionally opt out of the dashboard/page-shell layout. */
+#root{min-height:100vh;width:100%}
+.login-wrap{min-height:100vh;width:100%;display:flex;align-items:center;justify-content:center;padding:24px;margin:0;overflow:visible}
+.login-card{width:100%;max-width:420px;margin:0 auto;box-sizing:border-box;padding:32px;background:#fff;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.08);overflow:visible}
+.login-card .brand-mark{margin:0 0 10px}
+.login-card .eyebrow{margin-bottom:10px}
+.login-card h1{margin:0 0 8px}
+.login-card .muted{margin-bottom:18px}
+.login-card form{display:grid;gap:14px}
+.login-card .field{gap:6px}
+.login-card .field input,.login-card .field select{width:100%;min-height:42px}
+.login-card .login-button{width:100%;min-height:42px;margin-top:2px}
+.password-input-wrap{position:relative;width:100%}
+.password-input-wrap input{padding-right:48px !important}
+.password-visibility{position:absolute;right:12px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;background:transparent;color:#718097;box-shadow:none}
+.password-visibility:hover{background:transparent;color:#4551d1;transform:translateY(-50%)}
+@media(max-width:480px){.login-wrap{padding:16px}.login-card{padding:20px}}
+
 .language-picker{display:inline-flex;align-items:center;gap:6px;min-height:32px;color:#59667f}
 .language-picker select{height:32px;max-width:112px;border:1px solid #e3e8f0;border-radius:6px;padding:0 8px;background:#fff;color:#344258;font-size:11px}
 .site-nav .language-picker{margin-left:4px}
