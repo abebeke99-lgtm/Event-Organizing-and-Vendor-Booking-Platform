@@ -16,7 +16,6 @@ CREATE TABLE IF NOT EXISTS services (
 ALTER TABLE events ADD COLUMN IF NOT EXISTS guest_count INT UNSIGNED NULL AFTER budget;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at DATETIME NULL AFTER status;
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS service_id BIGINT UNSIGNED NULL AFTER vendor_id;
-ALTER TABLE bookings ADD CONSTRAINT fk_bookings_service FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE SET NULL;
 
 ALTER TABLE system_settings MODIFY updated_by BIGINT UNSIGNED NULL;
 
@@ -86,11 +85,10 @@ FROM roles r
 JOIN permissions p ON p.permission_key = 'reviews.view_own'
 WHERE r.name IN ('Vendor', 'Organizer', 'Customer');
 
-INSERT INTO system_settings (setting_key, setting_value, updated_by)
+INSERT IGNORE INTO system_settings (setting_key, setting_value, updated_by)
 VALUES
   ('support_email', 'support@eventhub.example', NULL),
   ('support_phone', '+251 911 000 000', NULL),
   ('support_address', 'Addis Ababa, Ethiopia', NULL),
   ('support_hours', 'Monday to Friday, 8:00 AM - 6:00 PM', NULL),
-  ('social_links', '[]', NULL)
-ON DUPLICATE KEY UPDATE setting_key = setting_key;
+  ('social_links', '[]', NULL);
