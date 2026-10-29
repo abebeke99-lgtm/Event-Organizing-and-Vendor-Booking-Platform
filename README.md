@@ -63,8 +63,8 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 ### Data layer
 
-- MySQL-ready schema and migration files are included
-- Runtime demo mode keeps the application usable even when the database is not configured
+- MySQL is the configured database, accessed through `mysql2`.
+- The admin API uses database-backed records. Public marketplace, customer dashboard, vendor dashboard, and platform authentication routes still contain in-memory demo data and are not production-ready.
 
 ## 6. Business Rules and Security
 
@@ -103,14 +103,9 @@ The platform includes the requested features for:
 4. Start the frontend with Vite.
 5. Use the demo accounts or create your own platform users through the auth endpoints.
 
-## 10. Demo Accounts
+## 10. Test Access
 
-The platform includes sample accounts for local testing:
-
-- admin@eventflow.io / admin1234
-- organizer@eventflow.io / organizer123
-- vendor@eventflow.io / vendor1234
-- customer@eventflow.io / customer123
+No production or demo credentials are shipped as a supported sign-in method. Create an administrator with the `bootstrap:admin` command and a private `ADMIN_BOOTSTRAP_*` environment configuration only after the database is provisioned. Do not publish those values.
 
 ## 11. Acceptance Criteria Covered
 
@@ -132,6 +127,21 @@ For a production deployment, use:
 - production MySQL or a managed relational database
 - a real payment processor and notification service
 - migration-based database deployment and audit retention policy
+
+### Current Netlify and Render settings
+
+- Netlify base directory: repository root
+- Netlify build command: `npm ci && npm run build`
+- Netlify publish directory: `frontend/dist`
+- Set Netlify `VITE_API_BASE_URL` to an empty value to use the same-origin `/api/*` proxy. If set to an API origin, browser cookie restrictions can affect cross-site sessions.
+- Render root directory: repository root
+- Render build command: `npm ci`
+- Render start command: `npm run start`
+- Render health check: `/api/health`
+
+Set these backend environment variables in Render: `WEB_ORIGIN=https://infobekele.netlify.app`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_REJECT_UNAUTHORIZED=true`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; the server binds to `0.0.0.0`. Do not put database credentials in frontend variables.
+
+The live API health check currently returns HTTP 503, so its database connection is unavailable. Verify the managed MySQL host, database name, user grants, network access, and TLS settings in Render before login or CRUD can work. Do not run `npm run migrate` against production until each SQL file has been reviewed and the existing database has a verified backup; the current migrations include data upserts.
 
 ## 13. Future Enhancements
 
@@ -394,7 +404,7 @@ This codebase provides a working foundation for the Event Organizing and Vendor 
 
 - Frontend: Vercel or Netlify
 - Backend: Dockerized Node.js app on AWS ECS, Azure App Service, or Render
-- Database: AWS RDS or managed PostgreSQL
+- Database: managed MySQL compatible with the current schema
 - Cache: Redis on AWS ElastiCache
 - Object storage: S3 or Cloud Storage
 - CDN: CloudFront or Azure CDN
@@ -404,7 +414,7 @@ This codebase provides a working foundation for the Event Organizing and Vendor 
 
 - User requests route to a web app frontend.
 - Frontend communicates with backend API.
-- API reads/writes to PostgreSQL.
+- API reads/writes to MySQL.
 - Payment flows go through secure gateway endpoints.
 - Notifications are sent asynchronously through a message queue.
 

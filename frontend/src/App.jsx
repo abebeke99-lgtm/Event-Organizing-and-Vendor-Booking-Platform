@@ -1,11 +1,13 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, BadgeCheck, Bell, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, ChevronLeft, ChevronRight, ClipboardList, CreditCard, LayoutDashboard, LogOut, Menu, MessageSquareWarning, Search, Settings, Shield, Tags, UserRound, Users, X } from 'lucide-react';
+import { Activity, BadgeCheck, Bell, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, ChevronLeft, ChevronRight, ClipboardList, CreditCard, Eye, EyeOff, Languages, LayoutDashboard, LogOut, Menu, MessageSquareWarning, Search, Settings, Shield, Tags, UserRound, Users, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
+import { formatEventBudget, formatEventDate } from './eventUtils.js';
+import { setLanguage, translate, translateText, useLanguage } from './language.js';
 
 const menu = [
   ['overview','Dashboard Overview',LayoutDashboard], ['users','User Management',Users], ['roles','Role and Permission Management',Shield],
   ['vendors','Vendor Verification',BadgeCheck], ['categories','Service Category Management',Tags], ['events','Event Management',CalendarDays],
-  ['bookings','Booking Management',ClipboardList], ['payments','Payment and Refund Management',CreditCard], ['reviews','Reviews and Complaints',MessageSquareWarning],
+  ['bookings','Booking Management',ClipboardList], ['package-requests','Event Package Requests',ClipboardList], ['payments','Payment and Refund Management',CreditCard], ['reviews','Reviews and Complaints',MessageSquareWarning],
   ['messages','Contact Messages',MessageSquareWarning], ['reports','Reports and Analytics',ChartNoAxesCombined], ['notifications','Notifications',Bell], ['audit-logs','Audit Logs',Activity],
   ['settings','System Settings',Settings], ['profile','Profile',UserRound], ['logout','Logout',LogOut]
 ];
@@ -16,6 +18,7 @@ const modules = {
   categories:{title:'Service Category Management', endpoint:'categories', columns:['id','name','description','is_active','created_at'], fields:[['name','Category name','text'],['description','Description','text']], create:true, actions:['edit','deactivate']},
   events:{title:'Event Management', endpoint:'events', columns:['id','title','event_type','organizer_id','city','start_date','budget','status'], fields:[['organizer_id','Organizer user ID','number'],['title','Title','text'],['event_type','Event type','text'],['city','City','text'],['start_date','Start date','datetime-local'],['end_date','End date','datetime-local'],['budget','Budget','number'],['status','Status','select','draft,active,booked,in_progress,completed,cancelled'],['notes','Notes','textarea']], create:true, actions:['edit','deactivate']},
   bookings:{title:'Booking Management', endpoint:'bookings', columns:['id','event_id','vendor_id','service_description','quoted_amount','currency','status','moderation_reason','created_at'], actions:['moderate']},
+  'package-requests':{title:'Event Package Requests', endpoint:'event-package-requests', columns:['id','event_id','event_title','event_type','requested_date','requested_location','requester_name','requester_email','service_category','guest_count','budget','notes','status','created_at'], actions:['package-status'], statuses:['new','reviewed','replied','closed']},
   payments:{title:'Payment and Refund Management', endpoint:'payments', columns:['id','booking_id','amount','currency','provider','provider_reference','status','created_at'], actions:['refund']},
   reviews:{title:'Reviews and Complaints', endpoint:'reviews', columns:['id','booking_id','rating','comment','status','created_at'], actions:['review']},
   complaints:{title:'Reviews and Complaints', endpoint:'complaints', columns:['id','user_id','booking_id','subject','details','status','resolution','created_at'], actions:['complaint']},
@@ -25,13 +28,18 @@ const modules = {
 };
 const permissions = ['users:read','users:write','vendors:verify','events:write','bookings:moderate','payments:read','reviews:moderate','categories:write','reports:read','notifications:write'];
 const slugPath = (slug) => slug === 'overview' ? '/admin' : `/admin/${slug}`;
-const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+
+function navigateBrowserPath(path) {
+  window.history.pushState({}, '', path);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
 
 async function api(path, options={}) {
   const response = await fetch(`${apiBaseUrl}/api${path}`, { credentials:'include', ...options, headers:{ ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) } });
   if (response.status === 204) return null;
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+  if (!response.ok) throw Object.assign(new Error(result.message || result.error || `Request failed (${response.status}).`), { status: response.status });
   return result;
 }
 function display(value) {
@@ -41,9 +49,10 @@ function display(value) {
   return String(value);
 }
 function Field({field,value,onChange}) {
+  const language = useLanguage();
   const [name,label,type,choices] = field;
   const common = { id:name, name, value:value ?? '', onChange:(event)=>onChange(name, event.target.value), required: !label.includes('optional') };
-  return <label className="field"><span>{label}</span>{type === 'textarea' ? <textarea {...common} rows="3" /> : type === 'select' ? <select {...common}>{choices.split(',').map((item)=><option key={item} value={item}>{item}</option>)}</select> : <input {...common} type={type} step={type==='number'?'0.01':undefined} />}</label>;
+  return <label className="field"><span>{translateText(label, language)}</span>{type === 'textarea' ? <textarea {...common} rows="3" /> : type === 'select' ? <select {...common}>{choices.split(',').map((item)=><option key={item} value={item}>{translateText(item, language)}</option>)}</select> : <input {...common} type={type} step={type==='number'?'0.01':undefined} />}</label>;
 }
 function Modal({title,children,onClose,onSubmit,busy,submitLabel='Save',danger=false}) {
   return <div className="overlay" onMouseDown={(event)=>event.target===event.currentTarget && !busy && onClose()}><form className="modal" onSubmit={onSubmit}><div className="modal-head"><h2>{title}</h2><button className="icon-button" type="button" onClick={onClose} aria-label="Close"><X size={18}/></button></div><div className="modal-body">{children}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>Cancel</button><button className={`button ${danger?'danger':''}`} disabled={busy}>{busy?'Saving…':submitLabel}</button></div></form></div>;
@@ -76,6 +85,7 @@ const ROUTE_LABELS = {
 };
 
 function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpenRegister }) {
+  const language = useLanguage();
   const isAuthenticated = Boolean(user);
   const guestItems = [...PUBLIC_NAV_ITEMS];
   let roleItems = guestItems;
@@ -124,11 +134,23 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
 
   const navItems = isAuthenticated ? roleItems : guestItems;
 
-  return <header className="site-header"><div className="site-header-inner"><button type="button" className="site-brand" onClick={() => onNavigate('/')} aria-label="Go to homepage"><span className="brand-mark small">EH</span><div><strong>EventHub</strong><small>Platform</small></div></button><nav className="site-nav" aria-label="Main navigation">{navItems.map((item) => <button key={item.path} type="button" className={`nav-link ${currentPath === item.path ? 'active' : ''}`} onClick={() => onNavigate(item.path)}>{item.label}</button>)}</nav><div className="header-actions"><button type="button" className="icon-button ghost" aria-label="Search"><Search size={16}/></button><button type="button" className="icon-button ghost" aria-label="Notifications"><Bell size={16}/></button>{isAuthenticated ? <><button type="button" className="button secondary small" onClick={() => onNavigate(roleItems[0]?.path || '/')}>{(user?.role || 'customer').charAt(0).toUpperCase() + (user?.role || 'customer').slice(1)} dashboard</button><button type="button" className="button secondary small" onClick={onLogout}>Logout</button></> : <><button type="button" className="button secondary small" onClick={onOpenLogin}>Login</button><button type="button" className="button small" onClick={onOpenRegister}>Register</button></>}</div></div></header>;
+  return <header className="site-header"><div className="site-header-inner"><button type="button" className="site-brand" onClick={() => onNavigate('/')} aria-label={translate('goHome', language)}><span className="brand-mark small">EH</span><div><strong>EventHub</strong><small>{translate('platform', language)}</small></div></button><nav className="site-nav" aria-label={translate('mainNavigation', language)}>{navItems.map((item) => <button key={item.path} type="button" className={`nav-link ${currentPath === item.path ? 'active' : ''}`} onClick={() => onNavigate(item.path)}>{translateText(item.label, language)}</button>)}<LanguageSelector/></nav><div className="header-actions"><button type="button" className="icon-button ghost" aria-label={translate('search', language)} title={translate('search', language)}><Search size={16}/></button><button type="button" className="icon-button ghost" aria-label={translate('notifications', language)} title={translate('notifications', language)}><Bell size={16}/></button>{isAuthenticated ? <><button type="button" className="button secondary small" onClick={() => onNavigate(roleItems[0]?.path || '/')}>{translate(`${user?.role || 'customer'}Dashboard`, language)}</button><button type="button" className="button secondary small" onClick={onLogout}>{translate('logout', language)}</button></> : <><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></>}</div></div></header>;
+}
+
+function LanguageSelector() {
+  const language = useLanguage();
+  return <label className="language-picker"><Languages size={15} aria-hidden="true"/><span className="sr-only">{translate('language', language)}</span><select aria-label={translate('language', language)} value={language} onChange={(event) => setLanguage(event.target.value)}><option value="en">English</option><option value="am">አማርኛ</option></select></label>;
+}
+
+function PasswordField({ name, label, value, onChange, autoComplete = 'current-password', language }) {
+  const [visible, setVisible] = useState(false);
+  const inputId = `auth-${name}`;
+  return <div className="field"><span id={`${inputId}-label`}>{label}</span><div className="password-input-wrap"><input id={inputId} aria-labelledby={`${inputId}-label`} name={name} type={visible ? 'text' : 'password'} autoComplete={autoComplete} value={value} onChange={onChange} required /><button className="password-visibility" type="button" aria-label={translate(visible ? 'hidePassword' : 'showPassword', language)} title={translate(visible ? 'hidePassword' : 'showPassword', language)} onClick={() => setVisible((current) => !current)}>{visible ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div>;
 }
 
 function AppFooter() {
-  return <footer className="site-footer"><div className="site-footer-inner"><div className="footer-column"><div className="brand-pill"><div className="brand-mark small">EH</div><div><strong>EventHub</strong><small>Platform</small></div></div><p>One trusted marketplace for event planning, vendor discovery, booking coordination, and service fulfilment.</p></div><div className="footer-column"><h4>Explore</h4><a href="/events">Browse Events</a><a href="/vendors">Find Vendors</a><a href="/services">Browse Services</a><a href="/categories">Service Categories</a></div><div className="footer-column"><h4>Support</h4><a href="/help">Help Center</a><a href="/help">Frequently Asked Questions</a><a href="/help">Booking Guide</a><a href="/contact">Contact Support</a></div><div className="footer-column"><h4>Legal</h4><a href="/terms">Terms and Conditions</a><a href="/privacy">Privacy Policy</a><a href="/help">Cookie Policy</a><a href="/terms">Refund Policy</a></div></div><div className="site-footer-bottom"><span>© {new Date().getFullYear()} EventHub</span><span>hello@eventhub.example</span><span>+251 911 000 000</span></div></footer>;
+  const language = useLanguage();
+  return <footer className="site-footer"><div className="site-footer-inner"><div className="footer-column"><div className="brand-pill"><div className="brand-mark small">EH</div><div><strong>EventHub</strong><small>{translate('platform', language)}</small></div></div><p>{translate('footerDescription', language)}</p></div><div className="footer-column"><h4>{translate('explore', language)}</h4><a href="/events">{translate('browseEvents', language)}</a><a href="/vendors">{translate('findVendorsNav', language)}</a><a href="/services">{translate('browseServices', language)}</a><a href="/categories">{translate('serviceCategories', language)}</a></div><div className="footer-column"><h4>{translate('support', language)}</h4><a href="/help">{translate('helpCenter', language)}</a><a href="/help">{translate('frequentlyAskedQuestions', language)}</a><a href="/help">{translate('bookingGuide', language)}</a><a href="/contact">{translate('contactSupport', language)}</a></div><div className="footer-column"><h4>{translate('legal', language)}</h4><a href="/terms">{translate('termsConditions', language)}</a><a href="/privacy">{translate('privacyPolicy', language)}</a><a href="/help">{translate('cookiePolicy', language)}</a><a href="/terms">{translate('refundPolicy', language)}</a></div></div><div className="site-footer-bottom"><span>© {new Date().getFullYear()} EventHub</span><span>hello@eventhub.example</span><span>+251 911 000 000</span></div></footer>;
 }
 
 function EmptyState({ title, message }) {
@@ -185,6 +207,8 @@ function BackToTopButton() {
 }
 
 function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [vendors, setVendors] = useState([]);
   const [services, setServices] = useState([]);
   const [events, setEvents] = useState([]);
@@ -192,26 +216,27 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
   const [activeSlide, setActiveSlide] = useState(0);
 
   const featureSlides = useMemo(() => [
-    { title: 'Wedding planning', image: 'https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=1200&q=80', description: 'Plan elegant ceremonies, guest experiences, and event-day coordination.' },
-    { title: 'Corporate events', image: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=1200&q=80', description: 'Launch memorable conferences, launches, and executive experiences.' },
-    { title: 'Birthdays & celebrations', image: 'https://images.unsplash.com/photo-1469371670807-013ccf25f16a?auto=format&fit=crop&w=1200&q=80', description: 'Create joyful milestone moments with curated vendors and services.' },
-  ], []);
+    { title: t('weddingPlanning'), image: 'https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=1200&q=80', description: t('weddingPlanningCopy') },
+    { title: t('corporateEvents'), image: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=1200&q=80', description: t('corporateEventsCopy') },
+    { title: t('birthdayCelebrations'), image: 'https://images.unsplash.com/photo-1469371670807-013ccf25f16a?auto=format&fit=crop&w=1200&q=80', description: t('birthdayCelebrationsCopy') },
+  ], [language]);
 
   const categoryCards = [
-    { name: 'Weddings', image: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=80', path: '/events' },
-    { name: 'Catering', image: 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=900&q=80', path: '/services' },
-    { name: 'Photography', image: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80', path: '/vendors' },
-    { name: 'Decor & Styling', image: 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80', path: '/categories' },
+    { name: t('weddings'), image: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=80', path: '/events' },
+    { name: t('catering'), image: 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=900&q=80', path: '/services' },
+    { name: t('photography'), image: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80', path: '/vendors' },
+    { name: t('decorStyling'), image: 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80', path: '/categories' },
   ];
 
   useEffect(() => {
+    const controller = new AbortController();
     async function loadLandingData() {
       try {
         const [overviewResponse, vendorsResponse, servicesResponse, eventsResponse] = await Promise.all([
-          api('/platform/overview'),
-          api('/platform/vendors'),
-          api('/platform/services'),
-          api('/platform/events'),
+          api('/platform/overview', { signal: controller.signal }),
+          api('/platform/vendors', { signal: controller.signal }),
+          api('/platform/services', { signal: controller.signal }),
+          api('/platform/events', { signal: controller.signal }),
         ]);
 
         setSummary(overviewResponse?.data || {});
@@ -219,6 +244,7 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
         setServices(Array.isArray(servicesResponse?.data) ? servicesResponse.data : []);
         setEvents(Array.isArray(eventsResponse?.data) ? eventsResponse.data : []);
       } catch (error) {
+        if (error.name === 'AbortError') return;
         setVendors([]);
         setServices([]);
         setEvents([]);
@@ -226,6 +252,7 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
     }
 
     loadLandingData();
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -238,9 +265,9 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
   }, [featureSlides]);
 
   const stats = [
-    { label: 'Vendors live', value: `${summary.totalVendors || vendors.length || 120}+` },
-    { label: 'Events planned', value: `${summary.totalEvents || events.length || 4800}` },
-    { label: 'Bookings closed', value: `${summary.totalBookings || 9400}` },
+    { label: t('vendorsLive'), value: `${summary.totalVendors || vendors.length || 120}+` },
+    { label: t('eventsPlanned'), value: `${summary.totalEvents || events.length || 4800}` },
+    { label: t('bookingsClosed'), value: `${summary.totalBookings || 9400}` },
   ];
 
   const displayVendors = vendors.slice(0, 4);
@@ -252,16 +279,16 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
     <main className="platform-landing">
       <section className="hero-section premium-hero">
         <div className="hero-copy reveal reveal-up is-visible">
-          <p className="eyebrow">EVENT ORGANIZING & VENDOR BOOKING</p>
-          <h1>Design unforgettable events with trusted partners.</h1>
-          <p className="muted">Discover vetted vendors, compare service packages, and coordinate every detail from bookings to delivery in one polished platform.</p>
+          <p className="eyebrow">{t('homeHeroEyebrow')}</p>
+          <h1>{t('homeHeroTitle')}</h1>
+          <p className="muted">{t('homeHeroCopy')}</p>
           <div className="cta-row">
-            <button className="button" onClick={() => onNavigate('/vendors')}>Find Vendors</button>
-            <button className="button secondary" onClick={() => onNavigate('/events')}>Explore Events</button>
+            <button className="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
+            <button className="button secondary" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button>
           </div>
           <div className="hero-search">
-            <input type="search" placeholder="Search vendors, services, and events" aria-label="Search vendors, services, and events" />
-            <button type="button">Search</button>
+            <input type="search" placeholder={t('searchAll')} aria-label={t('searchAll')} />
+            <button type="button">{t('search')}</button>
           </div>
           <div className="chip-row">
             {['Weddings', 'Corporate', 'Graduations', 'Catering', 'Decor', 'Photography'].map((item) => <span key={item} className="chip">{item}</span>)}
@@ -272,18 +299,18 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
           <div className="hero-visual-card hero-card-main">
             <img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt="Wedding venue celebration" />
             <div className="hero-overlay-card">
-              <span>Featured venue</span>
+              <span>{t('featuredVenue')}</span>
               <strong>Fountain Hall</strong>
-              <small>Wedding ceremony & reception</small>
+              <small>{t('weddingCeremonyReception')}</small>
             </div>
           </div>
           <div className="hero-floating-card hero-floating-top">
             <strong>4.9/5</strong>
-            <span>Average vendor rating</span>
+            <span>{t('averageVendorRating')}</span>
           </div>
           <div className="hero-floating-card hero-floating-bottom">
             <strong>320+</strong>
-            <span>Urban event bookings</span>
+            <span>{t('urbanEventBookings')}</span>
           </div>
         </div>
       </section>
@@ -295,10 +322,10 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-            <p className="eyebrow">POPULAR CATEGORIES</p>
-            <h2>Explore event services by type</h2>
+            <p className="eyebrow">{t('popularCategories')}</p>
+            <h2>{t('exploreServicesByType')}</h2>
           </div>
-          <button className="button secondary small" onClick={() => onNavigate('/categories')}>Browse all</button>
+          <button className="button secondary small" onClick={() => onNavigate('/categories')}>{t('browseAll')}</button>
         </div>
         <div className="category-grid">
           {categoryCards.map((category) => (
@@ -313,10 +340,10 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-            <p className="eyebrow">FEATURED EVENTS</p>
-            <h2>Event inspiration for every occasion</h2>
+              <p className="eyebrow">{t('featuredEvents')}</p>
+            <h2>{t('eventInspiration')}</h2>
           </div>
-          <button className="button secondary small" onClick={() => onNavigate('/events')}>View all</button>
+          <button className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewAll')}</button>
         </div>
 
         <div className="carousel-shell">
@@ -342,39 +369,39 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-            <p className="eyebrow">FEATURED VENDORS</p>
-            <h2>Trusted professionals for your next event</h2>
+            <p className="eyebrow">{t('featuredVendors')}</p>
+            <h2>{t('trustedProfessionals')}</h2>
           </div>
-          <button className="button secondary small" onClick={() => onNavigate('/vendors')}>See all vendors</button>
+          <button className="button secondary small" onClick={() => onNavigate('/vendors')}>{t('seeAllVendors')}</button>
         </div>
         <div className="card-grid">
           {displayVendors.length ? displayVendors.map((vendor) => (
             <article key={vendor.id} className="vendor-card">
               <div className="card-image-wrap">
                 <img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.name} loading="lazy" />
-                <span className="verify-badge">{vendor.verified ? 'Verified' : 'Available'}</span>
+                <span className="verify-badge">{vendor.verified ? t('verified') : t('available')}</span>
               </div>
               <div className="card-body">
                 <div className="meta-row"><span>{vendor.category || 'Event Services'}</span><span>★ {vendor.rating || 4.8}</span></div>
                 <h3>{vendor.name}</h3>
-                <p>{vendor.city || vendor.location || 'Service area available'}</p>
+                <p>{vendor.city || vendor.location || translateText('Service area available', language)}</p>
                 <div className="card-actions">
-                  <button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>View profile</button>
-                  <button className="icon-button ghost" type="button" aria-label={`Save ${vendor.name}`} onClick={() => onNavigate('/vendors')}>♥</button>
+                  <button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>{t('viewProfile')}</button>
+                  <button className="icon-button ghost" type="button" aria-label={`${translate('save', language)} ${vendor.name}`} onClick={() => onNavigate('/vendors')}>♥</button>
                 </div>
               </div>
             </article>
-          )) : <div className="empty-card">No vendor profiles are available right now.</div>}
+          )) : <div className="empty-card">{t('noVendorProfiles')}</div>}
         </div>
       </Reveal>
 
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-            <p className="eyebrow">POPULAR SERVICES</p>
-            <h2>Packages designed for smooth event execution</h2>
+            <p className="eyebrow">{t('popularServices')}</p>
+            <h2>{t('smoothPackages')}</h2>
           </div>
-          <button className="button secondary small" onClick={() => onNavigate('/services')}>Browse services</button>
+          <button className="button secondary small" onClick={() => onNavigate('/services')}>{t('browseServices')}</button>
         </div>
         <div className="card-grid">
           {displayServices.length ? displayServices.map((service) => (
@@ -387,20 +414,20 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
                 <h3>{service.title}</h3>
                 <p>{service.vendorName || 'EventHub vendor'}</p>
                 <div className="pricing-row">
-                  <strong>{service.price ? `${service.currency || 'ETB'} ${service.price}` : 'Request quote'}</strong>
-                  <button type="button" className="button small" onClick={() => onNavigate('/services')}>Book</button>
+                  <strong>{service.price ? `${service.currency || 'ETB'} ${service.price}` : t('requestQuote')}</strong>
+                  <button type="button" className="button small" onClick={() => onNavigate('/services')}>{t('book')}</button>
                 </div>
               </div>
             </article>
-          )) : <div className="empty-card">No services are currently published.</div>}
+          )) : <div className="empty-card">{t('noServicesPublished')}</div>}
         </div>
       </Reveal>
 
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-            <p className="eyebrow">PUBLIC EVENT DISCOVERY</p>
-            <h2>Events ready for your next memorable moment</h2>
+            <p className="eyebrow">{t('publicEventDiscovery')}</p>
+            <h2>{t('eventsNextMoment')}</h2>
           </div>
         </div>
         <div className="event-grid">
@@ -410,21 +437,21 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
               <div className="event-content">
                 <span className="event-tag">{event.type || 'Event'}</span>
                 <h3>{event.title}</h3>
-                <p>{event.date || 'Date available'}</p>
-                <small>{event.location || 'Location available'}</small>
-                <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>View details</button>
+                <p>{event.date || translateText('Date available', language)}</p>
+                <small>{event.location || t('locationAvailable')}</small>
+                <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewDetails')}</button>
               </div>
             </article>
-          )) : <div className="empty-card">No public events are currently listed.</div>}
+          )) : <div className="empty-card">{t('noPublicEvents')}</div>}
         </div>
       </Reveal>
 
       <Reveal className="section-block" direction="up">
         <div className="process-grid">
           {[
-            ['1', 'Discover', 'Browse verified vendors and service categories tailored to your event requirements.'],
-            ['2', 'Compare', 'Shortlist formats, pricing, locations, and availability without losing visibility.'],
-            ['3', 'Book', 'Request a quote, confirm details, and keep planning aligned across the event lifecycle.'],
+            ['1', t('discover'), t('discoverCopy')],
+            ['2', t('compare'), t('compareCopy')],
+            ['3', t('bookStep'), t('bookCopy')],
           ].map(([step, title, copy]) => (
             <div key={step} className="process-card">
               <span className="process-number">{step}</span>
@@ -438,12 +465,12 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
       <Reveal className="section-block" direction="up">
         <div className="cta-banner">
           <div>
-            <p className="eyebrow light">READY TO PLAN</p>
-            <h2>Find the right people and services for your next event.</h2>
+            <p className="eyebrow light">{t('readyToPlan')}</p>
+            <h2>{t('findRightPeople')}</h2>
           </div>
           <div className="cta-banner-actions">
-            <button className="button" onClick={() => onNavigate('/vendors')}>Find vendors</button>
-            <button className="button pale" onClick={() => onNavigate('/register')}>Become a vendor</button>
+            <button className="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
+            <button className="button pale" onClick={() => onNavigate('/register')}>{t('becomeVendor')}</button>
           </div>
         </div>
       </Reveal>
@@ -458,44 +485,142 @@ function PublicPageLayout({ currentPath, user, onNavigate, onLogout, children })
 }
 
 function EventsPage({ onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [events, setEvents] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [featured, setFeatured] = useState(null);
+  const [featuredLoading, setFeaturedLoading] = useState(true);
+  const [featuredError, setFeaturedError] = useState('');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState('');
   const [search, setSearch] = useState('');
   const [location, setLocation] = useState('');
   const [category, setCategory] = useState('');
   const [sort, setSort] = useState('upcoming');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ total: 0, page: 1, totalPages: 1, limit: 6 });
+  const [requestEvent, setRequestEvent] = useState(null);
+  const [requestForm, setRequestForm] = useState({ event_title: '', event_type: '', requested_date: '', requested_location: '', requester_name: '', requester_email: '', service_category: '', guest_count: '', budget: '', notes: '' });
+  const [requestBusy, setRequestBusy] = useState(false);
+  const [requestError, setRequestError] = useState('');
+  const [requestSuccess, setRequestSuccess] = useState('');
 
   useEffect(() => {
-    async function loadEvents() {
+    let active = true;
+    const timer = window.setTimeout(async () => {
       setLoading(true);
+      setError('');
       try {
         const params = new URLSearchParams({ page: String(page), limit: '6', sort });
-        if (search) params.set('search', search);
+        if (search.trim()) params.set('search', search.trim());
         if (category) params.set('category', category);
         if (location) params.set('location', location);
-
         const response = await api(`/platform/events?${params.toString()}`);
-        const nextEvents = Array.isArray(response?.data) ? response.data : [];
-        setEvents(nextEvents);
-        setPagination(response?.pagination || { total: nextEvents.length, page, totalPages: 1, limit: 6, sort });
-      } catch (error) {
+        if (!active) return;
+        setEvents(Array.isArray(response?.data) ? response.data : []);
+        setPagination(response?.pagination || { total: 0, page: 1, totalPages: 1, limit: 6 });
+      } catch (issue) {
+        if (!active) return;
         setEvents([]);
-        setPagination({ total: 0, page: 1, totalPages: 1, limit: 6, sort });
+        setPagination({ total: 0, page: 1, totalPages: 1, limit: 6 });
+        setError(issue.status ? `${t('loadEventsError')} (${issue.status})` : t('loadEventsError'));
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
-    }
-    loadEvents();
-  }, [search, location, category, sort, page]);
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [search, location, category, sort, page, reloadKey]);
 
   useEffect(() => {
-    if (!selectedEvent && events.length) {
-      setSelectedEvent(events[0]);
+    let active = true;
+    api('/platform/events/categories').then((response) => {
+      if (active) setCategories(Array.isArray(response?.data) ? response.data : []);
+    }).catch(() => {
+      if (active) setCategories([]);
+    });
+    api('/platform/events/featured').then((response) => {
+      if (active) {
+        setFeatured(response?.data || null);
+        setFeaturedError('');
+      }
+    }).catch(() => {
+      if (active) {
+        setFeatured(null);
+        setFeaturedError(t('featuredError'));
+      }
+    }).finally(() => {
+      if (active) setFeaturedLoading(false);
+    });
+    return () => { active = false; };
+  }, []);
+
+  async function viewDetails(eventId) {
+    setDetailsLoading(true);
+    setDetailsError('');
+    setSelectedEvent(null);
+    try {
+      const response = await api(`/platform/events/${encodeURIComponent(eventId)}`);
+      setSelectedEvent(response?.data || null);
+      if (!response?.data) setDetailsError(t('detailNotFound'));
+    } catch (issue) {
+      setDetailsError(issue.status === 404 ? t('detailNotFound') : issue.status ? `${t('detailError')} (${issue.status})` : t('detailError'));
+    } finally {
+      setDetailsLoading(false);
     }
-  }, [events, selectedEvent]);
+  }
+
+  function openPackageRequest(event) {
+    setRequestEvent(event);
+    setRequestForm({ event_title: event.title || '', event_type: event.type || '', requested_date: '', requested_location: event.location || '', requester_name: '', requester_email: '', service_category: '', guest_count: '', budget: '', notes: '' });
+    setRequestError('');
+    setRequestSuccess('');
+  }
+
+  async function submitPackageRequest(event) {
+    event.preventDefault();
+    if (!requestEvent || requestBusy || requestSuccess) return;
+    setRequestBusy(true);
+    setRequestError('');
+    try {
+      await api('/platform/event-package-requests', {
+        method: 'POST',
+        body: JSON.stringify({
+          event_id: requestEvent.id,
+          event_title: requestForm.event_title.trim() || requestEvent.title,
+          event_type: requestForm.event_type.trim() || null,
+          requested_date: requestForm.requested_date ? new Date(requestForm.requested_date).toISOString().slice(0, 16) : null,
+          requested_location: requestForm.requested_location.trim() || null,
+          requester_name: requestForm.requester_name,
+          requester_email: requestForm.requester_email,
+          service_category: requestForm.service_category.trim() || null,
+          guest_count: requestForm.guest_count ? Number(requestForm.guest_count) : null,
+          budget: requestForm.budget ? Number(requestForm.budget) : null,
+          notes: requestForm.notes.trim() || null,
+        }),
+      });
+      setRequestSuccess(t('requestSuccess'));
+    } catch (issue) {
+      setRequestError(issue.status === 400 ? t('requestValidationError') : issue.status === 404 ? t('eventUnavailable') : issue.status ? `${t('requestFailure')} (${issue.status})` : t('requestFailure'));
+    } finally {
+      setRequestBusy(false);
+    }
+  }
+
+  function updateRequestField(event) {
+    const { name, value } = event.target;
+    setRequestForm((current) => ({ ...current, [name]: value }));
+  }
+
+  function planEvent() {
+    openPackageRequest({ id: null, title: '', type: '', location: null, startDate: null });
+  }
+
+  const categoryOptions = [...new Map(['wedding', 'conference', 'social', 'exhibition', ...categories.map((value) => String(value).trim()).filter(Boolean)].map((value) => [value.toLowerCase(), value])).values()];
 
   function resetFilters() {
     setSearch('');
@@ -505,75 +630,87 @@ function EventsPage({ onNavigate }) {
     setPage(1);
   }
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">EVENTS</p><h2>Upcoming experiences</h2></div><button className="button secondary" onClick={() => onNavigate('/register')}>Plan my event</button></div>
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">EVENTS</p><h2>{t('upcomingExperiences')}</h2><p className="muted">{t('pageDescription')}</p></div><button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button></div>
     <div className="panel event-filter-panel">
       <div className="toolbar stacked-toolbar">
-        <input className="field-input" value={search} onChange={(e) => { setPage(1); setSearch(e.target.value); }} placeholder="Search events, venues, or themes" />
-        <select className="filter-select" value={location} onChange={(e) => { setPage(1); setLocation(e.target.value); }}>
-          <option value="">All locations</option>
-          <option value="Addis Ababa">Addis Ababa</option>
-          <option value="Bahir Dar">Bahir Dar</option>
-          <option value="Hawassa">Hawassa</option>
-          <option value="Dire Dawa">Dire Dawa</option>
+        <input className="field-input" aria-label={t('searchEvents')} maxLength={120} value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder={t('searchEvents')} />
+        <select className="filter-select" aria-label={t('allLocations')} value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }}>
+          <option value="">{t('allLocations')}</option><option value="Addis Ababa">Addis Ababa</option><option value="Bahir Dar">Bahir Dar</option><option value="Hawassa">Hawassa</option><option value="Dire Dawa">Dire Dawa</option>
         </select>
-        <select className="filter-select" value={category} onChange={(e) => { setPage(1); setCategory(e.target.value); }}>
-          <option value="">All categories</option>
-          <option value="wedding">Wedding</option>
-          <option value="conference">Conference</option>
-          <option value="social">Social</option>
-          <option value="exhibition">Exhibition</option>
+        <select className="filter-select" aria-label={t('allCategories')} value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
+          <option value="">{t('allCategories')}</option>
+          {categoryOptions.map((value) => <option key={value} value={value.toLowerCase()}>{t(value.toLowerCase()) === value.toLowerCase() ? value : t(value.toLowerCase())}</option>)}
         </select>
-        <select className="filter-select" value={sort} onChange={(e) => { setPage(1); setSort(e.target.value); }}>
-          <option value="upcoming">Upcoming</option>
-          <option value="earliest">Earliest</option>
-          <option value="latest">Latest</option>
-          <option value="alphabetical">Alphabetical</option>
+        <select className="filter-select" aria-label={t('upcoming')} value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
+          <option value="upcoming">{t('upcoming')}</option><option value="earliest">{t('earliest')}</option><option value="latest">{t('latest')}</option><option value="alphabetical">{t('alphabetical')}</option>
         </select>
-        <button type="button" className="button secondary small" onClick={resetFilters}>Reset</button>
+        <button type="button" className="button secondary small" onClick={resetFilters}>{t('reset')}</button>
       </div>
     </div>
 
-    {loading ? <div className="loading"><span className="spinner"/>Loading event listings…</div> : events.length ? <div className="events-layout">
-      <div className="card-grid event-list-grid">
-        {events.map((event) => <article key={event.id} className={`info-card event-tile ${selectedEvent?.id === event.id ? 'selected' : ''}`} onClick={() => setSelectedEvent(event)}>
-          <div className="event-thumb" style={{ backgroundImage: `linear-gradient(rgba(12,17,38,0.2), rgba(12,17,38,0.35)), url('https://images.unsplash.com/${event.id % 2 === 0 ? '1511578314322-379afb476865' : '1519741497674-611481863552'}?auto=format&fit=crop&w=900&q=80')` }} />
-          <div className="event-tile-body">
-            <span className="event-tag">{event.type || 'Event'}</span>
-            <h3>{event.title}</h3>
-            <p>{event.location || 'Location available'}</p>
-            <small>{new Date(event.startDate || event.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</small>
-            <div className="pricing-row compact-row"><strong>{event.budget ? `ETB ${Number(event.budget).toLocaleString()}` : 'Request quote'}</strong><button type="button" className="button secondary small" onClick={(e) => { e.stopPropagation(); setSelectedEvent(event); }}>View details</button></div>
-          </div>
-        </article>)}
+    {loading ? <div className="loading" role="status"><span className="spinner" />{t('loadingEvents')}</div> : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></div> : <>
+      {events.length ? <>
+        <div className="card-grid event-list-grid">
+          {events.map((event) => <article key={event.id} className="info-card event-tile">
+            <div className="event-thumb" aria-hidden="true"><span>{event.type || 'Event'}</span></div>
+            <div className="event-tile-body">
+              <span className="event-tag">{event.type || 'Event'}</span><h3>{event.title}</h3>
+              <p>{event.location || t('locationTbd')}</p>
+              <small>{formatEventDate(event.startDate, language) || t('dateTbd')}</small>
+              <div className="pricing-row compact-row"><strong>{formatEventBudget(event.budget, language) || '—'}</strong><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button></div>
+            </div>
+          </article>)}
+        </div>
+      </> : <div className="empty panel"><strong>{t('emptyTitle')}</strong><span>{t('emptyMessage')}</span><button className="button secondary small" type="button" onClick={resetFilters}>{t('reset')}</button></div>}
+      <div className="pagination-row" aria-label="Event pages">
+        <button className="button secondary small" type="button" disabled={pagination.page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>{t('previous')}</button>
+        <span>{t('page')} {pagination.page || page} {t('of')} {pagination.totalPages || 1}</span>
+        <button className="button secondary small" type="button" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage((current) => Math.min(pagination.totalPages || 1, current + 1))}>{t('next')}</button>
       </div>
 
-      {selectedEvent && <article className="info-card event-detail-card">
-        <div className="event-detail-header">
-          <div>
-            <p className="eyebrow">EVENT HIGHLIGHT</p>
-            <h3>{selectedEvent.title}</h3>
-          </div>
-          <button type="button" className="button secondary small" onClick={() => onNavigate('/services')}>Request packages</button>
-        </div>
-        <p>{selectedEvent.description || 'A curated event designed to deliver a memorable guest experience.'}</p>
+      {detailsLoading && <div className="loading" role="status"><span className="spinner" />{t('detailLoading')}</div>}
+      {detailsError && <div className="alert error" role="alert">{detailsError}</div>}
+      {selectedEvent && <article className="info-card event-detail-card" aria-live="polite">
+        <div className="event-detail-header"><div><p className="eyebrow">{t('viewDetails')}</p><h3>{selectedEvent.title}</h3></div><button type="button" className="button secondary small" onClick={() => openPackageRequest(selectedEvent)}>{t('requestPackages')}</button></div>
+        <p>{selectedEvent.description || t('detailsUnavailable')}</p>
         <div className="detail-meta-grid">
-          <div><span>Category</span><strong>{selectedEvent.category || selectedEvent.type || 'Event'}</strong></div>
-          <div><span>Location</span><strong>{selectedEvent.location || 'Location TBD'}</strong></div>
-          <div><span>Date</span><strong>{new Date(selectedEvent.startDate || selectedEvent.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</strong></div>
-          <div><span>Budget</span><strong>{selectedEvent.budget ? `ETB ${Number(selectedEvent.budget).toLocaleString()}` : 'On request'}</strong></div>
+          <div><span>{t('category')}</span><strong>{selectedEvent.type || '—'}</strong></div><div><span>{t('location')}</span><strong>{selectedEvent.location || t('locationTbd')}</strong></div>
+          <div><span>{t('date')}</span><strong>{formatEventDate(selectedEvent.startDate, language) || t('dateTbd')}</strong></div><div><span>{t('budget')}</span><strong>{formatEventBudget(selectedEvent.budget, language) || '—'}</strong></div>
+          <div><span>{t('status')}</span><strong>{selectedEvent.status || '—'}</strong></div>
         </div>
       </article>}
 
-      <div className="pagination-row">
-        <button className="button secondary small" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>Previous</button>
-        <span>Page {pagination.page || page} of {pagination.totalPages || 1}</span>
-        <button className="button secondary small" type="button" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage((current) => Math.min(pagination.totalPages || 1, current + 1))}>Next</button>
-      </div>
-    </div> : <EmptyState title="No event listings are available" message="Check back when public event listings are published or adjust your filters." />}
-  </div></main>;
+      <section className="event-highlight-section" aria-labelledby="event-highlight-title">
+        <div className="event-highlight-heading"><p className="eyebrow">{t('eventHighlight')}</p></div>
+        {featured ? <article className="event-highlight-content"><div><h3 id="event-highlight-title">{featured.title}</h3><span>{featured.type || '—'}</span></div><dl className="detail-meta-grid"><div><dt>{t('category')}</dt><dd>{featured.type || '—'}</dd></div><div><dt>{t('location')}</dt><dd>{featured.location || t('locationTbd')}</dd></div><div><dt>{t('date')}</dt><dd>{formatEventDate(featured.startDate, language) || t('dateTbd')}</dd></div><div><dt>{t('budget')}</dt><dd>{formatEventBudget(featured.budget, language) || '—'}</dd></div></dl><button type="button" className="button" onClick={() => openPackageRequest(featured)}>{t('requestPackages')}</button></article> : featuredLoading ? <div className="loading" role="status"><span className="spinner" />{t('detailLoading')}</div> : featuredError ? <div className="alert error" role="alert">{featuredError}</div> : <p>{t('noFeatured')}</p>}
+      </section>
+    </>}
+  </div>
+
+  {requestEvent && <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && !requestBusy && setRequestEvent(null)}><form className="modal event-request-modal" role="dialog" aria-modal="true" aria-labelledby="package-request-heading" onSubmit={submitPackageRequest}>
+    <div className="modal-head"><h2 id="package-request-heading">{t('requestTitle')}</h2><button className="icon-button" type="button" onClick={() => setRequestEvent(null)} aria-label={t('cancel')}><X size={18}/></button></div>
+    <div className="modal-body">{requestEvent.id ? <><p><strong>{t('selectedEvent')}:</strong> {requestEvent.title}</p><p>{requestEvent.location || t('locationTbd')} · {formatEventDate(requestEvent.startDate, language) || t('dateTbd')}</p></> : <>
+      <label className="field"><span>{t('eventTitle')}</span><input name="event_title" minLength="2" maxLength="180" required value={requestForm.event_title} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('eventType')}</span><input name="event_type" maxLength="80" value={requestForm.event_type} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('requestedDate')}</span><input name="requested_date" type="datetime-local" value={requestForm.requested_date} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('requestedLocation')}</span><input name="requested_location" maxLength="120" value={requestForm.requested_location} onChange={updateRequestField}/></label>
+    </>}
+      <label className="field"><span>{t('requesterName')}</span><input name="requester_name" autoComplete="name" minLength="2" maxLength="160" required value={requestForm.requester_name} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('requesterEmail')}</span><input name="requester_email" type="email" autoComplete="email" maxLength="254" required value={requestForm.requester_email} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('serviceCategory')}</span><input name="service_category" maxLength="80" value={requestForm.service_category} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('guestCount')}</span><input name="guest_count" type="number" min="1" max="50000" step="1" value={requestForm.guest_count} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('preferredBudget')}</span><input name="budget" type="number" min="0" max="9999999999.99" step="0.01" value={requestForm.budget} onChange={updateRequestField}/></label>
+      <label className="field"><span>{t('notes')}</span><textarea name="notes" maxLength="2000" rows="3" value={requestForm.notes} onChange={updateRequestField}/></label>
+      {requestError && <div className="alert error" role="alert">{requestError}</div>}{requestSuccess && <div className="alert success" role="status">{requestSuccess}</div>}
+    </div>
+    <div className="modal-foot"><button type="button" className="button secondary" disabled={requestBusy} onClick={() => setRequestEvent(null)}>{t('cancel')}</button><button className="button" disabled={requestBusy || Boolean(requestSuccess)}>{requestBusy ? t('sending') : t('submitRequest')}</button></div>
+  </form></div>}
+  </main>;
 }
 
 function VendorDetailPage({ vendorId, onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [vendor, setVendor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -599,12 +736,12 @@ function VendorDetailPage({ vendorId, onNavigate }) {
   const handleBookService = async (service) => {
     const selectedService = service || vendor?.services?.[0];
     if (!selectedService) {
-      setBookingState('This vendor is not currently offering any published services.');
+      setBookingState(t('serviceUnavailable'));
       return;
     }
 
     try {
-      setBookingState('Submitting booking request…');
+      setBookingState(t('submittingBooking'));
       await api('/platform/bookings', {
         method: 'POST',
         body: JSON.stringify({
@@ -614,48 +751,50 @@ function VendorDetailPage({ vendorId, onNavigate }) {
           status: 'pending',
         }),
       });
-      setBookingState('Booking request created successfully.');
+      setBookingState(t('bookingCreated'));
       window.setTimeout(() => onNavigate('/login'), 1000);
     } catch (issue) {
-      setBookingState(issue.message || 'Unable to create the booking request.');
+      setBookingState(t('unableCreateBooking'));
     }
   };
 
   if (loading) {
-    return <main className="page-shell"><div className="content-stack"><div className="info-card wide"><div className="loading"><span className="spinner" />Loading vendor profile…</div></div></div></main>;
+    return <main className="page-shell"><div className="content-stack"><div className="info-card wide"><div className="loading"><span className="spinner" />{t('loadingVendorProfile')}</div></div></div></main>;
   }
 
   if (error || !vendor) {
-    return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">PROFILE UNAVAILABLE</p><h2>Vendor not found</h2><p>{error || 'This vendor is not currently public or is unavailable.'}</p><button className="button" type="button" onClick={() => onNavigate('/vendors')}>Back to vendors</button></div></div></main>;
+    return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">{t('profileUnavailable')}</p><h2>{t('vendorNotFound')}</h2><p>{error ? translateText(error, language) : t('vendorUnavailable')}</p><button className="button" type="button" onClick={() => onNavigate('/vendors')}>{t('browseAllVendors')}</button></div></div></main>;
   }
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">VENDOR PROFILE</p><h2>{vendor.business_name || vendor.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>Browse all vendors</button></div>
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorProfile')}</p><h2>{vendor.business_name || vendor.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>{t('browseAllVendors')}</button></div>
     <article className="info-card wide">
       <div className="profile-panel">
         <div className="profile-avatar">{(vendor.business_name || vendor.name || 'V').slice(0, 1).toUpperCase()}</div>
         <div>
           <h3>{vendor.business_name || vendor.name}</h3>
           <p className="muted">{vendor.category || 'Event services'} • {vendor.city || 'Remote service area'}</p>
-          <p>{vendor.verified ? 'Verified business profile' : 'Public listing'} • {vendor.reviewCount || 0} reviews • ★ {Number(vendor.rating || 0).toFixed(1)}</p>
+          <p>{vendor.verified ? t('verifiedBusinessProfile') : t('publicListing')} • {vendor.reviewCount || 0} {t('vendorReviews')} • ★ {Number(vendor.rating || 0).toFixed(1)}</p>
         </div>
         <button className="button" type="button" onClick={() => handleBookService()}>{bookingState.startsWith('Submitting') ? 'Processing…' : 'Book service'}</button>
       </div>
       {bookingState && <div className="alert success" style={{ marginTop: '14px' }}>{bookingState}</div>}
       <div className="report-grid" style={{ marginTop: '18px' }}>
-        <div className="info-card"><h3>About</h3><p>{vendor.description || 'A trusted event partner helping clients plan memorable experiences.'}</p></div>
-        <div className="info-card"><h3>Starting from</h3><p>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : 'Price on request'}</p></div>
-        <div className="info-card"><h3>Location</h3><p>{vendor.city || 'Service area available on request'}</p></div>
+        <div className="info-card"><h3>{t('about')}</h3><p>{vendor.description || translateText('A trusted event partner helping clients plan memorable experiences.', language)}</p></div>
+        <div className="info-card"><h3>{t('startingFrom')}</h3><p>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('priceOnRequest')}</p></div>
+        <div className="info-card"><h3>{t('location')}</h3><p>{vendor.city || t('serviceAreaRequest')}</p></div>
       </div>
     </article>
 
     <section className="content-stack">
-      <div className="section-header compact-header"><div><p className="eyebrow">PUBLISHED SERVICES</p><h2>Available service packages</h2></div></div>
-      {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.description || 'Custom service package tailored to your event needs.'}</p><div className="pricing-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : 'Request quote'}</strong><button className="button secondary small" type="button" onClick={() => handleBookService(service)}>Book service</button></div></article>)}</div> : <div className="empty-card">This vendor has no published services at the moment.</div>}
+      <div className="section-header compact-header"><div><p className="eyebrow">{t('publishedServices')}</p><h2>{t('availableServicePackages')}</h2></div></div>
+      {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong><button className="button secondary small" type="button" onClick={() => handleBookService(service)}>{t('bookService')}</button></div></article>)}</div> : <div className="empty-card">{t('noPublishedServices')}</div>}
     </section>
   </div></main>;
 }
 
 function VendorsPage({ onNavigate, user }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [vendors, setVendors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -731,60 +870,62 @@ function VendorsPage({ onNavigate, user }) {
     }
   };
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">VENDORS</p><h2>Verified event partners</h2></div></div>
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div></div>
     {notice && <div className="alert success">{notice}</div>}
     <div className="panel" style={{ padding: '18px 20px' }}>
       <div className="toolbar">
-        <div className="search-box"><Search size={16}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search vendors, categories, or locations" /></div>
+        <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchVendors')} /></div>
         <select className="filter-select" value={category} onChange={(event) => setCategory(event.target.value)}>
-          <option value="all">All categories</option>
+          <option value="all">{t('allCategories')}</option>
           {categories.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
         <select className="filter-select" value={location} onChange={(event) => setLocation(event.target.value)}>
-          <option value="all">All locations</option>
+          <option value="all">{t('allLocations')}</option>
           {locations.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
         <select className="filter-select" value={sort} onChange={(event) => setSort(event.target.value)}>
-          <option value="recommended">Recommended</option>
-          <option value="highest-rated">Highest rated</option>
-          <option value="most-reviewed">Most reviewed</option>
-          <option value="price-low">Price: low to high</option>
-          <option value="price-high">Price: high to low</option>
+          <option value="recommended">{t('recommended')}</option>
+          <option value="highest-rated">{t('highestRated')}</option>
+          <option value="most-reviewed">{t('mostReviewed')}</option>
+          <option value="price-low">{t('priceLowHigh')}</option>
+          <option value="price-high">{t('priceHighLow')}</option>
         </select>
-        <button type="button" className="button secondary small" onClick={() => { setSearch(''); setCategory('all'); setLocation('all'); setSort('recommended'); }}>Reset</button>
+        <button type="button" className="button secondary small" onClick={() => { setSearch(''); setCategory('all'); setLocation('all'); setSort('recommended'); }}>{t('reset')}</button>
       </div>
     </div>
 
-    {loading ? <div className="loading"><span className="spinner" />Loading vendor directory…</div> : vendors.length ? <>
+    {loading ? <div className="loading"><span className="spinner" />{t('loadingVendorDirectory')}</div> : vendors.length ? <>
       <div className="card-grid">
         {vendors.map((vendor) => <article key={vendor.id} className="vendor-card">
           <div className="card-image-wrap">
             <img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.business_name || vendor.name} loading="lazy" />
-            {vendor.verified && <span className="verify-badge">Verified</span>}
+            {vendor.verified && <span className="verify-badge">{t('verified')}</span>}
           </div>
           <div className="card-body">
             <div className="meta-row"><span>{vendor.category || 'Event services'}</span><span>★ {Number(vendor.rating || 0).toFixed(1)}</span></div>
             <h3>{vendor.business_name || vendor.name}</h3>
-            <p>{vendor.city || 'Location available'}</p>
-            <div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : 'Request quote'}</strong><span>{vendor.reviewCount || 0} reviews</span></div>
+            <p>{vendor.city || t('locationAvailable')}</p>
+            <div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount || 0} {t('vendorReviews')}</span></div>
             <div className="card-actions">
-              <button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>View profile</button>
-              <button className="button small" type="button" onClick={() => handleBookService(vendor)}>Book service</button>
+              <button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button>
+              <button className="button small" type="button" onClick={() => handleBookService(vendor)}>{t('bookService')}</button>
             </div>
           </div>
         </article>)}
       </div>
 
-      <div className="pagination"><span>Showing {vendors.length} of {pagination.total || vendors.length} vendors</span><div>
+      <div className="pagination"><span>{t('showing')} {vendors.length} {t('of')} {pagination.total || vendors.length} {t('vendorsLabel')}</span><div>
         <button className="icon-button" type="button" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={18}/></button>
-        <span>Page {pagination.page || 1} of {Math.max(1, pagination.totalPages || 1)}</span>
+        <span>{t('page')} {pagination.page || 1} {t('of')} {Math.max(1, pagination.totalPages || 1)}</span>
         <button className="icon-button" type="button" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage((value) => Math.min(pagination.totalPages || 1, value + 1))}><ChevronRight size={18}/></button>
       </div></div>
-    </> : <EmptyState title="No vendor matches found" message="Try a different search or filter to explore the verified directory." />}
+    </> : <EmptyState title={t('noVendorMatches')} message={t('tryDifferentFilters')} />}
   </div></main>;
 }
 
 function ServicesPage({ onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [services, setServices] = useState([]);
   const [status, setStatus] = useState('');
   const [filters, setFilters] = useState({ search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' });
@@ -814,7 +955,7 @@ function ServicesPage({ onNavigate }) {
 
   async function submitQuoteRequest(service) {
     try {
-      setStatus('Submitting quote request…');
+      setStatus(translateText('Submitting quote request…', language));
       const payload = {
         serviceId: service.id,
         serviceTitle: service.title,
@@ -826,7 +967,7 @@ function ServicesPage({ onNavigate }) {
         notes: `Requesting a quote for ${service.title}.`,
       };
       await api('/platform/service-quote-requests', { method: 'POST', body: JSON.stringify(payload) });
-      setStatus('Quote request submitted successfully.');
+      setStatus(translateText('Quote request submitted successfully.', language));
     } catch (issue) {
       setStatus(issue.message || 'Unable to submit a quote request.');
     }
@@ -835,10 +976,12 @@ function ServicesPage({ onNavigate }) {
   const categories = Array.from(new Set(services.map((service) => service.category).filter(Boolean))).sort();
   const locations = Array.from(new Set(services.map((service) => service.city).filter(Boolean))).sort();
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">SERVICES</p><h2>Popular packages</h2></div></div>{status && <div className="alert success">{status}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><input className="field-input" value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Search service names or providers" /><select className="filter-select" value={filters.category} onChange={(event) => setFilters((current) => ({ ...current, category: event.target.value }))}><option value="all">All categories</option>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select><select className="filter-select" value={filters.location} onChange={(event) => setFilters((current) => ({ ...current, location: event.target.value }))}><option value="all">All locations</option>{locations.map((location) => <option key={location} value={location}>{location}</option>)}</select><select className="filter-select" value={filters.sort} onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value }))}><option value="recommended">Recommended</option><option value="highest-rated">Highest rated</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select><button type="button" className="button secondary small" onClick={() => { const next = { search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' }; setFilters(next); loadServices(next); }}>Reset</button><button type="button" className="button small" onClick={() => loadServices(filters)}>Apply filters</button></div></div>{loading ? <div className="loading"><span className="spinner"/>Loading services…</div> : services.length ? <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.vendorName || 'EventHub partner'}</p><small>{service.category} • {service.city}</small><div className="pricing-row compact-row"><strong>{service.price ? `${service.currency || 'ETB'} ${Number(service.price).toLocaleString()}` : 'Request quote'}</strong><span>{service.rating ? `${Number(service.rating).toFixed(1)}★` : 'New'}</span></div><p>{service.description || 'Custom package tailored to your event needs.'}</p><button className="button secondary small" onClick={() => submitQuoteRequest(service)}>Request quote</button></article>)}</div> : <EmptyState title="No services available" message="There are no public service listings that match your filters." />}</div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('servicesEyebrow')}</p><h2>{t('servicesHeading')}</h2></div></div>{status && <div className="alert success">{status}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><input className="field-input" aria-label={t('searchServices')} value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder={t('searchServices')} /><select className="filter-select" value={filters.category} onChange={(event) => setFilters((current) => ({ ...current, category: event.target.value }))}><option value="all">{t('allCategories')}</option>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select><select className="filter-select" value={filters.location} onChange={(event) => setFilters((current) => ({ ...current, location: event.target.value }))}><option value="all">{t('allLocations')}</option>{locations.map((location) => <option key={location} value={location}>{location}</option>)}</select><select className="filter-select" value={filters.sort} onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value }))}><option value="recommended">{t('recommended')}</option><option value="highest-rated">{t('highestRated')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option></select><button type="button" className="button secondary small" onClick={() => { const next = { search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' }; setFilters(next); loadServices(next); }}>{t('reset')}</button><button type="button" className="button small" onClick={() => loadServices(filters)}>{t('applyFilters')}</button></div></div>{loading ? <div className="loading"><span className="spinner"/>{t('loadingServices')}</div> : services.length ? <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.vendorName || 'EventHub partner'}</p><small>{service.category} • {service.city}</small><div className="pricing-row compact-row"><strong>{service.price ? `${service.currency || 'ETB'} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong><span>{service.rating ? `${Number(service.rating).toFixed(1)}★` : t('new')}</span></div><p>{service.description || translateText('Custom package tailored to your event needs.', language)}</p><button className="button secondary small" onClick={() => submitQuoteRequest(service)}>{t('requestQuote')}</button></article>)}</div> : <EmptyState title={t('noServicesMatch')} message={t('emptyMessage')} />}</div></main>;
 }
 
 function CategoriesPage({ onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [categories, setCategories] = useState([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -868,10 +1011,12 @@ function CategoriesPage({ onNavigate }) {
     return () => { active = false; };
   }, [search]);
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">CATEGORIES</p><h2>Browse by service type</h2></div></div>{error && <div className="alert error">{error}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search categories or descriptions" /></div><button type="button" className="button secondary small" onClick={() => setSearch('')}>Clear</button></div></div>{loading ? <div className="loading"><span className="spinner" />Loading categories…</div> : categories.length ? <div className="card-grid soft-grid">{categories.map((category) => <article key={category.id} className="info-card"><img src={category.image || 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80'} alt={category.name} loading="lazy" className="category-card-image" /><h3>{category.name}</h3><p>{category.description || 'Available service category'}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} vendors` : 'No vendors currently available'}</span><span>{category.serviceCount ? `${category.serviceCount} services` : 'No services listed'}</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/categories/${category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`)}>Open category</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>View vendors</button></div></article>)}</div> : <EmptyState title="No categories found" message="There are no public categories matching your search right now." />}</div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('categoriesEyebrow')}</p><h2>{t('categoriesHeading')}</h2></div></div>{error && <div className="alert error">{translateText(error, language)}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><div className="search-box"><Search size={16}/><input aria-label={t('searchCategories')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchCategories')} /></div><button type="button" className="button secondary small" onClick={() => setSearch('')}>{t('clear')}</button></div></div>{loading ? <div className="loading"><span className="spinner" />{t('loadingCategories')}</div> : categories.length ? <div className="card-grid soft-grid">{categories.map((category) => <article key={category.id} className="info-card"><img src={category.image || 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80'} alt={category.name} loading="lazy" className="category-card-image" /><h3>{category.name}</h3><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} ${t('vendorsLabel')}` : t('noVendorsAvailable')}</span><span>{category.serviceCount ? `${category.serviceCount} ${t('availableServices')}` : t('noServicesListed')}</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/categories/${category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`)}>{t('openCategory')}</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></article>)}</div> : <EmptyState title={t('noCategoriesFound')} message={t('noCategoriesMatch')} />}</div></main>;
 }
 
 function CategoryDetailPage({ slug, onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [category, setCategory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -898,14 +1043,16 @@ function CategoryDetailPage({ slug, onNavigate }) {
     return () => { active = false; };
   }, [slug]);
 
-  if (loading) return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />Loading category…</div></div></main>;
-  if (error) return <main className="page-shell"><div className="content-stack"><div className="empty panel"><strong>Category unavailable</strong><span>{error}</span><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>Back to categories</button></div></div></main>;
-  if (!category) return <main className="page-shell"><div className="content-stack"><EmptyState title="No category found" message="This category does not exist or is not public." /></div></main>;
+  if (loading) return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />{t('loadingCategories')}</div></div></main>;
+  if (error) return <main className="page-shell"><div className="content-stack"><div className="empty panel"><strong>{t('categoryUnavailable')}</strong><span>{translateText(error, language)}</span><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>{t('backToCategories')}</button></div></div></main>;
+  if (!category) return <main className="page-shell"><div className="content-stack"><EmptyState title={t('categoryNotFound')} message={t('categoryNotPublic')} /></div></main>;
 
   return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">CATEGORY</p><h2>{category.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>Back to categories</button></div><div className="info-card wide"><img src={category.image || 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80'} alt={category.name} className="category-detail-image" /><div className="category-detail-copy"><p>{category.description || 'Available service category'}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} active vendors` : 'No vendors currently available'}</span><span>{category.serviceCount ? `${category.serviceCount} available services` : 'No services listed'}</span></div><button className="button" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>View vendors</button></div></div><div className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">VENDORS</p><h3>Relevant vendors</h3></div></div>{Array.isArray(category.vendors) && category.vendors.length ? <div className="card-grid">{category.vendors.map((vendor) => <article key={vendor.id} className="vendor-card"><div className="card-image-wrap"><img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.business_name || vendor.name} loading="lazy" />{vendor.verified && <span className="verify-badge">Verified</span>}</div><div className="card-body"><div className="meta-row"><span>{vendor.category || 'Event services'}</span><span>★ {Number(vendor.rating || 0).toFixed(1)}</span></div><h3>{vendor.business_name || vendor.name}</h3><p>{vendor.city || 'Location available'}</p><div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : 'Request quote'}</strong><span>{vendor.reviewCount || 0} reviews</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>View profile</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>Book service</button></div></div></article>)}</div> : <EmptyState title="No vendors currently available" message="This category has no eligible vendors right now." />}</div><div className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">SERVICES</p><h3>Available services</h3></div></div>{Array.isArray(category.services) && category.services.length ? <div className="card-grid">{category.services.map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.vendorName || 'EventHub partner'}</p><small>{service.category} • {service.city}</small><div className="pricing-row compact-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : 'Request quote'}</strong><span>{service.rating ? `${Number(service.rating).toFixed(1)}★` : 'New'}</span></div><p>{service.description || 'Custom package tailored to your event needs.'}</p></article>)}</div> : <EmptyState title="No services listed" message="This category does not currently have published services available." />}</div></div></main>;
 }
 
 function AboutPage() {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [content, setContent] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -923,7 +1070,7 @@ function AboutPage() {
         }
       } catch (issue) {
         if (active) {
-          setError(issue.message || 'Unable to load About page content.');
+          setError(t('aboutLoadError'));
         }
       } finally {
         if (active) setLoading(false);
@@ -932,10 +1079,10 @@ function AboutPage() {
 
     loadAboutContent();
     return () => { active = false; };
-  }, []);
+  }, [language]);
 
   if (loading) {
-    return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />Loading About page…</div></div></main>;
+    return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />{t('loadingAbout')}</div></div></main>;
   }
 
   const payload = content || {
@@ -983,25 +1130,27 @@ function AboutPage() {
 
   const stats = payload.statistics || { categoryCount: 5, vendorCount: 24, serviceCount: 110, completedBookingCount: 680 };
 
-  return <main className="page-shell"><div className="content-stack about-page"><section className="info-card wide about-hero"><div className="about-copy"><p className="eyebrow">ABOUT US</p><h2>{hero.heading}</h2><p className="muted">{hero.subtitle}</p><p>{payload.introduction || 'EventHub helps organizers and customers discover event services, compare categories, request quotations, and coordinate bookings in one place.'}</p><div className="cta-row"><button type="button" className="button" onClick={() => window.history.pushState({}, '', '/vendors')}>Find vendors</button><button type="button" className="button secondary" onClick={() => window.history.pushState({}, '', '/categories')}>Browse categories</button></div></div><div className="about-hero-media"><img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt="EventHub team planning" /><div className="hero-overlay-card"><strong>{stats.vendorCount || 24}+</strong><span>Verified vendors</span></div></div></section>
+  return <main className="page-shell"><div className="content-stack about-page"><section className="info-card wide about-hero"><div className="about-copy"><p className="eyebrow">{t('aboutUs')}</p><h2>{hero.heading}</h2><p className="muted">{hero.subtitle}</p><p>{payload.introduction || 'EventHub helps organizers and customers discover event services, compare categories, request quotations, and coordinate bookings in one place.'}</p><div className="cta-row"><button type="button" className="button" onClick={() => navigateBrowserPath('/vendors')}>{t('findVendorsNav')}</button><button type="button" className="button secondary" onClick={() => navigateBrowserPath('/categories')}>{t('browseAll')}</button></div></div><div className="about-hero-media"><img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt="EventHub team planning" /><div className="hero-overlay-card"><strong>{stats.vendorCount || 24}+</strong><span>{t('verified')}</span></div></div></section>
 
-  <div className="metric-grid"><article className="metric-card"><p>Service categories</p><strong>{stats.categoryCount || 5}</strong><span>Platform categories</span></article><article className="metric-card"><p>Active vendors</p><strong>{stats.vendorCount || 24}</strong><span>Verified and public</span></article><article className="metric-card"><p>Published services</p><strong>{stats.serviceCount || 110}</strong><span>Ready for discovery</span></article><article className="metric-card"><p>Completed bookings</p><strong>{stats.completedBookingCount || 680}</strong><span>Successful outcomes</span></article></div>
+  <div className="metric-grid"><article className="metric-card"><p>{t('serviceCategories')}</p><strong>{stats.categoryCount || 5}</strong><span>{t('categoriesEyebrow')}</span></article><article className="metric-card"><p>{t('activeVendors')}</p><strong>{stats.vendorCount || 24}</strong><span>{t('verified')}</span></article><article className="metric-card"><p>{t('popularServices')}</p><strong>{stats.serviceCount || 110}</strong><span>{t('availableServices')}</span></article><article className="metric-card"><p>{t('bookingsClosed')}</p><strong>{stats.completedBookingCount || 680}</strong><span>{t('bookings')}</span></article></div>
 
-  <div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>Our mission</h3></div><p>{payload.mission || 'Simplify event planning by connecting customers with the right service categories and vendors.'}</p></article><article className="panel"><div className="panel-header"><h3>Our vision</h3></div><p>{payload.vision || 'Make event-service discovery more accessible, better organized, and easier to trust.'}</p></article></div>
+  <div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('ourMission')}</h3></div><p>{payload.mission || 'Simplify event planning by connecting customers with the right service categories and vendors.'}</p></article><article className="panel"><div className="panel-header"><h3>{t('ourVision')}</h3></div><p>{payload.vision || 'Make event-service discovery more accessible, better organized, and easier to trust.'}</p></article></div>
 
-  <section className="panel"><div className="panel-header"><h3>What we value</h3></div><div className="card-grid soft-grid">{values.map((item, index) => <article key={`${item.title}-${index}`} className="info-card"><h4>{item.title}</h4><p>{item.description}</p></article>)}</div></section>
+  <section className="panel"><div className="panel-header"><h3>{t('whatWeValue')}</h3></div><div className="card-grid soft-grid">{values.map((item, index) => <article key={`${item.title}-${index}`} className="info-card"><h4>{item.title}</h4><p>{item.description}</p></article>)}</div></section>
 
-  <section className="panel"><div className="panel-header"><h3>How it works</h3></div><div className="card-grid soft-grid">{steps.map((item, index) => <article key={`${item.title}-${index}`} className="info-card"><span className="eyebrow">STEP {index + 1}</span><h4>{item.title}</h4><p>{item.description}</p></article>)}</div></section>
+  <section className="panel"><div className="panel-header"><h3>{t('howItWorks')}</h3></div><div className="card-grid soft-grid">{steps.map((item, index) => <article key={`${item.title}-${index}`} className="info-card"><span className="eyebrow">{t('step')} {index + 1}</span><h4>{item.title}</h4><p>{item.description}</p></article>)}</div></section>
 
-  <section className="panel"><div className="panel-header"><h3>Why EventHub</h3></div><div className="list-stack">{benefits.map((item, index) => <div key={`${item.title}-${index}`} className="list-card"><div><strong>{item.title}</strong><small>{item.description}</small></div></div>)}</div></section>
+  <section className="panel"><div className="panel-header"><h3>{t('whyEventHub')}</h3></div><div className="list-stack">{benefits.map((item, index) => <div key={`${item.title}-${index}`} className="list-card"><div><strong>{item.title}</strong><small>{item.description}</small></div></div>)}</div></section>
 
-  {error && <div className="alert error">{error}</div>}
+  {error && <div className="alert error">{error}<button type="button" className="button secondary small" onClick={() => window.location.reload()}>Retry</button></div>}
 
-  <section className="info-card wide cta-banner"><div><p className="eyebrow">READY TO PLAN?</p><h3>Build your next event with trusted partners.</h3></div><div className="cta-row"><button type="button" className="button" onClick={() => window.history.pushState({}, '', '/register')}>Create account</button><button type="button" className="button secondary" onClick={() => window.history.pushState({}, '', '/contact')}>Talk to support</button></div></section>
+  <section className="info-card wide cta-banner"><div><p className="eyebrow">{t('readyToPlan')}</p><h3>{t('buildNextEvent')}</h3></div><div className="cta-row"><button type="button" className="button" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button><button type="button" className="button secondary" onClick={() => navigateBrowserPath('/contact')}>{t('talkToSupport')}</button></div></section>
   </div></main>;
 }
 
 function ContactPage() {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [page, setPage] = useState({ contact: {}, faq: [] });
   const [form, setForm] = useState({
     full_name: '',
@@ -1028,7 +1177,7 @@ function ContactPage() {
           setError('');
         }
       } catch (issue) {
-        if (active) setError(issue.message || 'Unable to load the Contact page.');
+        if (active) setError(t('contactLoadError'));
       } finally {
         if (active) setLoading(false);
       }
@@ -1036,7 +1185,7 @@ function ContactPage() {
 
     loadContactPage();
     return () => { active = false; };
-  }, []);
+  }, [language]);
 
   function updateValue(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -1045,7 +1194,7 @@ function ContactPage() {
 
   async function submitContact(event) {
     event.preventDefault();
-    const { normalized, errors: validationErrors } = validateContactForm(form);
+    const { normalized, errors: validationErrors } = validateContactForm(form, language);
     if (Object.keys(validationErrors).length) {
       setErrors(validationErrors);
       return;
@@ -1060,7 +1209,7 @@ function ContactPage() {
         method: 'POST',
         body: JSON.stringify(normalized),
       });
-      setSuccess(`Your message has been sent successfully. Reference: ${response?.data?.reference || 'EH-000001'}`);
+      setSuccess(`${t('emailSent')} ${t('reference')}: ${response?.data?.reference || 'EH-000001'}`);
       setForm({
         full_name: '',
         email: '',
@@ -1070,7 +1219,7 @@ function ContactPage() {
         message: '',
       });
     } catch (issue) {
-      setError(issue.message || 'Unable to send your message right now.');
+      setError(t('unableToSendMessage'));
     } finally {
       setSubmitting(false);
     }
@@ -1079,45 +1228,45 @@ function ContactPage() {
   const contactInfo = buildContactInfo(page.contact || {});
 
   if (loading) {
-    return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />Loading contact information…</div></div></main>;
+    return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />{t('loadingContactInfo')}</div></div></main>;
   }
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">CONTACT</p><h2>Reach the support team</h2></div></div>
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('contactUsNav')}</p><h2>{t('contactHeading')}</h2></div></div>
     <div className="two-column-layout">
       <section className="panel">
-        <div className="panel-header"><h3>Contact details</h3></div>
+        <div className="panel-header"><h3>{t('contactDetails')}</h3></div>
         <div className="info-list">
-          {contactInfo.email && <div className="list-card"><strong>Email</strong><small>{contactInfo.email}</small></div>}
-          {contactInfo.phone && <div className="list-card"><strong>Phone</strong><small>{contactInfo.phone}</small></div>}
-          {contactInfo.address && <div className="list-card"><strong>Office</strong><small>{contactInfo.address}</small></div>}
-          {contactInfo.hours && <div className="list-card"><strong>Support hours</strong><small>{contactInfo.hours}</small></div>}
+          {contactInfo.email && <div className="list-card"><strong>{t('email')}</strong><small>{contactInfo.email}</small></div>}
+          {contactInfo.phone && <div className="list-card"><strong>{t('phone')}</strong><small>{contactInfo.phone}</small></div>}
+          {contactInfo.address && <div className="list-card"><strong>{t('office')}</strong><small>{contactInfo.address}</small></div>}
+          {contactInfo.hours && <div className="list-card"><strong>{t('supportHours')}</strong><small>{contactInfo.hours}</small></div>}
         </div>
-        {contactInfo.socials?.length ? <div className="social-links"><strong>Follow us</strong><div className="link-stack">{contactInfo.socials.map((entry, index) => <a key={`${entry}-${index}`} href={entry.url || '#'} target="_blank" rel="noreferrer">{entry.label || 'Social link'}</a>)}</div></div> : null}
+        {contactInfo.socials?.length ? <div className="social-links"><strong>{t('followUs')}</strong><div className="link-stack">{contactInfo.socials.map((entry, index) => <a key={`${entry}-${index}`} href={entry.url || '#'} target="_blank" rel="noreferrer">{entry.label || 'Social link'}</a>)}</div></div> : null}
       </section>
 
       <section className="panel">
-        <div className="panel-header"><h3>Send a message</h3></div>
-        {error && <div className="alert error">{error}</div>}
+        <div className="panel-header"><h3>{t('sendMessage')}</h3></div>
+        {error && <div className="alert error">{error}<button type="button" className="button secondary small" onClick={() => window.location.reload()}>Retry</button></div>}
         {success && <div className="alert success">{success}</div>}
         <form className="stack-form" onSubmit={submitContact} noValidate>
           <div className="form-grid two-col">
-            <label className="field"><span>Full name</span><input value={form.full_name} onChange={(event) => updateValue('full_name', event.target.value)} required /></label>
-            <label className="field"><span>Email</span><input type="email" value={form.email} onChange={(event) => updateValue('email', event.target.value)} required /></label>
-            <label className="field"><span>Phone</span><input value={form.phone} onChange={(event) => updateValue('phone', event.target.value)} placeholder="Optional" /></label>
-            <label className="field"><span>Inquiry type</span><select value={form.inquiry_type} onChange={(event) => updateValue('inquiry_type', event.target.value)}>
-              {INQUIRY_TYPES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            <label className="field"><span>{t('fullName')}</span><input value={form.full_name} onChange={(event) => updateValue('full_name', event.target.value)} required /></label>
+            <label className="field"><span>{t('email')}</span><input type="email" value={form.email} onChange={(event) => updateValue('email', event.target.value)} required /></label>
+            <label className="field"><span>{t('phone')}</span><input value={form.phone} onChange={(event) => updateValue('phone', event.target.value)} placeholder={t('optional')} /></label>
+            <label className="field"><span>{t('inquiryType')}</span><select value={form.inquiry_type} onChange={(event) => updateValue('inquiry_type', event.target.value)}>
+              {INQUIRY_TYPES.map((option) => <option key={option.value} value={option.value}>{translateText(option.label, language)}</option>)}
             </select></label>
           </div>
-          <label className="field"><span>Subject</span><input value={form.subject} onChange={(event) => updateValue('subject', event.target.value)} required /></label>
+          <label className="field"><span>{t('subject')}</span><input value={form.subject} onChange={(event) => updateValue('subject', event.target.value)} required /></label>
           {errors.subject && <small className="field-error">{errors.subject}</small>}
-          <label className="field"><span>Message</span><textarea rows="6" value={form.message} onChange={(event) => updateValue('message', event.target.value)} required /></label>
+          <label className="field"><span>{t('message')}</span><textarea rows="6" value={form.message} onChange={(event) => updateValue('message', event.target.value)} required /></label>
           {errors.message && <small className="field-error">{errors.message}</small>}
-          <button className="button" type="submit" disabled={submitting}>{submitting ? 'Sending…' : 'Send inquiry'}</button>
+          <button className="button" type="submit" disabled={submitting}>{submitting ? t('sending') : t('sendInquiry')}</button>
         </form>
       </section>
     </div>
 
-    <section className="panel"><div className="panel-header"><h3>Frequently asked questions</h3></div>
+    <section className="panel"><div className="panel-header"><h3>{t('frequentlyAskedQuestions')}</h3></div>
       <div className="accordion-stack">{(page.faq || []).map((item, index) => (
         <div key={`${item.question}-${index}`} className="info-card"><strong>{item.question}</strong><p>{item.answer}</p></div>
       ))}</div>
@@ -1126,23 +1275,46 @@ function ContactPage() {
 }
 
 function LoginPage({ onLogin }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email, password); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EH</div><p className="eyebrow">EVENTHUB ACCOUNT</p><h1>Sign in</h1><p className="muted">Access your platform workspace and role dashboard.</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>Email address</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label><label className="field"><span>Password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label><button className="button login-button" disabled={busy}>{busy ? 'Signing in…' : 'Sign in securely'}</button></form><div className="inline-links"><button type="button" className="text-link" onClick={() => window.history.pushState({}, '', '/register')}>Create account</button><button type="button" className="text-link" onClick={() => window.history.pushState({}, '', '/forgot-password')}>Forgot password?</button></div></div></main>;
+  async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email, password); } catch (issue) { setError(translateText(issue.message, language)); } finally { setBusy(false); } }
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EH</div><p className="eyebrow">{t('eventHubAccount')}</p><h1>{t('signIn')}</h1><p className="muted">{t('accessWorkspace')}</p>{error && <div className="alert error" role="alert">{error}</div>}<form onSubmit={submit}><label className="field"><span>{t('emailAddress')}</span><input type="email" name="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label><div className="field"><span id="login-password-label">{t('password')}</span><div className="password-input-wrap"><input aria-labelledby="login-password-label" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /><button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div><button className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button></form><div className="inline-links"><button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button></div></div></main>;
 }
 
 function RegisterPage({ onRegister }) {
-  const [form, setForm] = useState({ name: '', email: '', password: '', role: 'customer' });
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '', role: 'customer' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onRegister(form.name, form.email, form.password, form.role); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EH</div><p className="eyebrow">EVENTHUB ACCOUNT</p><h1>Create an account</h1><p className="muted">Register as a customer, organizer, or vendor.</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>Full name</span><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label><label className="field"><span>Email address</span><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></label><label className="field"><span>Password</span><input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label><label className="field"><span>Account type</span><select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="customer">Customer</option><option value="organizer">Organizer</option><option value="vendor">Vendor</option></select></label><button className="button login-button" disabled={busy}>{busy ? 'Creating account…' : 'Register now'}</button></form></div></main>;
+  const [success, setSuccess] = useState('');
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    setSuccess('');
+    if (form.password !== form.confirmPassword) return setError(t('passwordMismatch'));
+    if (form.password.length < 12 || !/[A-Z]/.test(form.password) || !/[a-z]/.test(form.password) || !/\d/.test(form.password)) return setError(t('passwordRequirements'));
+    setBusy(true);
+    try {
+      const result = await onRegister(form.name, form.email, form.password, form.role);
+      setSuccess(translateText(result?.message, language) || t('registrationSuccess'));
+    } catch (issue) {
+      setError(translateText(issue.message, language));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EH</div><p className="eyebrow">{t('eventHubAccount')}</p><h1>{t('createAccountHeading')}</h1><p className="muted">{t('registerAsRole')}</p>{error && <div className="alert error" role="alert">{error}</div>}{success && <div className="alert success" role="status">{success}<div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div></div>}<form onSubmit={submit}><label className="field"><span>{t('fullName')}</span><input name="name" autoComplete="name" minLength="2" maxLength="160" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label><label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></label><PasswordField name="password" label={t('password')} value={form.password} autoComplete="new-password" language={language} onChange={(e) => setForm({ ...form, password: e.target.value })}/><p className="field-hint">{t('passwordRequirements')}</p><PasswordField name="confirm-password" label={t('confirmPassword')} value={form.confirmPassword} autoComplete="new-password" language={language} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}/><label className="field"><span>{t('accountType')}</span><select name="role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="customer">{t('customerDashboard')}</option><option value="organizer">{t('organizerDashboard')}</option><option value="vendor">{t('vendorDashboard')}</option></select></label><button className="button login-button" disabled={busy || Boolean(success)}>{busy ? t('creatingAccount') : t('registerNow')}</button></form><div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div></div></main>;
 }
 
 function ForgotPasswordPage({ onSubmit }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -1153,7 +1325,7 @@ function ForgotPasswordPage({ onSubmit }) {
     setBusy(true); setError(''); setMessage('');
     try {
       const response = await onSubmit(email);
-      setMessage(response?.message || 'If an account matches, a reset instruction will be sent.');
+      setMessage(response?.message ? translateText(response.message, language) : t('ifAccountMatches'));
     } catch (issue) {
       setError(issue.message);
     } finally {
@@ -1161,10 +1333,12 @@ function ForgotPasswordPage({ onSubmit }) {
     }
   }
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">PASSWORD RESET</p><h2>Reset your password</h2></div></div><div className="info-card wide"><p>Use your email to receive a reset link from the platform support team.</p>{error && <div className="alert error">{error}</div>}{message && <div className="alert success">{message}</div>}<form onSubmit={submit}><label className="field"><span>Email address</span><input type="email" placeholder="you@example.com" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><button className="button" type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send reset link'}</button></form></div></div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('resetEyebrow')}</p><h2>{t('resetYourPassword')}</h2></div></div><div className="info-card wide"><p>{t('resetEmailCopy')}</p>{error && <div className="alert error">{translateText(error, language)}</div>}{message && <div className="alert success">{message}</div>}<form onSubmit={submit}><label className="field"><span>{t('emailAddress')}</span><input type="email" placeholder="you@example.com" value={email} onChange={(event) => setEmail(event.target.value)} required /></label><button className="button" type="submit" disabled={busy}>{busy ? t('sending') : t('sendResetLink')}</button></form></div></div></main>;
 }
 
 function ResetPasswordPage({ onSubmit }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1176,7 +1350,7 @@ function ResetPasswordPage({ onSubmit }) {
     setBusy(true); setError(''); setMessage('');
     try {
       const response = await onSubmit(token, password);
-      setMessage(response?.message || 'Your password has been reset successfully.');
+      setMessage(response?.message ? translateText(response.message, language) : t('requestSuccess'));
       setToken(''); setPassword('');
     } catch (issue) {
       setError(issue.message);
@@ -1185,30 +1359,36 @@ function ResetPasswordPage({ onSubmit }) {
     }
   }
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">NEW PASSWORD</p><h2>Complete your reset</h2></div></div><div className="info-card wide"><p>Enter the reset token from your email and choose a new password.</p>{error && <div className="alert error">{error}</div>}{message && <div className="alert success">{message}</div>}<form onSubmit={submit}><label className="field"><span>Reset token</span><input value={token} onChange={(event) => setToken(event.target.value)} required /></label><label className="field"><span>New password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label><button className="button" type="submit" disabled={busy}>{busy ? 'Updating…' : 'Reset password'}</button></form></div></div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('completeResetEyebrow')}</p><h2>{t('completeReset')}</h2></div></div><div className="info-card wide"><p>{t('completeResetCopy')}</p>{error && <div className="alert error">{translateText(error, language)}</div>}{message && <div className="alert success">{message}</div>}<form onSubmit={submit}><label className="field"><span>{t('resetToken')}</span><input value={token} onChange={(event) => setToken(event.target.value)} required /></label><label className="field"><span>{t('newPassword')}</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label><button className="button" type="submit" disabled={busy}>{busy ? t('update') : t('resetPassword')}</button></form></div></div></main>;
 }
 
 function PrivacyPage() {
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">PRIVACY</p><h2>Privacy policy</h2></div></div><div className="info-card wide"><p>EventHub protects personal data used for account management, vendor verification, event coordination, and platform services. Data is used only to operate the platform and support requests.</p></div></div></main>;
+  const language = useLanguage();
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{translate('privacyLabel', language)}</p><h2>{translate('privacyHeading', language)}</h2></div></div><div className="info-card wide"><p>{translate('privacyCopy', language)}</p></div></div></main>;
 }
 
 function TermsPage() {
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">TERMS</p><h2>Terms and conditions</h2></div></div><div className="info-card wide"><p>Users must maintain valid account information, respect platform policies, and use booking tools lawfully. Platform policies may change with notice to the user base.</p></div></div></main>;
+  const language = useLanguage();
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{translate('termsLabel', language)}</p><h2>{translate('termsHeading', language)}</h2></div></div><div className="info-card wide"><p>{translate('termsCopy', language)}</p></div></div></main>;
 }
 
 function HelpPage() {
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">HELP CENTER</p><h2>Support and guides</h2></div></div><div className="info-card wide"><p>Browse the booking guide, manage your account, or contact the platform support team for help with event coordination, vendor onboarding, or service requests.</p></div></div></main>;
+  const language = useLanguage();
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{translate('helpLabel', language)}</p><h2>{translate('helpHeading', language)}</h2></div></div><div className="info-card wide"><p>{translate('helpCopy', language)}</p></div></div></main>;
 }
 
 function AccessDeniedPage({ onNavigate }) {
-  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">ACCESS DENIED</p><h2>You do not have permission to view this page.</h2><p>Please sign in with the correct account role or return to the homepage.</p><button className="button" onClick={() => onNavigate('/')}>Back to homepage</button></div></div></main>;
+  const language = useLanguage();
+  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">{translate('accessDenied', language)}</p><h2>{translate('accessDeniedTitle', language)}</h2><p>{translate('accessDeniedCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('backHome', language)}</button></div></div></main>;
 }
 
 function NotFoundPage({ onNavigate }) {
-  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">404</p><h2>Page not found</h2><p>The page you requested does not exist or has moved.</p><button className="button" onClick={() => onNavigate('/')}>Return home</button></div></div></main>;
+  const language = useLanguage();
+  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">404</p><h2>{translate('pageNotFound', language)}</h2><p>{translate('pageNotFoundCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('returnHome', language)}</button></div></div></main>;
 }
 
 function VendorLogin({ onLogin }) {
+  const language = useLanguage();
   const [email, setEmail] = useState('vendor@eventflow.io');
   const [password, setPassword] = useState('vendor1234');
   const [busy, setBusy] = useState(false);
@@ -1227,10 +1407,12 @@ function VendorLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EF</div><p className="eyebrow">EVENTFLOW VENDOR PORTAL</p><h1>Vendor sign in</h1><p className="muted">Manage your business, services, bookings, quotations, and earnings.</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>Email address</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>Password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? 'Signing in…' : 'Open vendor dashboard'}</button></form><p className="login-note">Vendor access remains restricted to the authenticated vendor’s own records and services.</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('vendorPortal', language)}</p><h1>{translate('vendorSignIn', language)}</h1><p className="muted">{translate('manageYourBusiness', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openVendorDashboard', language)}</button></form><p className="login-note">{translateText('Vendor access remains restricted to the authenticated vendor’s own records and services.', language)}</p></div></main>;
 }
 
 function VendorDashboard({ user, onLogout }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const vendorMenu = [
     ['overview', 'Dashboard Overview'], ['profile', 'Business Profile'], ['verification', 'Vendor Verification'], ['services', 'My Services'], ['add-edit-services', 'Add and Edit Services'], ['categories', 'Service Categories'], ['pricing', 'Pricing and Packages'], ['availability', 'Availability Calendar'], ['requests', 'Booking Requests'], ['confirmed', 'Confirmed Bookings'], ['history', 'Booking History'], ['quotations', 'Quotations'], ['payments', 'Payments and Earnings'], ['messages', 'Customer Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['reports', 'Reports'], ['account', 'Profile'], ['logout', 'Logout']
   ];
@@ -1258,12 +1440,12 @@ function VendorDashboard({ user, onLogout }) {
   }, []);
 
   const renderSection = () => {
-    if (loading) return <div className="loading"><span className="spinner"/>Loading vendor dashboard…</div>;
+    if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <div className="alert error">{error}</div>;
 
     switch (slug) {
       case 'overview':
-        return <div className="organizer-shell"><div className="welcome"><div><p className="eyebrow">VENDOR DASHBOARD</p><h2>Business overview</h2><p className="muted">Monitor services, booking flow, customer activity, and earnings across your business.</p></div><button className="button secondary" onClick={onLogout}>Log out</button></div><div className="metric-grid"><article className="metric-card"><p>Total listed services</p><strong>{data.overview?.totalServices ?? 0}</strong><span>{data.overview?.activeServices ?? 0} active</span></article><article className="metric-card"><p>Pending requests</p><strong>{data.overview?.pendingBookings ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} quotations pending</span></article><article className="metric-card"><p>Confirmed bookings</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingDates ?? 0} upcoming dates</span></article><article className="metric-card"><p>Gross earnings</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(data.overview?.totalEarnings ?? 0)}</strong><span>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(data.overview?.pendingPayouts ?? 0)} pending payouts</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>Recent booking requests</h3><button className="button secondary small">Open requests</button></div><div className="list-stack">{(data['booking-requests'] || []).slice(0, 3).map((entry) => <div key={entry.id} className="list-card"><div><strong>{entry.customer}</strong><small>{entry.service} • {entry.date}</small></div><span className="pill pending">{entry.status}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>Top performers</h3></div><div className="list-stack">{(data.services || []).slice(0, 3).map((service) => <div key={service.id} className="list-card"><div><strong>{service.name}</strong><small>{service.category}</small></div><span className="pill active">{service.status}</span></div>)}</div></article></div></div>;
+        return <div className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('vendorDashboard')}</p><h2>{t('businessOverview')}</h2><p className="muted">{t('monitorBusiness')}</p></div><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div><div className="metric-grid"><article className="metric-card"><p>{t('totalListedServices')}</p><strong>{data.overview?.totalServices ?? 0}</strong><span>{data.overview?.activeServices ?? 0} {t('activeLabel')}</span></article><article className="metric-card"><p>{t('pendingRequests')}</p><strong>{data.overview?.pendingBookings ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} {t('pendingQuotations')}</span></article><article className="metric-card"><p>{t('confirmedBookingsLabel')}</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingDates ?? 0} {t('upcomingDates')}</span></article><article className="metric-card"><p>{t('grossEarnings')}</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(data.overview?.totalEarnings ?? 0)}</strong><span>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(data.overview?.pendingPayouts ?? 0)} {t('pendingPayouts')}</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('recentBookingRequests')}</h3><button className="button secondary small">{t('openRequests')}</button></div><div className="list-stack">{(data['booking-requests'] || []).slice(0, 3).map((entry) => <div key={entry.id} className="list-card"><div><strong>{entry.customer}</strong><small>{entry.service} • {entry.date}</small></div><span className="pill pending">{translateText(entry.status, language)}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>{t('topPerformers')}</h3></div><div className="list-stack">{(data.services || []).slice(0, 3).map((service) => <div key={service.id} className="list-card"><div><strong>{service.name}</strong><small>{service.category}</small></div><span className="pill active">{translateText(service.status, language)}</span></div>)}</div></article></div></div>;
       case 'profile':
         return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BUSINESS PROFILE</p><h2>Business information</h2><p className="muted">Manage your public-facing vendor identity and service coverage.</p></div><button className="button secondary">Preview public profile</button></div><div className="panel profile-panel"><div className="profile-avatar">{data.profile?.businessName?.slice(0,1) || 'G'}</div><div><h3>{data.profile?.businessName}</h3><p className="muted">{data.profile?.businessType}</p><p>{data.profile?.serviceLocation}</p></div></div><div className="panel" style={{padding:'20px'}}><div className="field"><span>Business name</span><input value={data.profile?.businessName || ''} readOnly /></div><div className="field"><span>Business description</span><textarea rows="4" value={data.profile?.description || ''} readOnly /></div><div className="field"><span>Website</span><input value={data.profile?.website || ''} readOnly /></div></div></div>;
       case 'verification':
@@ -1306,10 +1488,11 @@ function VendorDashboard({ user, onLogout }) {
     }
   };
 
-  return <div className="app-shell"><aside className="sidebar open"><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>VENDOR</span></div></div><div className="nav-caption">BUSINESS</div><nav>{vendorMenu.map(([id, label]) => <button key={id} className={`nav-item ${slug === id ? 'active' : ''}`} onClick={() => id === 'logout' ? onLogout() : setSlug(id)}><span>{label}</span></button>)}</nav></aside><main className="main-area"><header className="topbar"><div className="breadcrumb">Vendor <span>/</span> <strong>{vendorMenu.find(([id]) => id === slug)?.[1] || 'Dashboard Overview'}</strong></div><div className="topbar-right"><span className="secure-label"><span/>Secure session</span><button className="top-user"><span className="avatar small-avatar">{user.full_name?.slice(0,1) || 'V'}</span>{user.name || user.full_name}</button></div></header><div className="content">{renderSection()}</div><footer className="footer">EventFlow Vendor Console <span>•</span> Owned records only</footer></main></div>;
+  return <div className="app-shell"><aside className="sidebar open"><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{t('vendorArea')}</span></div></div><div className="nav-caption">{t('businessArea')}</div><nav>{vendorMenu.map(([id, label]) => <button key={id} className={`nav-item ${slug === id ? 'active' : ''}`} onClick={() => id === 'logout' ? onLogout() : setSlug(id)}><span>{translateText(label, language)}</span></button>)}</nav></aside><main className="main-area"><header className="topbar"><div className="breadcrumb">{t('vendorArea')} <span>/</span> <strong>{translateText(vendorMenu.find(([id]) => id === slug)?.[1] || 'Dashboard Overview', language)}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{t('secureSession')}</span><button className="top-user"><span className="avatar small-avatar">{user.full_name?.slice(0,1) || 'V'}</span>{user.name || user.full_name}</button></div></header><div className="content">{renderSection()}</div><footer className="footer">{t('vendorPortal')} <span>•</span> {t('ownedRecordsOnly')}</footer></main></div>;
 }
 
 function CustomerLogin({ onLogin }) {
+  const language = useLanguage();
   const [email, setEmail] = useState('customer@eventflow.io');
   const [password, setPassword] = useState('customer123');
   const [busy, setBusy] = useState(false);
@@ -1328,10 +1511,12 @@ function CustomerLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EF</div><p className="eyebrow">EVENTFLOW CUSTOMER PORTAL</p><h1>Customer sign in</h1><p className="muted">Discover services, manage your events, request quotes, and track reservations.</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>Email address</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>Password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? 'Signing in…' : 'Open customer dashboard'}</button></form><p className="login-note">Demo customer credentials are pre-filled for quick access during setup.</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('customerPortal', language)}</p><h1>{translate('customerSignIn', language)}</h1><p className="muted">{translate('discoverManageEvents', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openCustomerDashboard', language)}</button></form></div></main>;
 }
 
 function CustomerDashboard({ user, onLogout }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const customerMenu = [
     ['overview', 'Dashboard Overview'], ['vendors', 'Browse Vendors'], ['services', 'Search Services'], ['categories', 'Service Categories'], ['bookings', 'My Bookings'], ['history', 'Booking History'], ['events', 'My Events'], ['favorites', 'Saved Vendors'], ['quotations', 'Request Quotations'], ['payments', 'Payments and Transactions'], ['messages', 'Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['profile', 'Profile'], ['logout', 'Logout']
   ];
@@ -1360,12 +1545,12 @@ function CustomerDashboard({ user, onLogout }) {
   }, []);
 
   const renderSection = () => {
-    if (loading) return <div className="loading"><span className="spinner"/>Loading customer dashboard…</div>;
+    if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <div className="alert error">{error}</div>;
 
     switch (slug) {
       case 'overview':
-        return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">CUSTOMER DASHBOARD</p><h2>Welcome back, {user.name || user.full_name || 'Customer'}</h2><p className="muted">Track bookings, upcoming events, payments, and saved vendors in one secure workspace.</p></div><button className="button secondary" onClick={onLogout}>Log out</button></div><div className="metric-grid"><article className="metric-card"><p>Total bookings</p><strong>{data.overview?.totalBookings ?? 0}</strong><span>{data.overview?.pendingBookings ?? 0} pending</span></article><article className="metric-card"><p>Confirmed</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingEvents ?? 0} upcoming events</span></article><article className="metric-card"><p>Outstanding payments</p><strong>{data.overview?.outstandingPayments ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} open quotations</span></article><article className="metric-card"><p>Unread messages</p><strong>{data.overview?.unreadMessages ?? 0}</strong><span>{data.overview?.unreadNotifications ?? 0} notifications</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>Recent bookings</h3><button className="button secondary small">Open bookings</button></div><div className="list-stack">{(data.bookings || []).slice(0,4).map((booking) => <div key={booking.id} className="list-card"><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} • {booking.status}</small></div><span>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount || 0)}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>Saved vendors</h3></div><div className="list-stack">{(data.favorites || []).slice(0,3).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.city}</small></div><span className="pill active">Saved</span></div>)}</div></article></div></section>;
+        return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('customerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || t('customerArea')}</h2><p className="muted">{t('trackBookings')}</p></div><div className="header-actions"><LanguageSelector/><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div></div><div className="metric-grid"><article className="metric-card"><p>{t('totalBookings')}</p><strong>{data.overview?.totalBookings ?? 0}</strong><span>{data.overview?.pendingBookings ?? 0} {t('pendingLabel')}</span></article><article className="metric-card"><p>{t('confirmedLabel')}</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingEvents ?? 0} {t('upcomingEvents')}</span></article><article className="metric-card"><p>{t('outstandingPayments')}</p><strong>{data.overview?.outstandingPayments ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} {t('openQuotations')}</span></article><article className="metric-card"><p>{t('unreadMessages')}</p><strong>{data.overview?.unreadMessages ?? 0}</strong><span>{data.overview?.unreadNotifications ?? 0} {t('notificationsLabel')}</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('recentBookings')}</h3><button className="button secondary small">{t('openBookings')}</button></div><div className="list-stack">{(data.bookings || []).slice(0,4).map((booking) => <div key={booking.id} className="list-card"><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} • {translateText(booking.status, language)}</small></div><span>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount || 0)}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>{t('savedVendors')}</h3></div><div className="list-stack">{(data.favorites || []).slice(0,3).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.city}</small></div><span className="pill active">{t('savedVendors')}</span></div>)}</div></article></div></section>;
       case 'vendors':
         return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BROWSE VENDORS</p><h2>Discover trusted event vendors</h2><p className="muted">Search by city, category, rating, and price to compare and save the right match.</p></div></div><div className="panel" style={{ padding: '20px' }}><div className="toolbar"><input className="field-input" placeholder="Search vendor name" /><select className="filter-select"><option>All categories</option>{(data.categories || []).map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select><select className="filter-select"><option>Any rating</option><option>4.5+</option><option>4.8+</option></select></div><div className="table-wrap"><table><thead><tr><th>Vendor</th><th>Category</th><th>Location</th><th>Verified</th><th>Rating</th><th>From</th></tr></thead><tbody>{(data.vendors || []).map((vendor) => <tr key={vendor.id}><td>{vendor.name}</td><td>{vendor.category}</td><td>{vendor.city}</td><td><span className="pill active">{vendor.verified ? 'Verified' : 'Unverified'}</span></td><td>{vendor.rating?.toFixed ? vendor.rating.toFixed(1) : '—'}★</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(vendor.priceFrom || 0)}</td></tr>)}</tbody></table></div></div></section>;
       case 'services':
@@ -1400,10 +1585,11 @@ function CustomerDashboard({ user, onLogout }) {
     }
   };
 
-  return <div className="app-shell"><aside className="sidebar open"><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>CUSTOMER</span></div></div><div className="nav-caption">BOOKING</div><nav>{customerMenu.map(([id, label]) => <button key={id} className={`nav-item ${slug === id ? 'active' : ''}`} onClick={() => id === 'logout' ? onLogout() : setSlug(id)}><span>{label}</span></button>)}</nav></aside><main className="main-area"><header className="topbar"><div className="breadcrumb">Customer <span>/</span> <strong>{customerMenu.find(([id]) => id === slug)?.[1] || 'Dashboard Overview'}</strong></div><div className="topbar-right"><span className="secure-label"><span/>Secure session</span><button className="top-user"><span className="avatar small-avatar">{user.full_name?.slice(0,1) || 'C'}</span>{user.name || user.full_name}</button></div></header><div className="content">{renderSection()}</div><footer className="footer">EventFlow Customer Console <span>•</span> Personal records only</footer></main></div>;
+  return <div className="app-shell"><aside className="sidebar open"><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{t('customerArea')}</span></div></div><div className="nav-caption">{t('bookings')}</div><nav>{customerMenu.map(([id, label]) => <button key={id} className={`nav-item ${slug === id ? 'active' : ''}`} onClick={() => id === 'logout' ? onLogout() : setSlug(id)}><span>{translateText(label, language)}</span></button>)}</nav></aside><main className="main-area"><header className="topbar"><div className="breadcrumb">{t('customerArea')} <span>/</span> <strong>{translateText(customerMenu.find(([id]) => id === slug)?.[1] || 'Dashboard Overview', language)}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{t('secureSession')}</span><button className="top-user"><span className="avatar small-avatar">{user.full_name?.slice(0,1) || 'C'}</span>{user.name || user.full_name}</button></div></header><div className="content">{renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
 }
 
 function OrganizerLogin({ onLogin }) {
+  const language = useLanguage();
   const [email, setEmail] = useState('organizer@eventflow.io');
   const [password, setPassword] = useState('organizer123');
   const [busy, setBusy] = useState(false);
@@ -1422,10 +1608,12 @@ function OrganizerLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EF</div><p className="eyebrow">EVENTFLOW ORGANIZER PORTAL</p><h1>Organizer sign in</h1><p className="muted">Secure access for planning events, comparing vendors, and tracking bookings.</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>Email address</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>Password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? 'Signing in…' : 'Open organizer dashboard'}</button></form><p className="login-note">Demo organizer credentials are pre-filled for quick access during setup.</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('organizerPortal', language)}</p><h1>{translate('organizerSignIn', language)}</h1><p className="muted">{translate('secureOrganizerAccess', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openOrganizerDashboard', language)}</button></form></div></main>;
 }
 
 function OrganizerDashboard({ user, onLogout }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [overview, setOverview] = useState(null);
   const [events, setEvents] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -1452,29 +1640,29 @@ function OrganizerDashboard({ user, onLogout }) {
     load();
   }, []);
 
-  if (error) return <div className="alert error">{error}</div>;
-  if (!overview) return <div className="loading"><span className="spinner"/>Loading organizer workspace…</div>;
+  if (error) return <div className="alert error">{translateText(error, language)}</div>;
+  if (!overview) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
 
   const totalBudget = events.reduce((sum, event) => sum + Number(event.budget || 0), 0);
   const upcomingEvents = events.filter((event) => new Date(event.date) >= new Date()).slice(0, 3);
   const activeBookings = bookings.filter((booking) => ['pending', 'confirmed', 'accepted', 'under_review'].includes(String(booking.status).toLowerCase()));
 
-  return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">EVENT ORGANIZER DASHBOARD</p><h2>Welcome back, {user.name || user.full_name || 'Organizer'}</h2><p className="muted">Track event progress, compare options, and keep each booking moving.</p></div><button className="button secondary" onClick={onLogout}>Log out</button></div>
+  return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('organizerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || 'Organizer'}</h2><p className="muted">{t('secureOrganizerAccess')}</p></div><div className="header-actions"><LanguageSelector/><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div></div>
     <div className="metric-grid">
-      <article className="metric-card"><p>Active events</p><strong>{events.length}</strong><span>{upcomingEvents.length} upcoming</span></article>
-      <article className="metric-card"><p>Vendor matches</p><strong>{vendors.length}</strong><span>Verified and ranked</span></article>
-      <article className="metric-card"><p>Budget allocated</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(totalBudget)}</strong><span>Across current plans</span></article>
-      <article className="metric-card"><p>Bookings in motion</p><strong>{activeBookings.length}</strong><span>{bookings.length} total tracked</span></article>
+      <article className="metric-card"><p>{t('activeEvents')}</p><strong>{events.length}</strong><span>{upcomingEvents.length} {t('upcoming')}</span></article>
+      <article className="metric-card"><p>{t('vendorMatches')}</p><strong>{vendors.length}</strong><span>{t('verifiedRanked')}</span></article>
+      <article className="metric-card"><p>{t('budgetAllocated')}</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(totalBudget)}</strong><span>{t('currentPlans')}</span></article>
+      <article className="metric-card"><p>{t('bookingsInMotion')}</p><strong>{activeBookings.length}</strong><span>{bookings.length} {t('totalTracked')}</span></article>
     </div>
     <div className="two-column-layout">
       <article className="panel">
-        <div className="panel-header"><h3>Event pipeline</h3><button className="button secondary small">Create event</button></div>
+        <div className="panel-header"><h3>{t('eventPipeline')}</h3><button className="button secondary small">{t('createEvent')}</button></div>
         <div className="list-stack">
-          {upcomingEvents.length ? upcomingEvents.map((event) => <div key={event.id} className="list-card"><div><strong>{event.title}</strong><small>{event.type} • {event.date}</small></div><span className="pill active">Planned</span></div>) : <div className="empty panel"><strong>No upcoming events</strong><span>Draft a new event to start planning.</span></div>}
+          {upcomingEvents.length ? upcomingEvents.map((event) => <div key={event.id} className="list-card"><div><strong>{event.title}</strong><small>{event.type} • {event.date}</small></div><span className="pill active">{t('eventPlanned')}</span></div>) : <div className="empty panel"><strong>{t('noUpcomingEvents')}</strong><span>{t('draftEventPrompt')}</span></div>}
         </div>
       </article>
       <article className="panel">
-        <div className="panel-header"><h3>Recommended vendors</h3><button className="button secondary small">Browse all</button></div>
+        <div className="panel-header"><h3>{t('recommendedVendors')}</h3><button className="button secondary small">{t('browseAll')}</button></div>
         <div className="list-stack">
           {vendors.slice(0, 4).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.category} • {vendor.city}</small></div><span className="pill success">{vendor.rating?.toFixed ? `${vendor.rating.toFixed(1)}★` : 'Top rated'}</span></div>)}
         </div>
@@ -1482,17 +1670,17 @@ function OrganizerDashboard({ user, onLogout }) {
     </div>
     <div className="two-column-layout">
       <article className="panel">
-        <div className="panel-header"><h3>Booking tracker</h3></div>
+        <div className="panel-header"><h3>{t('bookingTracker')}</h3></div>
         <div className="list-stack">
           {bookings.map((booking) => <div key={booking.id} className="list-card compact"><div><strong>{booking.serviceTitle || booking.title}</strong><small>{booking.status}</small></div><span>{booking.quotedAmount ? new Intl.NumberFormat('en-ET', { style:'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount) : '—'}</span></div>)}
         </div>
       </article>
       <article className="panel">
-        <div className="panel-header"><h3>Budget snapshot</h3></div>
+        <div className="panel-header"><h3>{t('budgetSnapshot')}</h3></div>
         <div className="budget-stack">
-          <div className="report-row"><span>Reserved</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(totalBudget)}</strong></div>
-          <div className="report-row"><span>Payments due</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(bookings.reduce((sum, booking) => sum + Number(booking.quotedAmount || 0), 0))}</strong></div>
-          <div className="report-row"><span>Remaining</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(Math.max(totalBudget - bookings.reduce((sum, booking) => sum + Number(booking.quotedAmount || 0), 0), 0))}</strong></div>
+          <div className="report-row"><span>{t('reserved')}</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(totalBudget)}</strong></div>
+          <div className="report-row"><span>{t('paymentsDue')}</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(bookings.reduce((sum, booking) => sum + Number(booking.quotedAmount || 0), 0))}</strong></div>
+          <div className="report-row"><span>{t('remaining')}</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(Math.max(totalBudget - bookings.reduce((sum, booking) => sum + Number(booking.quotedAmount || 0), 0), 0))}</strong></div>
         </div>
       </article>
     </div>
@@ -1500,20 +1688,25 @@ function OrganizerDashboard({ user, onLogout }) {
 }
 
 function Login({onLogin}) {
+  const language = useLanguage();
   const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
   async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email,password); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EF</div><p className="eyebrow">EVENTFLOW PLATFORM</p><h1>Administrator sign in</h1><p className="muted">Use your administrator account to continue.</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>Email address</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>Password</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?'Signing in…':'Sign in securely'}</button></form><p className="login-note">Administrator access is verified by the server for every protected request.</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
 }
 function Overview() {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [data,setData]=useState(null); const [error,setError]=useState('');
   useEffect(()=>{api('/admin/reports/summary').then((r)=>setData(r.data)).catch((e)=>setError(e.message));},[]);
-  if(error) return <div className="alert error">{error}</div>;
-  if(!data) return <div className="loading"><span className="spinner"/>Loading dashboard…</div>;
-  const items=[['Users',data.users.total_users,data.users.active_users+' active'],['Vendors',data.vendors.total_vendors,data.vendors.pending_vendors+' pending verification'],['Events',data.events.total_events,data.events.completed_events+' completed'],['Bookings',data.bookings.total_bookings,data.bookings.bookings_under_review+' under review'],['Payments',data.payments.total_payments,data.payments.confirmed_payments+' provider-confirmed paid'],['Open complaints',data.complaints.open_complaints,'Open or investigating']];
-  return <><div className="welcome"><div><p className="eyebrow">ADMINISTRATOR CONSOLE</p><h2>Platform overview</h2><p className="muted">Live figures loaded from the platform database.</p></div><span className="live-dot">Live data</span></div><div className="metric-grid">{items.map(([label,value,note])=><article className="metric-card" key={label}><p>{label}</p><strong>{value ?? 0}</strong><span>{note}</span></article>)}</div><section className="panel guidance"><h3>Operational reminders</h3><ul><li>Vendor decisions must include a documented verification basis.</li><li>Bookings can be finalized only through the moderation transition rules.</li><li>Payment records are read-only until a provider is configured; no refund is initiated by this dashboard.</li></ul></section></>;
+  if(error) return <div className="alert error">{translateText(error,language)}</div>;
+  if(!data) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
+  const items=[[t('usersLabel'),data.users.total_users,`${data.users.active_users} ${t('activeCount')}`],[t('vendorsLabelPlural'),data.vendors.total_vendors,`${data.vendors.pending_vendors} ${t('pendingVerification')}`],[t('eventsLabel'),data.events.total_events,`${data.events.completed_events} ${t('completedCount')}`],[t('bookingsLabel'),data.bookings.total_bookings,`${data.bookings.bookings_under_review} ${t('underReview')}`],[t('paymentsLabel'),data.payments.total_payments,`${data.payments.confirmed_payments} ${t('providerConfirmedPaid')}`],[t('openComplaints'),data.complaints.open_complaints,t('openInvestigating')]];
+  return <><div className="welcome"><div><p className="eyebrow">{t('adminConsole')}</p><h2>{t('platformOverview')}</h2><p className="muted">{t('liveFigures')}</p></div><span className="live-dot">{t('liveDataLabel')}</span></div><div className="metric-grid">{items.map(([label,value,note])=><article className="metric-card" key={label}><p>{label}</p><strong>{value ?? 0}</strong><span>{note}</span></article>)}</div><section className="panel guidance"><h3>{t('operationalReminders')}</h3><ul><li>{t('verificationBasis')}</li><li>{t('moderationRules')}</li><li>{t('paymentReadOnly')}</li></ul></section></>;
 }
 
 function DataPage({slug,user,onUserChange}) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const config = modules[slug] || {
     title: slug === 'profile' ? 'Profile' : slug === 'settings' ? 'System Settings' : slug === 'reports' ? 'Reports and Analytics' : 'Administration',
     endpoint: slug === 'settings' ? 'settings' : slug === 'profile' ? 'profile' : slug === 'reports' ? 'reports/summary' : 'users',
@@ -1523,7 +1716,7 @@ function DataPage({slug,user,onUserChange}) {
   };
   const [data,setData]=useState([]); const [pagination,setPagination]=useState({page:1,pageSize:20,total:0});
   const [loading,setLoading]=useState(true); const [error,setError]=useState(''); const [notice,setNotice]=useState(''); const [query,setQuery]=useState(''); const [search,setSearch]=useState(''); const [status,setStatus]=useState(''); const [modal,setModal]=useState(null); const [busy,setBusy]=useState(false); const [form,setForm]=useState({}); const [roleRows,setRoleRows]=useState([]);
-  const statuses={users:['active','suspended','pending'],roles:['active','inactive'],categories:['active','inactive'],vendors:['pending','verified','rejected'],events:['draft','active','booked','in_progress','completed','cancelled'],bookings:['requested','quoted','accepted','rejected','cancelled','completed','under_review'],payments:['pending','authorized','paid','failed','refunded','refund_pending'],reviews:['published','hidden','flagged'],complaints:['open','investigating','resolved','dismissed'],messages:['new','reviewed','replied','closed'],notifications:['queued','sent','failed','read']}[slug]||[];
+  const statuses={users:['active','suspended','pending'],roles:['active','inactive'],categories:['active','inactive'],vendors:['pending','verified','rejected'],events:['draft','active','booked','in_progress','completed','cancelled'],bookings:['requested','quoted','accepted','rejected','cancelled','completed','under_review'],'package-requests':['new','reviewed','replied','closed'],payments:['pending','authorized','paid','failed','refunded','refund_pending'],reviews:['published','hidden','flagged'],complaints:['open','investigating','resolved','dismissed'],messages:['new','reviewed','replied','closed'],notifications:['queued','sent','failed','read']}[slug]||[];
   const load=useCallback(async(page=1)=>{setLoading(true);setError('');try{const params=new URLSearchParams({page:String(page),pageSize:String(pagination.pageSize)});if(search)params.set('q',search);if(status)params.set('status',slug==='roles'||slug==='categories'?(status==='active'?'1':'0'):status);const result=await api(`/admin/${config.endpoint}?${params}`);setData(result.data);setPagination(result.pagination);}catch(issue){setError(issue.message);}finally{setLoading(false);}},[config.endpoint,pagination.pageSize,search,status]);
   useEffect(()=>{load(1);},[load]);
   useEffect(()=>{if(slug==='users')api('/admin/roles?pageSize=100').then((r)=>setRoleRows(r.data.filter((x)=>x.is_active&&!x.is_admin))).catch(()=>{});},[slug]);
@@ -1553,6 +1746,8 @@ function DataPage({slug,user,onUserChange}) {
       result=await api(`/admin/payments/${row.id}/refunds`,{method:'POST',body:JSON.stringify({reason:form.reason})});
     } else if(modal.kind==='role'){
       result=await api(`/admin/users/${row.id}/role`,{method:'PATCH',body:JSON.stringify({role_id:Number(form.role_id)})});
+    } else if(modal.kind==='package-status'){
+      result=await api(`/admin/event-package-requests/${row.id}/status`,{method:'PATCH',body:JSON.stringify({status:form.status || row.status})});
     } else if(modal.kind==='status'){
       if (slug === 'messages') {
         result = await api(`/admin/contact/${row.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: form.status || row.status || 'new', admin_reply: form.admin_reply || '' }) });
@@ -1570,8 +1765,8 @@ function DataPage({slug,user,onUserChange}) {
     if(modal.kind==='setting'){result=await api(`/admin/settings/${encodeURIComponent(form.setting_key)}`,{method:'PUT',body:JSON.stringify({value:form.setting_value})});}
     setNotice(slug==='payments'?'Request was not processed.': 'Changes saved.');setModal(null);await load(pagination.page);
   }catch(issue){setError(issue.message);}finally{setBusy(false);}}
-  const actions=(row)=>{const names=config.actions||[];return names.map((action)=>{const label={edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',refund:'Request refund',role:'Change role',status:row.status==='suspended'?'Activate':'Suspend',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint'}[action];return <button key={action} className={`text-action ${['deactivate','reject','refund','status'].includes(action)?'subtle-danger':''}`} onClick={()=>{if(action==='edit')startEdit(row);else if(action==='deactivate')startAction(action,row);else startAction(action,row);}}>{label}</button>;});};
-  const title=config.title;
+  const actions=(row)=>{const names=config.actions||[];return names.map((action)=>{const label={edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',refund:'Request refund',role:'Change role',status:row.status==='suspended'?'Activate':'Suspend','package-status':'Update status',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint'}[action];return <button key={action} className={`text-action ${['deactivate','reject','refund','status'].includes(action)?'subtle-danger':''}`} onClick={()=>startAction(action==='package-status'?'package-status':action,row)}>{label}</button>;});};
+  const title=translateText(config.title, language);
   const availableFields=slug==='users'?[['full_name','Full name','text'],['email','Email','email'],['phone','Phone','text'],['password','Temporary password (min. 16 characters)','password'],['role_id','Role','select',roleRows.map((r)=>`${r.id}:${r.name}`).join(',')]]:config.fields||[];
   function modalTitle() {
     const titles = {
@@ -1583,13 +1778,14 @@ function DataPage({slug,user,onUserChange}) {
       refund: 'Request refund',
       role: 'Change user role',
       status: 'Update account status',
+      'package-status': 'Update package request status',
       permissions: 'Role permissions',
       review: 'Moderate review',
       complaint: 'Update complaint',
       setting: 'Save system setting',
       profile: 'Update profile',
     };
-    return titles[modal.kind] || 'Confirm action';
+    return translateText(titles[modal.kind] || 'Confirm action', language);
   }
 
   function renderModalFields() {
@@ -1611,7 +1807,10 @@ function DataPage({slug,user,onUserChange}) {
       ));
     }
 
-    if (modal.kind === 'verify' || modal.kind === 'reject' || modal.kind === 'refund' || modal.kind === 'status') {
+    if (modal.kind === 'verify' || modal.kind === 'reject' || modal.kind === 'refund' || modal.kind === 'status' || modal.kind === 'package-status') {
+      if (slug === 'package-requests') {
+        return <label className="field"><span>Request status</span><select value={form.status || modal.row.status} onChange={(event) => changeField('status', event.target.value)}>{['new', 'reviewed', 'replied', 'closed'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>;
+      }
       if (slug === 'messages') {
         return (
           <>
@@ -1775,15 +1974,15 @@ function DataPage({slug,user,onUserChange}) {
     <section>
       <div className="page-heading">
         <div>
-          <p className="eyebrow">ADMINISTRATION</p>
+          <p className="eyebrow">{t('systemControl')}</p>
           <h2>{title}</h2>
-          <p className="muted">Manage platform records and review changes from persistent database data.</p>
+          <p className="muted">{t('manageRecords')}</p>
         </div>
-        {config.create && <button className="button" onClick={startCreate}>＋ Create new</button>}
+        {config.create && <button className="button" onClick={startCreate}>{t('createNew')}</button>}
       </div>
       {slug === 'payments' && <div className="alert warning">Payment entries are read-only. Refund requests cannot be processed until a provider is configured and verifies the transaction.</div>}
-      {notice && <div className="alert success">{notice}</div>}
-      {error && <div className="alert error">{error}<button className="dismiss" onClick={() => setError('')}>Dismiss</button></div>}
+      {notice && <div className="alert success">{translateText(notice, language)}</div>}
+      {error && <div className="alert error">{translateText(error, language)}<button className="dismiss" onClick={() => setError('')}>{t('dismiss')}</button></div>}
       {slug === 'settings' && <div className="toolbar"><button className="button" onClick={() => { setForm({}); setModal({ kind: 'setting' }); }}>＋ Add or update setting</button></div>}
       {slug === 'profile' && (
         <div className="panel profile-panel">
@@ -1801,13 +2000,13 @@ function DataPage({slug,user,onUserChange}) {
           <div className="toolbar">
             <form className="search-box" onSubmit={(event) => { event.preventDefault(); setSearch(query.trim()); }}>
               <Search size={17} />
-              <input placeholder="Search records" value={query} onChange={(event) => setQuery(event.target.value)} />
-              <button type="submit">Search</button>
+              <input placeholder={t('searchRecords')} value={query} onChange={(event) => setQuery(event.target.value)} />
+              <button type="submit">{t('search')}</button>
             </form>
             {statuses.length > 0 && (
               <select className="filter-select" value={status} onChange={(event) => setStatus(event.target.value)}>
-                <option value="">All statuses</option>
-                {statuses.map((value) => <option key={value} value={value}>{value}</option>)}
+                <option value="">{t('allStatuses')}</option>
+                  {statuses.map((value) => <option key={value} value={value}>{translateText(value, language)}</option>)}
               </select>
             )}
             <span className="result-count">{pagination.total} records</span>
@@ -1822,9 +2021,9 @@ function DataPage({slug,user,onUserChange}) {
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={config.columns.length + 1}><div className="loading"><span className="spinner" />Loading records…</div></td></tr>
+                  <tr><td colSpan={config.columns.length + 1}><div className="loading"><span className="spinner" />{t('loading')}</div></td></tr>
                 ) : data.length === 0 ? (
-                  <tr><td colSpan={config.columns.length + 1}><div className="empty"><div className="empty-icon">⌕</div><strong>No records found</strong><span>Try changing the search or status filter.</span></div></td></tr>
+                  <tr><td colSpan={config.columns.length + 1}><div className="empty"><div className="empty-icon">⌕</div><strong>{t('noRecords')}</strong><span>{t('tryDifferentFilters')}</span></div></td></tr>
                 ) : data.map((row) => (
                   <tr key={row.id ?? row.setting_key}>
                     {config.columns.map((column) => (
@@ -1917,6 +2116,7 @@ function SettingsPage({ onEdit }) {
 }
 
 export default function App(){
+  const language = useLanguage();
   const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => window.location.pathname || '/');
 
   const normalizePath = useCallback((path) => {
@@ -1925,6 +2125,11 @@ export default function App(){
     const next = pathname.replace(/\/+$/, '');
     return `${next || '/'}${search ? `?${search}` : ''}`;
   }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+    document.documentElement.dir = 'ltr';
+  }, [language]);
 
   const navigatePublic = useCallback((path) => {
     const next = normalizePath(path);
@@ -1938,11 +2143,11 @@ export default function App(){
     const found = nextPath.match(/^\/admin(?:\/([^/]+))?\/?(?:\?.*)?$/);
     if (found) {
       const next = found[1] || 'overview';
-      setSlug(['overview','users','roles','vendors','categories','events','bookings','payments','reviews','messages','reports','notifications','audit-logs','settings','profile'].includes(next) ? next : 'overview');
+      setSlug(['overview','users','roles','vendors','categories','events','bookings','package-requests','payments','reviews','messages','reports','notifications','audit-logs','settings','profile'].includes(next) ? next : 'overview');
     }
   }, [normalizePath]);
 
-  useEffect(()=>{resolve();const listener=()=>resolve();window.addEventListener('popstate',listener);api('/auth/me').then((r)=>setUser(r.user)).catch(()=>setUser(null)).finally(()=>setChecking(false));return()=>window.removeEventListener('popstate',listener);},[resolve]);
+  useEffect(()=>{const controller=new AbortController();resolve();const listener=()=>resolve();window.addEventListener('popstate',listener);api('/auth/me',{signal:controller.signal}).then((r)=>setUser(r.user)).catch((issue)=>{if(issue.name!=='AbortError')setUser(null);}).finally(()=>{if(!controller.signal.aborted)setChecking(false);});return()=>{controller.abort();window.removeEventListener('popstate',listener);};},[resolve]);
 
   async function login(email,password){
     const adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
@@ -1961,7 +2166,11 @@ export default function App(){
       navigatePublic(rolePath);
     }
   }
-  async function registerPublic(name,email,password,role='customer'){ const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,email,password,role})}); const createdUser = response?.data?.user || { name, email, role }; setUser(null); setPortal(role); setGlobalError(''); setShowLogin(false); navigatePublic('/login'); return { createdUser, message: response?.data?.requiresVerification ? 'Account created. Please verify your email before signing in.' : 'Account created successfully.' }; }
+  async function registerPublic(name,email,password,role='customer'){
+    const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,email,password,role})});
+    setUser(null);setPortal(role);setGlobalError('');setShowLogin(false);
+    return response.data;
+  }
   async function requestPasswordReset(email){ const response = await api('/platform/forgot-password',{method:'POST',body:JSON.stringify({email})}); return response; }
   async function resetPassword(token,password){ const response = await api('/platform/reset-password',{method:'POST',body:JSON.stringify({token,password})}); return response; }
   async function verifyEmail(token){ const response = await api('/platform/verify-email',{method:'POST',body:JSON.stringify({token})}); return response; }
@@ -1972,6 +2181,7 @@ export default function App(){
   async function logout(){
     try {
       if (portal === 'admin') await api('/auth/logout',{method:'POST'});
+      else if (user) await api('/platform/logout',{method:'POST'});
     } catch (issue) {
       setGlobalError(issue.message);
     } finally {
@@ -2025,6 +2235,6 @@ export default function App(){
   if (portal === 'customer') return <CustomerDashboard user={user} onLogout={logout}/>;
   if (portal === 'organizer') return <OrganizerDashboard user={user} onLogout={logout}/>;
   if (portal === 'vendor') return <VendorDashboard user={user} onLogout={logout}/>;
-  const activeMenu=menu.find(([id])=>id===slug);const pageTitle=activeMenu?.[1]||'Dashboard Overview';
-  return <div className="app-shell"><aside className={`sidebar ${sidebarOpen?'open':''}`}><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>ADMIN CONSOLE</span></div><button className="mobile-close icon-button" onClick={()=>setSidebarOpen(false)} aria-label="Close menu"><X size={18}/></button></div><div className="nav-caption">WORKSPACE</div><nav>{menu.map(([id,label,Icon])=><button key={id} className={`nav-item ${slug===id?'active':''}`} onClick={id === 'logout' ? logout : ()=>navigate(id)}><Icon size={18}/><span>{label}</span>{id==='vendors'&&<span className="nav-dot"/>}</button>)}</nav></aside><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><header className="topbar"><button className="icon-button menu-button" onClick={()=>setSidebarOpen(true)} aria-label="Open menu"><Menu size={20}/></button><div className="breadcrumb">Admin <span>/</span> <strong>{pageTitle}</strong></div><div className="topbar-right"><span className="secure-label"><span/>Secure session</span><button className="top-user" onClick={()=>navigate('profile')}><span className="avatar small-avatar">{user.full_name?.slice(0,1)||'A'}</span>{user.full_name}</button></div></header><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>Dismiss</button></div>}{slug==='overview'?<Overview/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<DataPage slug="settings" user={user} onUserChange={setUser}/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">EventFlow Administrator Console <span>•</span> Operational data is server-backed</footer></main></div>;
+  const activeMenu=menu.find(([id])=>id===slug);const pageTitle=translateText(activeMenu?.[1]||'Dashboard Overview',language);
+  return <div className="app-shell"><aside className={`sidebar ${sidebarOpen?'open':''}`}><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{translate('adminDashboard',language).toUpperCase()}</span></div><button className="mobile-close icon-button" onClick={()=>setSidebarOpen(false)} aria-label={translate('close',language)}><X size={18}/></button></div><div className="nav-caption">{translate('systemControl',language)}</div><nav>{menu.map(([id,label,Icon])=><button key={id} className={`nav-item ${slug===id?'active':''}`} onClick={id === 'logout' ? logout : ()=>navigate(id)}><Icon size={18}/><span>{translateText(label,language)}</span>{id==='vendors'&&<span className="nav-dot"/>}</button>)}</nav></aside><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><header className="topbar"><button className="icon-button menu-button" onClick={()=>setSidebarOpen(true)} aria-label={translate('mainNavigation',language)}><Menu size={20}/></button><div className="breadcrumb">{translate('adminDashboard',language)} <span>/</span> <strong>{pageTitle}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{translate('secureSession',language)}</span><button className="top-user" onClick={()=>navigate('profile')}><span className="avatar small-avatar">{user.full_name?.slice(0,1)||'A'}</span>{user.full_name}</button></div></header><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='overview'?<Overview/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<DataPage slug="settings" user={user} onUserChange={setUser}/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div>;
 }

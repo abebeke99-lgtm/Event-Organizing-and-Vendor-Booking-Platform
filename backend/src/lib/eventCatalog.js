@@ -11,6 +11,20 @@ export function sanitizeText(value, fallback = '') {
   return text.length ? text : fallback;
 }
 
+export function mapDatabaseEvent(row) {
+  return {
+    id: Number(row.id),
+    title: sanitizeText(row.title),
+    type: sanitizeText(row.event_type),
+    category: sanitizeText(row.event_type).toLowerCase(),
+    location: sanitizeText(row.city) || null,
+    startDate: row.start_date || null,
+    endDate: row.end_date || null,
+    budget: row.budget === null || row.budget === undefined ? null : Number(row.budget),
+    status: sanitizeText(row.status),
+  };
+}
+
 export function getPublicEvents(events = []) {
   return (events || []).filter((event) => {
     const status = String(event?.status || '').toLowerCase();
@@ -56,7 +70,7 @@ export function listPublicEvents(events = [], filters = {}) {
     const eventLocation = sanitizeText(event?.location, '').toLowerCase();
     const start = normalizeEventDate(event?.startDate || event?.start_date);
 
-    if (options.search && ![title, description, eventLocation].some((value) => value.includes(options.search))) {
+    if (options.search && ![title, description, eventCategory, eventLocation].some((value) => value.includes(options.search))) {
       return false;
     }
 

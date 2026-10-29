@@ -6,6 +6,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "migrate": "node src/lib/migrate.js",
+    "db:init": "node scripts/db-init.js",
     "bootstrap:admin": "node scripts/bootstrap-admin.js",
     "test": "node --test"
   },

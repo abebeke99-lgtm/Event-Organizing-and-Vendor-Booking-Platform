@@ -3,11 +3,13 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { createSession, hashToken, writeAudit } from '../lib/security.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
 const cookieOptions = () => {
-  const sameSite = process.env.COOKIE_SAME_SITE === 'none' ? 'none' : 'strict';
-  return { httpOnly: true, secure: process.env.COOKIE_SECURE === 'true' || sameSite === 'none', sameSite, path: '/', maxAge: 8 * 60 * 60 * 1000 };
+  const production = process.env.NODE_ENV === 'production';
+  const sameSite = production ? 'none' : (process.env.COOKIE_SAME_SITE === 'none' ? 'none' : 'strict');
+  return { httpOnly: true, secure: production || process.env.COOKIE_SECURE === 'true', sameSite, path: '/', maxAge: 8 * 60 * 60 * 1000 };
 };
 
 router.post('/login', async (req, res, next) => {
@@ -42,5 +44,5 @@ router.post('/logout', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-router.get('/me', requireAdmin, async (req, res) => res.json({ user: req.admin }));
+router.get('/me', requireAdmin, asyncHandler(async (req, res) => res.json({ user: req.admin })));
 export default router;

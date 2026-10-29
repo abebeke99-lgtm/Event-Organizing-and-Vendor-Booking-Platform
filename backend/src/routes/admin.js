@@ -600,6 +600,55 @@ router.post('/payments/:id/refunds', async (req, res, next) => {
   }
 });
 
+router.get('/event-package-requests', async (req, res, next) => {
+  const parsed = pageSchema.safeParse(req.query);
+  if (!parsed.success) return sendError(res, parsed.error);
+  const { page, pageSize, q, status } = parsed.data;
+  if (status && !['new', 'reviewed', 'replied', 'closed'].includes(status)) return res.status(400).json({ error: 'Status filter is invalid.' });
+
+  const clauses = [];
+  const values = [];
+  if (q) {
+    clauses.push('(r.event_title LIKE ? OR r.requester_name LIKE ? OR r.requester_email LIKE ?)');
+    values.push(`%${q}%`, `%${q}%`, `%${q}%`);
+  }
+  if (status) {
+    clauses.push('r.status = ?');
+    values.push(status);
+  }
+  const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+
+  try {
+    const [[countRow]] = await pool.execute(`SELECT COUNT(*) AS total FROM event_package_requests r${where}`, values);
+    const [rows] = await pool.execute(
+      `SELECT r.id, r.event_id, r.event_title, r.event_type, r.requested_date, r.requested_location,
+              r.requester_name, r.requester_email, r.service_category, r.guest_count, r.budget,
+              r.notes, r.status, r.created_at
+       FROM event_package_requests r${where}
+       ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?`,
+      [...values, pageSize, (page - 1) * pageSize]
+    );
+    res.json({ data: rows, pagination: { page, pageSize, total: Number(countRow.total) } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/event-package-requests/:id/status', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = z.object({ status: z.enum(['new', 'reviewed', 'replied', 'closed']) }).strict().safeParse(req.body);
+  if (!id.success || !parsed.success) return res.status(400).json({ error: 'A valid request ID and status are required.' });
+
+  try {
+    const [result] = await pool.execute('UPDATE event_package_requests SET status = ? WHERE id = ?', [parsed.data.status, id.data]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Package request not found.' });
+    await writeAudit(pool, { actorId: req.admin.id, action: 'event_package_request.status_updated', entityType: 'event_package_request', entityId: id.data, details: { status: parsed.data.status }, ip: req.ip });
+    res.json({ data: { id: id.data, status: parsed.data.status } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post('/:resource', async (req, res, next) => {
   const resource = getResource(req.params.resource);
   if (!resource || !resource.mutable) return res.status(404).json({ error: 'Resource not found or not creatable.' });

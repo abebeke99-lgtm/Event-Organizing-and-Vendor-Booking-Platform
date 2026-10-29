@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { listPublicEvents, getPublicEventById, getPublicCategories } from '../src/lib/eventCatalog.js';
+import { listPublicEvents, getPublicEventById, getPublicCategories, mapDatabaseEvent } from '../src/lib/eventCatalog.js';
 
 const sampleEvents = [
   {
@@ -73,6 +73,13 @@ test('keyword search matches event titles and descriptions only for public recor
   assert.equal(result.events[0].title, 'Wedding Weekend in Bahir Dar');
 });
 
+test('keyword search matches category and location case-insensitively', () => {
+  const byCategory = listPublicEvents(sampleEvents, { search: 'CONFERENCE', page: 1, limit: 10 });
+  const byLocation = listPublicEvents(sampleEvents, { search: 'BAHIR DAR', page: 1, limit: 10 });
+  assert.deepEqual(byCategory.events.map((event) => event.id), [4]);
+  assert.deepEqual(byLocation.events.map((event) => event.id), [2]);
+});
+
 test('category and location filters combine with search and date filtering', () => {
   const result = listPublicEvents(sampleEvents, {
     category: 'conference',
@@ -107,6 +114,31 @@ test('event detail lookup returns only public events and rejects invalid ids', (
   assert.equal(getPublicEventById(sampleEvents, 3), null);
   assert.equal(getPublicEventById(sampleEvents, 1)?.title, 'Addis Jazz Festival');
   assert.equal(getPublicEventById(sampleEvents, 'abc'), null);
+});
+
+test('database event mapping uses persisted fields without invented details', () => {
+  const event = mapDatabaseEvent({
+    id: '42',
+    title: 'Database event',
+    event_type: 'Wedding',
+    city: '  ',
+    start_date: '2026-11-18T03:00:00',
+    end_date: null,
+    budget: '240000.00',
+    status: 'active',
+  });
+
+  assert.deepEqual(event, {
+    id: 42,
+    title: 'Database event',
+    type: 'Wedding',
+    category: 'wedding',
+    location: null,
+    startDate: '2026-11-18T03:00:00',
+    endDate: null,
+    budget: 240000,
+    status: 'active',
+  });
 });
 
 test('public categories are normalized and filtered cleanly', () => {

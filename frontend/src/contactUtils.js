@@ -1,3 +1,5 @@
+import { translate } from './language.js';
+
 export const INQUIRY_TYPES = [
   { value: 'general_inquiry', label: 'General Inquiry' },
   { value: 'technical_support', label: 'Technical Support' },
@@ -19,24 +21,24 @@ export function normalizeContactForm(values = {}) {
   };
 }
 
-export function validateContactForm(values = {}) {
+export function validateContactForm(values = {}, language = 'en') {
   const normalized = normalizeContactForm(values);
   const errors = {};
 
   if (!normalized.full_name || normalized.full_name.length < 2) {
-    errors.full_name = 'Full name is required.';
+    errors.full_name = translate('fullNameRequired', language);
   }
   if (!normalized.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized.email)) {
-    errors.email = 'Please enter a valid email address.';
+    errors.email = translate('validEmailRequired', language);
   }
   if (!normalized.subject || normalized.subject.length < 4 || normalized.subject.length > 200) {
-    errors.subject = 'Subject must be between 4 and 200 characters.';
+    errors.subject = translate('subjectLengthError', language);
   }
   if (!normalized.message || normalized.message.length < 20 || normalized.message.length > 2500) {
-    errors.message = 'Message must be between 20 and 2500 characters.';
+    errors.message = translate('messageLengthError', language);
   }
   if (normalized.phone && normalized.phone.length > 40) {
-    errors.phone = 'Phone number is too long.';
+    errors.phone = translate('phoneLengthError', language);
   }
 
   return { normalized, errors };

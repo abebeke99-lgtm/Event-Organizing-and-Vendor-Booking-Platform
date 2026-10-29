@@ -34,6 +34,12 @@ test('validateContactForm rejects invalid email and short messages', () => {
   assert.match(result.errors.message, /between 20 and 2500/);
 });
 
+test('validateContactForm returns Amharic validation messages when selected', () => {
+  const { errors } = validateContactForm({ full_name: '', email: 'bad', subject: 'a', message: 'short' }, 'am');
+  assert.equal(errors.full_name, 'ሙሉ ስም ያስፈልጋል።');
+  assert.equal(errors.email, 'ትክክለኛ የኢሜይል አድራሻ ያስገቡ።');
+});
+
 test('buildContactInfo excludes empty settings', () => {
   const info = buildContactInfo({ email: '', phone: '', address: '', hours: '', socials: [] });
   assert.equal(info.email, '');

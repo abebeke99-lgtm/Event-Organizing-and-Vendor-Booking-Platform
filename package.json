@@ -11,6 +11,7 @@
     "build": "npm --workspace frontend run build",
     "test": "npm --workspace backend test && npm --workspace frontend test",
     "migrate": "npm --workspace backend run migrate",
+    "db:init": "npm --workspace backend run db:init",
     "bootstrap:admin": "npm --workspace backend run bootstrap:admin"
   },
   "devDependencies": {"concurrently": "^9.1.0"}

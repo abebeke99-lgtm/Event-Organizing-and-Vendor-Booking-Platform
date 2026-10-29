@@ -1,21 +1,35 @@
 import { Router } from 'express';
+import { rateLimit } from 'express-rate-limit';
+import { inTransaction, pool } from '../db.js';
 import { calculateDashboardSummary, createBookingSnapshot, validateBookingTransition } from '../lib/bookingRules.js';
-import { buildRoleRedirect, createSecureToken, hashToken, isStrongPassword, normalizeEmail, safeAuthError } from '../lib/authFlow.js';
-import { getPublicCategories, getPublicEventById, listPublicEvents } from '../lib/eventCatalog.js';
+import { buildRoleRedirect, safeAuthError } from '../lib/authFlow.js';
+import { getPublicCategories, listPublicEvents, mapDatabaseEvent } from '../lib/eventCatalog.js';
+import { parseEventPackageRequest } from '../lib/eventPackageRequests.js';
+import { hashToken, createUserSession, writeAudit } from '../lib/security.js';
+import { isPublicRole, hashPassword, parsePublicLogin, parsePublicRegistration, verifyPassword } from '../lib/platformAuth.js';
+import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
 import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
 
 const router = Router();
+const platformCookieOptions = () => {
+  const production = process.env.NODE_ENV === 'production';
+  const sameSite = production ? 'none' : (process.env.COOKIE_SAME_SITE === 'none' ? 'none' : 'strict');
+  return { httpOnly: true, secure: production || process.env.COOKIE_SECURE === 'true', sameSite, path: '/', maxAge: 8 * 60 * 60 * 1000 };
+};
+
+function buildCategorySummary() {
+  return platform.categories.map((category) => {
+    const categoryName = String(category.name || '').toLowerCase();
+    const vendors = listPublicVendors(platform.vendors, { category: categoryName, limit: 50 }).vendors;
+    const services = listPublicServices(platform.services, { category: categoryName, limit: 50 }).services;
+    return { ...category, vendorCount: vendors.length, serviceCount: services.length };
+  });
+}
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false, message: { success: false, error: 'Too many sign-in attempts. Please try again later.' } });
+const registrationLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false, message: { success: false, error: 'Too many registrations. Please try again later.' } });
 
 const platform = {
-  users: [
-    { id: 1, name: 'Aster Bekele', email: 'admin@eventflow.io', role: 'admin', password: 'admin1234', emailVerified: true, status: 'active' },
-    { id: 2, name: 'Selam Tadesse', email: 'organizer@eventflow.io', role: 'organizer', password: 'organizer123', emailVerified: true, status: 'active' },
-    { id: 3, name: 'Kebede Events', email: 'vendor@eventflow.io', role: 'vendor', password: 'vendor1234', emailVerified: true, status: 'active' },
-    { id: 4, name: 'Marta Desta', email: 'customer@eventflow.io', role: 'customer', password: 'customer123', emailVerified: true, status: 'active' },
-  ],
-  resetTokens: new Map(),
-  verificationTokens: new Map(),
   vendors: [
     {
       id: 1,
@@ -137,23 +151,19 @@ const platform = {
   ],
 };
 
-router.get('/overview', (req, res) => {
-  const summary = calculateDashboardSummary({
-    users: platform.users.length,
-    vendors: platform.vendors.length,
-    events: platform.events.length,
-    bookings: platform.bookings,
-  });
-
-  res.json({
-    success: true,
-    data: {
-      ...summary,
-      categories: platform.categories.length,
-      featuredVendors: platform.vendors,
-      featuredServices: platform.services,
-    },
-  });
+router.get('/overview', async (req, res, next) => {
+  try {
+    const [[userCount]] = await pool.query('SELECT COUNT(*) AS total FROM users WHERE status = \'active\'');
+    const summary = calculateDashboardSummary({
+      users: Number(userCount.total),
+      vendors: platform.vendors.length,
+      events: platform.events.length,
+      bookings: platform.bookings,
+    });
+    res.json({ success: true, data: { ...summary, categories: platform.categories.length, featuredVendors: platform.vendors, featuredServices: platform.services } });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get('/categories', (req, res) => {
@@ -273,28 +283,88 @@ router.post('/service-quote-requests', (req, res) => {
   res.status(201).json({ success: true, data: record, message: 'Quote request submitted successfully.' });
 });
 
-router.get('/events', (req, res) => {
-  const result = listPublicEvents(platform.events, req.query);
-  res.json({
-    success: true,
-    data: result.events,
-    pagination: {
-      page: result.page,
-      limit: result.limit,
-      total: result.total,
-      totalPages: result.totalPages,
-      sort: result.sort,
-    },
-  });
+const upcomingEventsQuery = `SELECT id, title, event_type, city,
+  DATE_FORMAT(start_date, '%Y-%m-%dT%H:%i:%s') AS start_date,
+  DATE_FORMAT(end_date, '%Y-%m-%dT%H:%i:%s') AS end_date,
+  budget, status FROM events
+  WHERE status = 'active' AND start_date >= UTC_TIMESTAMP()`;
+
+router.get('/events/featured', async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(`${upcomingEventsQuery} ORDER BY start_date ASC, id ASC LIMIT 1`);
+    res.json({ success: true, data: rows[0] ? mapDatabaseEvent(rows[0]) : null });
+  } catch (error) {
+    next(error);
+  }
 });
 
-router.get('/events/:id', (req, res) => {
-  const event = getPublicEventById(platform.events, req.params.id);
-  if (!event) {
-    return res.status(404).json({ success: false, message: 'Event not found.' });
+router.get('/events/categories', async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT DISTINCT event_type FROM events
+       WHERE status = 'active' AND start_date >= UTC_TIMESTAMP() AND event_type <> ''
+       ORDER BY event_type ASC`
+    );
+    res.json({ success: true, data: rows.map((row) => row.event_type) });
+  } catch (error) {
+    next(error);
   }
+});
 
-  res.json({ success: true, data: event });
+router.get('/events', async (req, res, next) => {
+  try {
+    const [rows] = await pool.query(`${upcomingEventsQuery} ORDER BY start_date ASC, id ASC`);
+    const result = listPublicEvents(rows.map(mapDatabaseEvent), req.query);
+    res.json({
+      success: true,
+      data: result.events,
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        totalPages: result.totalPages,
+        sort: result.sort,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/events/:id', async (req, res, next) => {
+  const eventId = Number(req.params.id);
+  if (!Number.isSafeInteger(eventId) || eventId < 1) return res.status(400).json({ success: false, message: 'A valid event ID is required.' });
+  try {
+    const [rows] = await pool.execute(`${upcomingEventsQuery} AND id = ? LIMIT 1`, [eventId]);
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Event not found.' });
+    res.json({ success: true, data: mapDatabaseEvent(rows[0]) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/event-package-requests', rateLimit({ windowMs: 15 * 60 * 1000, limit: 5, standardHeaders: true, legacyHeaders: false }), async (req, res, next) => {
+  const parsed = parseEventPackageRequest(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, error: 'Provide a valid event, name, email, and package request.' });
+
+  try {
+    if (parsed.data.event_id !== null) {
+      const [events] = await pool.execute(
+        `SELECT id FROM events WHERE id = ? AND status = 'active' AND start_date >= UTC_TIMESTAMP() LIMIT 1`,
+        [parsed.data.event_id]
+      );
+      if (!events.length) return res.status(404).json({ success: false, error: 'This event is no longer available for package requests.' });
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO event_package_requests (event_id, event_title, event_type, requested_date, requested_location, requester_name, requester_email, service_category, guest_count, budget, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [parsed.data.event_id, parsed.data.event_title, parsed.data.event_type || null, parsed.data.requested_date ? `${parsed.data.requested_date.replace('T', ' ')}:00` : null, parsed.data.requested_location || null, parsed.data.requester_name, parsed.data.requester_email, parsed.data.service_category || null, parsed.data.guest_count ?? null, parsed.data.budget ?? null, parsed.data.notes || null]
+    );
+    res.status(201).json({ success: true, data: { id: result.insertId, event_id: parsed.data.event_id, status: 'new' } });
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get('/bookings', (req, res) => {
@@ -304,175 +374,89 @@ router.get('/bookings', (req, res) => {
   });
 });
 
-router.post('/register', (req, res) => {
-  const { name, email, password, role = 'customer' } = req.body || {};
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ success: false, message: 'Name, email, and password are required.' });
-  }
-
-  const normalizedEmail = normalizeEmail(email);
-  const normalizedRole = String(role || 'customer').trim().toLowerCase();
-
-  if (normalizedRole === 'admin') {
-    return res.status(403).json({ success: false, message: 'Administrator accounts must be created through an authorized administrative process.' });
-  }
-
-  if (!isStrongPassword(password)) {
-    return res.status(400).json({ success: false, message: 'Password must be at least 12 characters and include uppercase, lowercase, and a number.' });
-  }
-
-  const existingUser = platform.users.find((user) => normalizeEmail(user.email) === normalizedEmail);
-  if (existingUser) {
-    return res.status(409).json({ success: false, message: 'A user already exists with that email address.' });
-  }
-
-  const newUser = {
-    id: platform.users.length + 1,
-    name: String(name).trim(),
-    email: normalizedEmail,
-    password: String(password),
-    role: normalizedRole,
-    status: 'active',
-    emailVerified: false,
-  };
-
-  platform.users.push(newUser);
-  const token = createSecureToken();
-  const tokenHash = hashToken(token);
-  platform.verificationTokens.set(tokenHash, { email: normalizedEmail, expiresAt: Date.now() + 1000 * 60 * 60 * 24, used: false });
-
-  res.status(201).json({
-    success: true,
-    data: {
-      user: { id: newUser.id, name: newUser.name, email: newUser.email, role: newUser.role },
-      requiresVerification: true,
-      verificationToken: token,
-    },
-  });
+router.get('/me', requirePlatformUser, (req, res) => {
+  res.json({ success: true, data: { user: req.platformUser } });
 });
 
-router.post('/login', (req, res) => {
-  const { email, password } = req.body || {};
-  const normalizedEmail = normalizeEmail(email);
-  const user = platform.users.find((entry) => normalizeEmail(entry.email) === normalizedEmail && entry.password === String(password || ''));
+router.post('/register', registrationLimiter, async (req, res, next) => {
+  const parsed = parsePublicRegistration(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, error: 'Enter a valid name, email, password, and public account type.' });
 
-  if (!user) {
-    return res.status(401).json({ success: false, message: safeAuthError() });
+  try {
+    const roleName = parsed.data.role[0].toUpperCase() + parsed.data.role.slice(1);
+    const [roles] = await pool.execute('SELECT id FROM roles WHERE name = ? AND is_admin = FALSE AND is_active = TRUE LIMIT 1', [roleName]);
+    if (!roles.length) return res.status(503).json({ success: false, error: 'Registration is currently unavailable.' });
+
+    const passwordHash = await hashPassword(parsed.data.password);
+    const user = await inTransaction(async (connection) => {
+      const [created] = await connection.execute(
+        'INSERT INTO users (full_name, email, password_hash, status) VALUES (?, ?, ?, \'active\')',
+        [parsed.data.name, parsed.data.email, passwordHash]
+      );
+      await connection.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [created.insertId, roles[0].id]);
+      await writeAudit(connection, { actorId: created.insertId, action: 'auth.register', entityType: 'user', entityId: created.insertId, details: { role: parsed.data.role }, ip: req.ip });
+      return { id: created.insertId, name: parsed.data.name, email: parsed.data.email, role: parsed.data.role, status: 'active' };
+    });
+    res.status(201).json({ success: true, data: { user, redirectTo: buildRoleRedirect(user.role) } });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ success: false, error: 'We could not create an account with those details.' });
+    next(error);
   }
-
-  if (user.status !== 'active') {
-    return res.status(403).json({ success: false, message: 'This account is currently locked or unavailable.' });
-  }
-
-  if (user.emailVerified === false) {
-    return res.status(403).json({ success: false, message: 'Please verify your email address before continuing.' });
-  }
-
-  res.json({
-    success: true,
-    data: {
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        status: user.status,
-      },
-      redirectTo: buildRoleRedirect(user.role),
-    },
-  });
 });
 
-router.post('/forgot-password', (req, res) => {
-  const email = normalizeEmail(req.body?.email || '');
-  if (!email) {
-    return res.status(400).json({ success: false, message: 'Please provide a valid email address.' });
+router.post('/login', loginLimiter, async (req, res, next) => {
+  const parsed = parsePublicLogin(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, error: 'Email and password are required.' });
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.password_hash, LOWER(r.name) AS role
+       FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.email = ? AND u.status = 'active' AND r.is_admin = FALSE AND r.is_active = TRUE
+         AND LOWER(r.name) IN ('customer', 'organizer', 'vendor')
+       ORDER BY CASE LOWER(r.name) WHEN 'customer' THEN 1 WHEN 'organizer' THEN 2 WHEN 'vendor' THEN 3 ELSE 4 END
+       LIMIT 1`,
+      [parsed.data.email]
+    );
+    if (!rows.length || !(await verifyPassword(parsed.data.password, rows[0].password_hash))) {
+      return res.status(401).json({ success: false, error: safeAuthError() });
+    }
+
+    const session = await inTransaction(async (connection) => {
+      const createdSession = await createUserSession(connection, rows[0].id);
+      await writeAudit(connection, { actorId: rows[0].id, action: 'auth.login', entityType: 'session', ip: req.ip });
+      return createdSession;
+    });
+    res.cookie('platform_session', session.token, { ...platformCookieOptions(), expires: session.expiresAt });
+    const user = { id: rows[0].id, full_name: rows[0].full_name, name: rows[0].full_name, email: rows[0].email, phone: rows[0].phone, role: rows[0].role, status: rows[0].status };
+    res.json({ success: true, data: { user, redirectTo: buildRoleRedirect(user.role) } });
+  } catch (error) {
+    next(error);
   }
-
-  const user = platform.users.find((entry) => normalizeEmail(entry.email) === email);
-  if (!user) {
-    return res.json({ success: true, message: 'If an account matches the provided information, password reset instructions will be sent if recovery is available.' });
-  }
-
-  const token = createSecureToken();
-  const tokenHash = hashToken(token);
-  platform.resetTokens.set(tokenHash, { email, expiresAt: Date.now() + 1000 * 60 * 30, used: false });
-
-  res.json({ success: true, message: 'If an account matches the provided information, password reset instructions will be sent if recovery is available.', tokenPreview: token.slice(0, 8) });
 });
 
-router.post('/reset-password', (req, res) => {
-  const token = String(req.body?.token || '').trim();
-  const password = String(req.body?.password || '');
-
-  if (!token) {
-    return res.status(400).json({ success: false, message: 'A reset token is required.' });
+router.post('/logout', async (req, res, next) => {
+  const token = req.cookies?.platform_session;
+  try {
+    if (token) {
+      const [sessions] = await pool.execute('SELECT user_id FROM user_sessions WHERE token_hash = ?', [hashToken(token)]);
+      await pool.execute('DELETE FROM user_sessions WHERE token_hash = ?', [hashToken(token)]);
+      if (sessions.length) await writeAudit(pool, { actorId: sessions[0].user_id, action: 'auth.logout', entityType: 'session', ip: req.ip });
+    }
+    res.clearCookie('platform_session', { ...platformCookieOptions(), maxAge: undefined });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
   }
-
-  if (!isStrongPassword(password)) {
-    return res.status(400).json({ success: false, message: 'Password must be at least 12 characters and include uppercase, lowercase, and a number.' });
-  }
-
-  const tokenHash = hashToken(token);
-  const record = platform.resetTokens.get(tokenHash);
-  if (!record || record.used || record.expiresAt < Date.now()) {
-    return res.status(400).json({ success: false, message: 'The reset link is invalid or has expired. Please request a new password reset email.' });
-  }
-
-  const user = platform.users.find((entry) => normalizeEmail(entry.email) === normalizeEmail(record.email));
-  if (!user) {
-    return res.status(400).json({ success: false, message: 'The reset request is no longer valid.' });
-  }
-
-  user.password = password;
-  record.used = true;
-  platform.resetTokens.delete(tokenHash);
-
-  res.json({ success: true, message: 'Your password has been reset successfully. You can sign in with the new password.' });
 });
 
-router.post('/verify-email', (req, res) => {
-  const token = String(req.body?.token || '').trim();
-  if (!token) {
-    return res.status(400).json({ success: false, message: 'A verification token is required.' });
-  }
-
-  const tokenHash = hashToken(token);
-  const record = platform.verificationTokens.get(tokenHash);
-  if (!record || record.used || record.expiresAt < Date.now()) {
-    return res.status(400).json({ success: false, message: 'The verification link is invalid or has expired.' });
-  }
-
-  const user = platform.users.find((entry) => normalizeEmail(entry.email) === normalizeEmail(record.email));
-  if (!user) {
-    return res.status(400).json({ success: false, message: 'The verification record is no longer valid.' });
-  }
-
-  user.emailVerified = true;
-  record.used = true;
-  platform.verificationTokens.delete(tokenHash);
-
-  res.json({ success: true, message: 'Your email address has been verified successfully.' });
-});
-
-router.post('/resend-verification', (req, res) => {
-  const email = normalizeEmail(req.body?.email || '');
-  if (!email) {
-    return res.status(400).json({ success: false, message: 'Please provide a valid email address.' });
-  }
-
-  const user = platform.users.find((entry) => normalizeEmail(entry.email) === email);
-  if (!user || user.emailVerified) {
-    return res.json({ success: true, message: 'If a verification request is needed, a fresh email will be issued if the account is active.' });
-  }
-
-  const token = createSecureToken();
-  const tokenHash = hashToken(token);
-  platform.verificationTokens.set(tokenHash, { email, expiresAt: Date.now() + 1000 * 60 * 60 * 24, used: false });
-
-  res.json({ success: true, message: 'If a verification request is needed, a fresh email will be issued if the account is active.', tokenPreview: token.slice(0, 8) });
-});
+const recoveryUnavailable = (req, res) => res.status(503).json({ success: false, error: 'Password recovery is unavailable because no verified email delivery service is configured.' });
+router.post('/forgot-password', recoveryUnavailable);
+router.post('/reset-password', recoveryUnavailable);
+router.post('/verify-email', recoveryUnavailable);
+router.post('/resend-verification', recoveryUnavailable);
 
 router.post('/bookings', (req, res) => {
   const { serviceTitle, quotedAmount, currency = 'ETB', status = 'pending' } = req.body || {};
