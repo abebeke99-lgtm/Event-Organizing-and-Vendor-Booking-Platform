@@ -12,8 +12,11 @@
     "test": "npm --workspace backend test && npm --workspace frontend test",
     "migrate": "npm --workspace backend run migrate",
     "db:init": "npm --workspace backend run db:init",
-    "bootstrap:admin": "npm --workspace backend run bootstrap:admin"
+    "bootstrap:admin": "npm --workspace backend run bootstrap:admin",
+    "db:check": "npm --workspace backend run db:check"
+  },
+  "engines": {
+    "node": "20.x"
   },
   "devDependencies": {"concurrently": "^9.1.0"}
 }
-

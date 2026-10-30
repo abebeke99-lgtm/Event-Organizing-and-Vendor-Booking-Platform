@@ -12,7 +12,7 @@ import vendorRoutes from './routes/vendor.js';
 import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { requirePlatformRole } from './middleware/requirePlatformUser.js';
-import { formatDatabaseError, pool, verifyDatabaseConnection } from './db.js';
+import { formatDatabaseError, getDatabaseFailureCode, pool, verifyDatabaseConnection } from './db.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 
 export function createApp({ database = pool, expectedDatabase = process.env.DB_NAME } = {}) {
@@ -20,7 +20,7 @@ export function createApp({ database = pool, expectedDatabase = process.env.DB_N
   const localOrigins = process.env.NODE_ENV === 'production'
     ? []
     : ['http://127.0.0.1:5173', 'http://localhost:5173'];
-  const configuredOrigins = (process.env.CORS_ORIGIN || process.env.WEB_ORIGIN || '')
+  const configuredOrigins = (process.env.WEB_ORIGIN || '')
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
@@ -53,12 +53,19 @@ export function createApp({ database = pool, expectedDatabase = process.env.DB_N
     status: 'ok',
     service: 'event-organizing-and-vendor-booking-api',
   }));
+  app.get('/api/version', (req, res) => res.json({
+    commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'unknown',
+    environment: process.env.NODE_ENV || 'development',
+  }));
   app.get('/api/health', asyncHandler(async (req, res) => {
     try {
       await verifyDatabaseConnection(database, expectedDatabase);
     } catch (error) {
       console.error('Database health check failed:', formatDatabaseError(error));
-      return res.status(503).json({ status: 'unavailable' });
+      return res.status(503).json({
+        status: 'unavailable',
+        reasonCode: getDatabaseFailureCode(error),
+      });
     }
     res.json({ status: 'ok' });
   }));

@@ -21,8 +21,8 @@ const emailSchema = z.string().trim().email().max(190);
 function setPlatformCookie(res, token) {
   res.cookie('platform_session', token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+    secure: process.env.COOKIE_SECURE === 'true',
+    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
     maxAge: 8 * 60 * 60 * 1000,
     path: '/',
   });

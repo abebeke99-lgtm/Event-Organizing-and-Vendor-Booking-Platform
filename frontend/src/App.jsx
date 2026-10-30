@@ -28,7 +28,22 @@ const modules = {
 };
 const permissions = ['users:read','users:write','vendors:verify','events:write','bookings:moderate','payments:read','reviews:moderate','categories:write','reports:read','notifications:write'];
 const slugPath = (slug) => slug === 'overview' ? '/admin' : `/admin/${slug}`;
-const apiBaseUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const configuredApiUrl = (import.meta.env.VITE_API_URL || '').trim();
+let apiBaseUrl = '';
+if (configuredApiUrl) {
+  try {
+    const parsedApiUrl = new URL(configuredApiUrl);
+    if (parsedApiUrl.pathname !== '/' || parsedApiUrl.search || parsedApiUrl.hash
+      || (import.meta.env.PROD && parsedApiUrl.protocol !== 'https:')) {
+      throw new Error('Expected an HTTPS API origin without a path, query, or fragment.');
+    }
+    apiBaseUrl = parsedApiUrl.origin;
+  } catch (error) {
+    console.error(`Invalid VITE_API_URL: ${error.message}`);
+  }
+} else if (import.meta.env.PROD) {
+  console.error('VITE_API_URL is missing. Configure it in Netlify with the Render API origin, without /api or a trailing slash, then redeploy.');
+}
 
 function navigateBrowserPath(path) {
   window.history.pushState({}, '', path);
@@ -36,6 +51,9 @@ function navigateBrowserPath(path) {
 }
 
 async function api(path, options={}) {
+  if (!apiBaseUrl && import.meta.env.PROD) {
+    throw new Error('API is not configured. Set VITE_API_URL in the deployment environment and redeploy.');
+  }
   const response = await fetch(`${apiBaseUrl}/api${path}`, { credentials:'include', ...options, headers:{ ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) } });
   if (response.status === 204) return null;
   const result = await response.json().catch(() => ({}));

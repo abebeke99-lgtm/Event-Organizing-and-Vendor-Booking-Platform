@@ -2,40 +2,31 @@ services:
   - type: web
     name: event-organizing-and-vendor-booking
     runtime: node
+    branch: main
+    rootDir: .
     buildCommand: npm ci
     startCommand: npm run start
     healthCheckPath: /api/health
     envVars:
-      - key: NODE_VERSION
-        value: 20
       - key: NODE_ENV
-        value: production
+        sync: false
       - key: WEB_ORIGIN
-        value: https://infobekele.netlify.app
+        sync: false
       - key: DB_HOST
-        value: mysql-2114e6b-abebeke99-9391.g.aivencloud.com
+        sync: false
       - key: DB_PORT
-        value: 11713
+        sync: false
       - key: DB_NAME
-        value: defaultdb
+        sync: false
       - key: DB_USER
-        value: avnadmin
+        sync: false
       - key: DB_PASSWORD
         sync: false
       - key: DB_SSL
-        value: true
+        sync: false
       - key: DB_SSL_CA
         sync: false
       - key: COOKIE_SECURE
-        value: true
+        sync: false
       - key: COOKIE_SAME_SITE
-        value: none
-
-  - type: web
-    name: event-platform-web
-    runtime: static
-    buildCommand: npm ci && npm run build
-    staticPublishPath: frontend/dist
-    envVars:
-      - key: VITE_API_URL
-        value: https://event-organizing-and-vendor-booking.onrender.com
+        sync: false

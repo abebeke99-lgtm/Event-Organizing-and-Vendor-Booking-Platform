@@ -7,9 +7,13 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const router = Router();
 const cookieOptions = () => {
-  const production = process.env.NODE_ENV === 'production';
-  const sameSite = production ? 'none' : (process.env.COOKIE_SAME_SITE === 'none' ? 'none' : 'strict');
-  return { httpOnly: true, secure: production || process.env.COOKIE_SECURE === 'true', sameSite, path: '/', maxAge: 8 * 60 * 60 * 1000 };
+  return {
+    httpOnly: true,
+    secure: process.env.COOKIE_SECURE === 'true',
+    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
+    path: '/',
+    maxAge: 8 * 60 * 60 * 1000,
+  };
 };
 
 router.post('/login', async (req, res, next) => {
