@@ -2,13 +2,18 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { once } from 'node:events';
 import { rootCertificates } from 'node:tls';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApp } from '../src/app.js';
 import {
   createDatabaseConfig,
   formatDatabaseError,
+  getDatabaseFailureCode,
   getDatabaseConfigurationErrors,
   verifyDatabaseConnection,
 } from '../src/db.js';
+import { getStartupConfigurationErrors } from '../src/lib/startupConfig.js';
 
 test('database TLS verifies certificates and normalizes escaped CA newlines', () => {
   const certificateAuthority = rootCertificates[0];
@@ -20,6 +25,23 @@ test('database TLS verifies certificates and normalizes escaped CA newlines', ()
     DB_PASSWORD: 'test-only',
     DB_SSL: 'true',
     DB_SSL_CA: certificateAuthority.replace(/\n/g, '\\n'),
+  });
+
+  test('database TLS loads and verifies CA certificates from a file path', () => {
+    const certificateAuthority = rootCertificates[0];
+    const directory = mkdtempSync(join(tmpdir(), 'event-platform-ca-'));
+    const certificatePath = join(directory, 'ca.pem');
+    try {
+      writeFileSync(certificatePath, certificateAuthority);
+      const config = createDatabaseConfig({
+        DB_SSL: 'true',
+        DB_SSL_CA: certificatePath,
+      });
+      assert.equal(config.ssl.ca, certificateAuthority.trim());
+      assert.equal(config.ssl.rejectUnauthorized, true);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   assert.equal(config.host, 'mysql.example.test');
@@ -122,6 +144,48 @@ test('database diagnostics retain error details while redacting passwords and co
   assert.doesNotMatch(diagnostic, /avnadmin:/);
 });
 
+test('database failure diagnostics map to safe reason codes', () => {
+  assert.equal(getDatabaseFailureCode({ code: 'ER_ACCESS_DENIED_ERROR' }), 'DB_AUTH_FAILED');
+  assert.equal(getDatabaseFailureCode({ code: 'CERT_HAS_EXPIRED' }), 'DB_TLS_FAILED');
+  assert.equal(getDatabaseFailureCode({ code: 'ECONNREFUSED' }), 'DB_CONNECT_FAILED');
+  assert.equal(getDatabaseFailureCode(new Error('Connected database does not match DB_NAME.')), 'DB_NAME_MISMATCH');
+});
+
+test('startup configuration validation reports missing environment variable names only', () => {
+  assert.deepEqual(getStartupConfigurationErrors({}), [
+    'DB_HOST',
+    'DB_PORT',
+    'DB_NAME',
+    'DB_USER',
+    'DB_PASSWORD',
+    'WEB_ORIGIN',
+    'COOKIE_SECURE',
+    'COOKIE_SAME_SITE',
+    'NODE_ENV',
+  ]);
+});
+
+test('production startup requires HTTPS origin and cross-site secure cookies', () => {
+  const configuration = {
+    DB_HOST: 'db.example.test',
+    DB_PORT: '3306',
+    DB_NAME: 'events',
+    DB_USER: 'events',
+    DB_PASSWORD: 'test-only',
+    DB_SSL: 'true',
+    DB_SSL_CA: rootCertificates[0],
+    WEB_ORIGIN: 'http://example.test',
+    COOKIE_SECURE: 'false',
+    COOKIE_SAME_SITE: 'lax',
+    NODE_ENV: 'production',
+  };
+  assert.deepEqual(getStartupConfigurationErrors(configuration), [
+    'WEB_ORIGIN',
+    'COOKIE_SECURE',
+    'COOKIE_SAME_SITE',
+  ]);
+});
+
 let healthQueryCount = 0;
 const app = createApp({
   expectedDatabase: 'defaultdb',
@@ -162,6 +226,26 @@ test('root returns a lightweight service status without a database query', async
     service: 'event-organizing-and-vendor-booking-api',
   });
   assert.equal(healthQueryCount, 0);
+});
+
+test('version endpoint reports the deployed commit and runtime environment', async () => {
+  const previousCommit = process.env.RENDER_GIT_COMMIT;
+  const previousEnvironment = process.env.NODE_ENV;
+  process.env.RENDER_GIT_COMMIT = 'commit-test-sha';
+  process.env.NODE_ENV = 'production';
+  try {
+    const response = await fetch(`${baseUrl}/api/version`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      commit: 'commit-test-sha',
+      environment: 'production',
+    });
+  } finally {
+    if (previousCommit === undefined) delete process.env.RENDER_GIT_COMMIT;
+    else process.env.RENDER_GIT_COMMIT = previousCommit;
+    if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousEnvironment;
+  }
 });
 
 test('configured Netlify origin is allowed to make credentialed API requests', async () => {
@@ -261,7 +345,10 @@ test('database health route reports unavailable when DB_NAME does not match the 
   try {
     const response = await fetch(`http://127.0.0.1:${mismatchedServer.address().port}/api/health`);
     assert.equal(response.status, 503);
-    assert.deepEqual(await response.json(), { status: 'unavailable' });
+    assert.deepEqual(await response.json(), {
+      status: 'unavailable',
+      reasonCode: 'DB_NAME_MISMATCH',
+    });
   } finally {
     await new Promise((resolve, reject) => {
       mismatchedServer.close((error) => error ? reject(error) : resolve());
@@ -297,7 +384,10 @@ test('database health route reports unavailable when the database query fails', 
     }
 
     assert.equal(response.status, 503);
-    assert.deepEqual(body, { status: 'unavailable' });
+    assert.deepEqual(body, {
+      status: 'unavailable',
+      reasonCode: 'DB_CONNECT_FAILED',
+    });
     assert.doesNotMatch(JSON.stringify(body), /health-test-secret/);
     assert.doesNotMatch(loggedErrors.join(' '), /health-test-secret/);
     assert.match(loggedErrors.join(' '), /ECONNREFUSED/);

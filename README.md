@@ -68,12 +68,33 @@ The booking logic is enforced in the backend with explicit transition checks so 
 - Admin and platform authentication, public marketplace listings, and customer/vendor dashboard reads are backed by MySQL. Event creation now stores organizer-owned draft events transactionally with an audit record. Some dashboard controls and payment-provider workflows remain incomplete; payment records do not represent a real payment integration.
 - Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true` and a valid PEM CA certificate in `DB_SSL_CA`; certificate verification remains enabled.
 
-## Deployment
+## Deployment checklist
 
-- Render API: build with `npm ci` and start with `npm run start` from the repository root. Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_CA`, `WEB_ORIGIN`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Enter the password and Aiven CA PEM only in Render's secure environment settings. `npm --workspace backend run db:check` performs read-only connection, `SELECT 1`, and selected-database checks; it does not migrate or modify data.
-- Netlify frontend: set `VITE_API_URL` to the verified public Render API origin, without `/api` or a trailing slash, then redeploy. The frontend appends `/api` to API requests and includes cookies.
-- After deployment, verify `GET /` returns `200 {"status":"ok"}` and `GET /api/health` returns `200 {"status":"ok"}`. Database unavailability must produce a `503` from `/api/health`.
-- Do not run database initialization or migrations as part of deployment without first reviewing the SQL against the existing schema and taking a backup.
+### Render backend
+
+- Blueprint: repository `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
+- Set these environment variable names in Render: `NODE_ENV`, `WEB_ORIGIN`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL`, `DB_SSL_CA`, `COOKIE_SECURE`, and `COOKIE_SAME_SITE`. Production requires TLS and a verified CA, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Keep credentials and CA material only in secure dashboard settings.
+- `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and checks `SELECT DATABASE()` against `DB_NAME`; readiness failures return a safe reason code. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
+- Run `npm run db:check` only in an environment configured with the real DB credentials and CA. It performs read-only checks and no schema/data changes.
+- Confirm deploy version at `/api/version`. To rebuild without cached artifacts, use **Clear build cache & deploy** in Render.
+
+### Netlify frontend
+
+- Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
+- Set `VITE_API_URL` in Netlify to the Render API origin only (no `/api` suffix or trailing slash). It is a public build-time setting, not a secret. The client appends `/api` and sends credentialed requests.
+- The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
+- After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.
+
+Run `.\scripts\check-deploy.ps1` from PowerShell to print live endpoint status codes and compare the Render commit against local `git rev-parse HEAD`.
+
+| Symptom | Likely cause | Dashboard action |
+|---|---|---|
+| Render `/` returns 404 | Wrong Render service, root directory, branch, or stale deployment | Confirm repository, `main`, root directory, `npm run start`; redeploy latest commit |
+| Render `/api/health` returns 503 | Missing/invalid DB settings, denied access, TLS/CA failure, or DB name mismatch | Check reason code and Render logs; correct the named DB settings and Aiven grants/CA |
+| Netlify SPA route returns 404 | Fallback file absent from deployed publish directory or wrong publish path | Confirm `frontend/dist`, verify `_redirects` there, then clear cache and deploy |
+| Netlify bundle is stale | Wrong branch/repository, failed build, or old deploy still published | Verify deployed commit/build logs and run **Clear cache and deploy site** |
+
+Do not initialize or migrate the production database as part of deployment without reviewing the SQL and verifying a backup.
 
 ## 6. Business Rules and Security
 
@@ -137,21 +158,7 @@ For a production deployment, use:
 - a real payment processor and notification service
 - migration-based database deployment and audit retention policy
 
-### Current Netlify and Render settings
-
-- Netlify base directory: repository root
-- Netlify build command: `npm ci && npm run build`
-- Netlify publish directory: `frontend/dist`
-- SPA fallback: `frontend/public/_redirects` and `netlify.toml` rewrite routes to `/index.html`
-- Set Netlify `VITE_API_URL` to the verified public Render API origin. The API allows credentialed requests only from the configured frontend origin in production.
-- Render root directory: repository root
-- Render build command: `npm ci`
-- Render start command: `npm run start`
-- Render health check: `/api/health`
-
-Set these backend environment variables in Render: `NODE_ENV=production`, `WEB_ORIGIN=https://infobekele.netlify.app`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_CA`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; the server binds to `0.0.0.0`. Do not put database credentials in frontend variables.
-
-The live API health check currently returns HTTP 503, so its database connection is unavailable. Verify the managed MySQL host, database name, user grants, network access, and TLS settings in Render before login or CRUD can work. Do not run `npm run migrate` against production until each SQL file has been reviewed and the existing database has a verified backup; the current migrations include data upserts.
+Deployment settings and troubleshooting are maintained in the Deployment checklist above.
 
 ## 13. Future Enhancements
 

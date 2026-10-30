@@ -1,23 +1,34 @@
 import 'dotenv/config';
-const missingVariables = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']
-  .filter((name) => !process.env[name]?.trim());
-const certificateAuthority = process.env.DB_SSL_CA?.replace(/\\n/g, '\n').trim();
+import { getDatabaseConfigurationErrors } from '../src/lib/databaseConfig.js';
 
-if (process.env.DB_SSL !== 'true') missingVariables.push('DB_SSL=true');
-if (!certificateAuthority || !/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/.test(certificateAuthority)) {
-  missingVariables.push('DB_SSL_CA (valid PEM certificate required)');
-}
+const missingVariables = getDatabaseConfigurationErrors(process.env, { requireTls: true })
+  .map((error) => error.split(/[ (]/)[0].split('=')[0]);
 
 if (missingVariables.length) {
-  console.error(`Database check not run; configure: ${missingVariables.join(', ')}`);
+  console.error(`FAIL Configuration: set valid values for ${[...new Set(missingVariables)].join(', ')}`);
   process.exitCode = 1;
 } else {
-  const { formatDatabaseError, pool, verifyDatabaseConnection } = await import('../src/db.js');
+  const { formatDatabaseError, getDatabaseFailureCode, pool } = await import('../src/db.js');
+  await checkDatabase({ formatDatabaseError, getDatabaseFailureCode, pool });
+}
+
+async function checkDatabase({ formatDatabaseError, getDatabaseFailureCode, pool }) {
+  let step = 'TLS-verified connection and SELECT 1';
   try {
-    await verifyDatabaseConnection(pool, process.env.DB_NAME);
-    console.log('Database TLS connection, SELECT 1, and selected database verified.');
+    const [result] = await pool.query('SELECT 1 AS result');
+    if (Number(result[0]?.result) !== 1) throw new Error('SELECT 1 returned an unexpected result.');
+    console.log('PASS TLS-verified MySQL connection');
+    console.log('PASS SELECT 1');
+    step = 'SELECT DATABASE()';
+    const [rows] = await pool.query('SELECT DATABASE() AS database_name');
+    if (rows[0]?.database_name !== process.env.DB_NAME) {
+      const error = new Error('Connected database does not match DB_NAME.');
+      error.code = 'DB_NAME_MISMATCH';
+      throw error;
+    }
+    console.log('PASS SELECT DATABASE() matches DB_NAME');
   } catch (error) {
-    console.error('Database check failed:', formatDatabaseError(error));
+    console.error(`FAIL ${step} [${getDatabaseFailureCode(error)}]: ${formatDatabaseError(error)}`);
     process.exitCode = 1;
   } finally {
     await pool.end();

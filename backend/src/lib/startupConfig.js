@@ -29,17 +29,22 @@ export function getStartupConfigurationErrors(environment = process.env) {
   if (environment.NODE_ENV && !['development', 'test', 'production'].includes(environment.NODE_ENV)) {
     errors.add('NODE_ENV');
   }
-  if (environment.NODE_ENV === 'production') {
-    if (environment.COOKIE_SECURE !== 'true') errors.add('COOKIE_SECURE');
-    if (environment.COOKIE_SAME_SITE !== 'none') errors.add('COOKIE_SAME_SITE');
-    const origins = environment.WEB_ORIGIN?.split(',').map((origin) => origin.trim()) || [];
-    if (!origins.length || origins.some((origin) => {
+  if (environment.WEB_ORIGIN) {
+    const origins = environment.WEB_ORIGIN.split(',').map((origin) => origin.trim());
+    if (origins.some((origin) => {
       try {
-        return new URL(origin).protocol !== 'https:';
+        const parsed = new URL(origin);
+        return parsed.origin !== origin
+          || (environment.NODE_ENV === 'production' && parsed.protocol !== 'https:');
       } catch {
         return true;
       }
     })) errors.add('WEB_ORIGIN');
+  }
+  if (environment.NODE_ENV === 'production') {
+    if (environment.COOKIE_SECURE !== 'true') errors.add('COOKIE_SECURE');
+    if (environment.COOKIE_SAME_SITE !== 'none') errors.add('COOKIE_SAME_SITE');
+    if (!environment.WEB_ORIGIN?.trim()) errors.add('WEB_ORIGIN');
   }
 
   return [...errors];

@@ -6,7 +6,7 @@ const HOST = '0.0.0.0';
 const configurationErrors = getStartupConfigurationErrors();
 
 if (configurationErrors.length) {
-  console.error('Database configuration is incomplete or invalid:', configurationErrors.join(', '));
+  console.error('Required configuration is incomplete or invalid:', configurationErrors.join(', '));
   process.exitCode = 1;
 } else {
   const [{ formatDatabaseError, pool, verifyDatabaseConnection }, { createApp }] = await Promise.all([
