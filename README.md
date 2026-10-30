@@ -60,11 +60,20 @@ The booking logic is enforced in the backend with explicit transition checks so 
 - Node.js + Express
 - REST endpoints for auth, marketplace, event, vendor, booking, and admin routes
 - Role-aware access patterns and validation
+- `GET /` reports API liveness; `GET /api/health` checks database readiness.
 
 ### Data layer
 
 - MySQL is the configured database, accessed through `mysql2`.
 - The admin API uses database-backed records. Public marketplace, customer dashboard, vendor dashboard, and platform authentication routes still contain in-memory demo data and are not production-ready.
+- Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true` and a valid PEM CA certificate in `DB_SSL_CA`; certificate verification remains enabled.
+
+## Deployment
+
+- Render API: build with `npm ci` and start with `npm run start` from the repository root. Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_CA`, `WEB_ORIGIN`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Enter the password and Aiven CA PEM only in Render's secure environment settings. `npm --workspace backend run db:check` performs a read-only `SELECT 1`; it does not migrate or modify data.
+- Netlify frontend: set `VITE_API_URL` to the verified public Render API origin, without `/api` or a trailing slash, then redeploy. The frontend appends `/api` to API requests and includes cookies.
+- After deployment, verify `GET /` returns `200 {"status":"ok"}` and `GET /api/health` returns `200 {"status":"ok"}`. Database unavailability must produce a `503` from `/api/health`.
+- Do not run database initialization or migrations as part of deployment without first reviewing the SQL against the existing schema and taking a backup.
 
 ## 6. Business Rules and Security
 
@@ -133,13 +142,13 @@ For a production deployment, use:
 - Netlify base directory: repository root
 - Netlify build command: `npm ci && npm run build`
 - Netlify publish directory: `frontend/dist`
-- Set Netlify `VITE_API_BASE_URL` to an empty value to use the same-origin `/api/*` proxy. If set to an API origin, browser cookie restrictions can affect cross-site sessions.
+- Set Netlify `VITE_API_URL` to the verified public Render API origin. The API allows credentialed requests only from the configured frontend origin in production.
 - Render root directory: repository root
 - Render build command: `npm ci`
 - Render start command: `npm run start`
 - Render health check: `/api/health`
 
-Set these backend environment variables in Render: `WEB_ORIGIN=https://infobekele.netlify.app`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_REJECT_UNAUTHORIZED=true`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; the server binds to `0.0.0.0`. Do not put database credentials in frontend variables.
+Set these backend environment variables in Render: `NODE_ENV=production`, `WEB_ORIGIN=https://infobekele.netlify.app`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_CA`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; the server binds to `0.0.0.0`. Do not put database credentials in frontend variables.
 
 The live API health check currently returns HTTP 503, so its database connection is unavailable. Verify the managed MySQL host, database name, user grants, network access, and TLS settings in Render before login or CRUD can work. Do not run `npm run migrate` against production until each SQL file has been reviewed and the existing database has a verified backup; the current migrations include data upserts.
 
