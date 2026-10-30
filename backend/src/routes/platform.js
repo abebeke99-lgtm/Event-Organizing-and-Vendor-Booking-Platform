@@ -8,6 +8,7 @@ import { calculateDashboardSummary, createBookingSnapshot } from '../lib/booking
 import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } from '../lib/eventCatalog.js';
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
 import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
+import { createEventSchema, toMysqlDateTime } from '../lib/eventInput.js';
 import {
   ensureVendorProfile as ensureVendorProfileRecord,
   loadPublicMarketplace,
@@ -201,6 +202,62 @@ router.get('/events/mine', requirePlatformUser, async (req, res) => {
       guestCount: row.guest_count === null ? null : Number(row.guest_count),
       notes: row.notes || '',
     })),
+  });
+});
+
+router.post('/events', requirePlatformUser, async (req, res) => {
+  if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+    return res.status(403).json({ error: 'Only customers and organizers can create events.' });
+  }
+
+  const parsed = createEventSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid event details.' });
+  }
+
+  const event = parsed.data;
+  const eventId = await inTransaction(async (connection) => {
+    const [result] = await connection.execute(
+      `INSERT INTO events (
+         organizer_id, title, event_type, city, start_date, end_date, budget, guest_count, notes, status
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')`,
+      [
+        req.platformUser.id,
+        event.title,
+        event.type,
+        event.city || null,
+        toMysqlDateTime(event.startDate),
+        toMysqlDateTime(event.endDate),
+        event.budget,
+        event.guestCount,
+        event.notes || null,
+      ]
+    );
+    await writeAudit(connection, {
+      actorId: req.platformUser.id,
+      action: 'event.created',
+      entityType: 'event',
+      entityId: result.insertId,
+      details: { title: event.title, status: 'draft' },
+      ip: req.ip,
+    });
+    return result.insertId;
+  });
+
+  return res.status(201).json({
+    data: {
+      id: Number(eventId),
+      title: event.title,
+      type: event.type,
+      category: event.type.toLowerCase(),
+      location: event.city || null,
+      startDate: toMysqlDateTime(event.startDate),
+      endDate: toMysqlDateTime(event.endDate),
+      budget: event.budget,
+      guestCount: event.guestCount,
+      notes: event.notes,
+      status: 'draft',
+    },
   });
 });
 

@@ -1525,6 +1525,47 @@ function CustomerDashboard({ user, onLogout }) {
   const [data, setData] = useState({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [eventFormOpen, setEventFormOpen] = useState(false);
+  const [eventFormError, setEventFormError] = useState('');
+  const [eventSaving, setEventSaving] = useState(false);
+  const [eventForm, setEventForm] = useState({
+    title: '',
+    type: '',
+    city: '',
+    startDate: '',
+    endDate: '',
+    budget: '',
+    guestCount: '',
+    notes: '',
+  });
+
+  async function createEvent(event) {
+    event.preventDefault();
+    setEventSaving(true);
+    setEventFormError('');
+    try {
+      const response = await api('/platform/events', {
+        method: 'POST',
+        body: JSON.stringify(eventForm),
+      });
+      setData((current) => ({ ...current, events: [response.data, ...(current.events || [])] }));
+      setEventFormOpen(false);
+      setEventForm({
+        title: '',
+        type: '',
+        city: '',
+        startDate: '',
+        endDate: '',
+        budget: '',
+        guestCount: '',
+        notes: '',
+      });
+    } catch (issue) {
+      setEventFormError(issue.message);
+    } finally {
+      setEventSaving(false);
+    }
+  }
 
   useEffect(() => {
     async function load() {
@@ -1562,7 +1603,7 @@ function CustomerDashboard({ user, onLogout }) {
       case 'history':
         return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BOOKING HISTORY</p><h2>Completed and closed reservations</h2><p className="muted">Review past bookings, payments, refunds, and any prior cancellation history.</p></div></div><div className="table-wrap"><table><thead><tr><th>Reference</th><th>Service</th><th>Status</th><th>Amount</th></tr></thead><tbody>{(data.history || []).map((booking) => <tr key={booking.id}><td>{booking.reference}</td><td>{booking.serviceTitle}</td><td>{booking.status}</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount || 0)}</td></tr>)}</tbody></table></div></section>;
       case 'events':
-        return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">MY EVENTS</p><h2>Event coordination</h2><p className="muted">Manage each event, vendor link, guest count, and plan budget without creating an automatic payment.</p></div><button className="button">+ New event</button></div><div className="table-wrap"><table><thead><tr><th>Event</th><th>Type</th><th>Date</th><th>Guests</th><th>Budget</th></tr></thead><tbody>{(data.events || []).map((event) => <tr key={event.id}><td>{event.title}</td><td>{event.type}</td><td>{new Date(event.date).toLocaleDateString()}</td><td>{event.guestCount}</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(event.budget || 0)}</td></tr>)}</tbody></table></div></section>;
+        return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">MY EVENTS</p><h2>Event coordination</h2><p className="muted">Manage each event, vendor link, guest count, and plan budget without creating an automatic payment.</p></div><button className="button" onClick={() => { setEventFormError(''); setEventFormOpen(true); }}>+ New event</button></div>{eventFormOpen && <form className="panel" style={{ padding: '20px', marginBottom: '20px' }} onSubmit={createEvent}><h3>Create event</h3>{eventFormError && <div className="alert error">{eventFormError}</div>}<div className="form-grid"><label className="field"><span>Event name</span><input required minLength="2" maxLength="180" value={eventForm.title} onChange={(e) => setEventForm({ ...eventForm, title: e.target.value })}/></label><label className="field"><span>Event type</span><input required minLength="2" maxLength="80" value={eventForm.type} onChange={(e) => setEventForm({ ...eventForm, type: e.target.value })}/></label><label className="field"><span>City</span><input maxLength="120" value={eventForm.city} onChange={(e) => setEventForm({ ...eventForm, city: e.target.value })}/></label><label className="field"><span>Start date</span><input type="datetime-local" required value={eventForm.startDate} onChange={(e) => setEventForm({ ...eventForm, startDate: e.target.value })}/></label><label className="field"><span>End date (optional)</span><input type="datetime-local" min={eventForm.startDate || undefined} value={eventForm.endDate} onChange={(e) => setEventForm({ ...eventForm, endDate: e.target.value })}/></label><label className="field"><span>Budget (optional)</span><input type="number" min="0" max="100000000" step="0.01" value={eventForm.budget} onChange={(e) => setEventForm({ ...eventForm, budget: e.target.value })}/></label><label className="field"><span>Guest count (optional)</span><input type="number" min="1" max="100000" step="1" value={eventForm.guestCount} onChange={(e) => setEventForm({ ...eventForm, guestCount: e.target.value })}/></label><label className="field"><span>Notes</span><textarea rows="3" maxLength="2000" value={eventForm.notes} onChange={(e) => setEventForm({ ...eventForm, notes: e.target.value })}/></label></div><div className="header-actions"><button className="button secondary" type="button" disabled={eventSaving} onClick={() => setEventFormOpen(false)}>Cancel</button><button className="button" disabled={eventSaving}>{eventSaving ? 'Creating…' : 'Save as draft'}</button></div></form>}<div className="table-wrap"><table><thead><tr><th>Event</th><th>Type</th><th>Date</th><th>Guests</th><th>Budget</th></tr></thead><tbody>{(data.events || []).map((event) => <tr key={event.id}><td>{event.title}</td><td>{event.type}</td><td>{new Date(event.startDate || event.date).toLocaleDateString()}</td><td>{event.guestCount ?? '—'}</td><td>{event.budget === null || event.budget === undefined ? '—' : new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(event.budget)}</td></tr>)}</tbody></table></div></section>;
       case 'favorites':
         return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">SAVED VENDORS</p><h2>Favorite providers</h2><p className="muted">Revisit shortlisted vendors and compare services before booking.</p></div></div><div className="list-stack">{(data.favorites || []).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.city}</small></div><span className="pill active">Saved</span></div>)}</div></section>;
       case 'quotations':

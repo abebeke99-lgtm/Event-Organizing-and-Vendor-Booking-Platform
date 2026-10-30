@@ -65,7 +65,7 @@ The booking logic is enforced in the backend with explicit transition checks so 
 ### Data layer
 
 - MySQL is the configured database, accessed through `mysql2`.
-- The admin API uses database-backed records. Public marketplace, customer dashboard, vendor dashboard, and platform authentication routes still contain in-memory demo data and are not production-ready.
+- Admin and platform authentication, public marketplace listings, and customer/vendor dashboard reads are backed by MySQL. Event creation now stores organizer-owned draft events transactionally with an audit record. Some dashboard controls and payment-provider workflows remain incomplete; payment records do not represent a real payment integration.
 - Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true` and a valid PEM CA certificate in `DB_SSL_CA`; certificate verification remains enabled.
 
 ## Deployment

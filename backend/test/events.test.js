@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { listPublicEvents, getPublicEventById, getPublicCategories, mapDatabaseEvent } from '../src/lib/eventCatalog.js';
+import { createEventSchema, toMysqlDateTime } from '../src/lib/eventInput.js';
 
 const sampleEvents = [
   {
@@ -150,4 +151,43 @@ test('public categories are normalized and filtered cleanly', () => {
 
   const result = getPublicCategories(categories);
   assert.deepEqual(result.map((category) => category.name), ['Music', 'Wedding']);
+});
+
+test('event creation accepts optional fields and normalizes blank optional values', () => {
+  const result = createEventSchema.safeParse({
+    title: 'Family celebration',
+    type: 'Private event',
+    startDate: '2027-06-14T16:30',
+    endDate: '',
+    budget: '',
+    guestCount: '',
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.data.endDate, null);
+  assert.equal(result.data.budget, null);
+  assert.equal(result.data.guestCount, null);
+});
+
+test('event creation rejects invalid dates, reversed date ranges, and invalid amounts', () => {
+  const base = {
+    title: 'Family celebration',
+    type: 'Private event',
+    startDate: '2027-06-14T16:30',
+  };
+
+  assert.equal(createEventSchema.safeParse({ ...base, startDate: 'not-a-date' }).success, false);
+  assert.equal(createEventSchema.safeParse({ ...base, startDate: '2027-02-31T16:30' }).success, false);
+  assert.equal(createEventSchema.safeParse({ ...base, startDate: '2027-06-14T16:30Z' }).success, false);
+  assert.equal(createEventSchema.safeParse({
+    ...base,
+    endDate: '2027-06-14T15:30',
+  }).success, false);
+  assert.equal(createEventSchema.safeParse({ ...base, budget: -1 }).success, false);
+  assert.equal(createEventSchema.safeParse({ ...base, guestCount: 0 }).success, false);
+});
+
+test('event date values are converted to MySQL DATETIME without timezone shifts', () => {
+  assert.equal(toMysqlDateTime('2027-06-14T16:30'), '2027-06-14 16:30:00');
+  assert.equal(toMysqlDateTime(null), null);
 });
