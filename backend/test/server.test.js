@@ -406,6 +406,13 @@ test('mounted protected API routes reach authorization instead of the 404 handle
   assert.deepEqual(await response.json(), { error: 'Authentication required.' });
 });
 
+test('administrator dashboard API rejects unauthenticated requests', async () => {
+  const response = await fetch(`${baseUrl}/api/admin/dashboard/overview?startDate=2026-10-01&endDate=2026-10-30`);
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+});
+
 test('unknown paths still return the JSON 404 response', async () => {
   const response = await fetch(`${baseUrl}/not-a-route`);
 

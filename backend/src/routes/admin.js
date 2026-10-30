@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { pool, inTransaction } from '../db.js';
 import { getModuleLockState, getSystemLockState, ROLE_PERMISSION_MATRIX } from '../lib/rbac.js';
 import { writeAudit } from '../lib/security.js';
+import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
 
 const router = Router();
 const idSchema = z.coerce.number().int().positive();
@@ -303,6 +304,18 @@ router.get('/reports/summary', async (req, res, next) => {
     const [[payments]] = await pool.query(`SELECT COUNT(*) AS total_payments, SUM(status = 'paid') AS confirmed_payments, SUM(status = 'refund_pending') AS refunds_pending FROM payments`);
     const [[complaints]] = await pool.query(`SELECT COUNT(*) AS open_complaints FROM complaints WHERE status IN ('open', 'investigating')`);
     res.json({ data: { users, vendors, events, bookings, payments, complaints } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/dashboard/overview', async (req, res, next) => {
+  const parsed = dashboardDateRangeSchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: 'Provide a valid date range no longer than 366 days.' });
+
+  try {
+    const data = await loadAdminDashboardOverview(pool, parsed.data);
+    res.json({ data });
   } catch (error) {
     next(error);
   }

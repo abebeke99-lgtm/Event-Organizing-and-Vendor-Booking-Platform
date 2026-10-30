@@ -3,13 +3,21 @@ import { Activity, BadgeCheck, Bell, BriefcaseBusiness, CalendarDays, ChartNoAxe
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate } from './eventUtils.js';
 import { setLanguage, translate, translateText, useLanguage } from './language.js';
+import { getDashboardDateRange } from './dashboardUtils.js';
 
 const menu = [
   ['overview','Dashboard Overview',LayoutDashboard], ['users','User Management',Users], ['roles','Role and Permission Management',Shield],
   ['vendors','Vendor Verification',BadgeCheck], ['categories','Service Category Management',Tags], ['events','Event Management',CalendarDays],
-  ['bookings','Booking Management',ClipboardList], ['package-requests','Event Package Requests',ClipboardList], ['payments','Payment and Refund Management',CreditCard], ['reviews','Reviews and Complaints',MessageSquareWarning],
+  ['bookings','Booking Management',ClipboardList], ['package-requests','Event Package Requests',ClipboardList], ['payments','Payment and Refund Management',CreditCard], ['reviews','Reviews and Complaints',MessageSquareWarning], ['complaints','Complaint Management',MessageSquareWarning],
   ['messages','Contact Messages',MessageSquareWarning], ['reports','Reports and Analytics',ChartNoAxesCombined], ['notifications','Notifications',Bell], ['audit-logs','Audit Logs',Activity],
   ['settings','System Settings',Settings], ['profile','Profile',UserRound], ['logout','Logout',LogOut]
+];
+const menuGroups = [
+  { id: 'overview', label: 'Dashboard', items: [menu[0]] },
+  { id: 'management', label: 'Platform Management', items: menu.slice(1, 8) },
+  { id: 'operations', label: 'Operations', items: menu.slice(8, 12).concat(menu[13]) },
+  { id: 'insights', label: 'Insights and Security', items: [menu[12], menu[14]] },
+  { id: 'configuration', label: 'Configuration', items: menu.slice(15, 17).concat(menu[17]) },
 ];
 const modules = {
   users:{title:'User Management', endpoint:'users', columns:['id','full_name','email','phone','roles','status','created_at'], fields:[['full_name','Full name','text'],['email','Email','email'],['phone','Phone','text']], create:true, actions:['role','status']},
@@ -1752,15 +1760,121 @@ function Login({onLogin}) {
   async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email,password); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
   return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
 }
-function Overview() {
+function Overview({ onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [data,setData]=useState(null); const [error,setError]=useState('');
-  useEffect(()=>{api('/admin/reports/summary').then((r)=>setData(r.data)).catch((e)=>setError(e.message));},[]);
-  if(error) return <div className="alert error">{translateText(error,language)}</div>;
-  if(!data) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
-  const items=[[t('usersLabel'),data.users.total_users,`${data.users.active_users} ${t('activeCount')}`],[t('vendorsLabelPlural'),data.vendors.total_vendors,`${data.vendors.pending_vendors} ${t('pendingVerification')}`],[t('eventsLabel'),data.events.total_events,`${data.events.completed_events} ${t('completedCount')}`],[t('bookingsLabel'),data.bookings.total_bookings,`${data.bookings.bookings_under_review} ${t('underReview')}`],[t('paymentsLabel'),data.payments.total_payments,`${data.payments.confirmed_payments} ${t('providerConfirmedPaid')}`],[t('openComplaints'),data.complaints.open_complaints,t('openInvestigating')]];
-  return <><div className="welcome"><div><p className="eyebrow">{t('adminConsole')}</p><h2>{t('platformOverview')}</h2><p className="muted">{t('liveFigures')}</p></div><span className="live-dot">{t('liveDataLabel')}</span></div><div className="metric-grid">{items.map(([label,value,note])=><article className="metric-card" key={label}><p>{label}</p><strong>{value ?? 0}</strong><span>{note}</span></article>)}</div><section className="panel guidance"><h3>{t('operationalReminders')}</h3><ul><li>{t('verificationBasis')}</li><li>{t('moderationRules')}</li><li>{t('paymentReadOnly')}</li></ul></section></>;
+  const [preset,setPreset]=useState('30d');
+  const [dateRange,setDateRange]=useState(()=>getDashboardDateRange('30d'));
+  const [appliedRange,setAppliedRange]=useState(()=>getDashboardDateRange('30d'));
+  const [data,setData]=useState(null);
+  const [error,setError]=useState('');
+  const [loading,setLoading]=useState(true);
+  const [retryCount,setRetryCount]=useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    const params = new URLSearchParams(appliedRange);
+    setLoading(true);
+    setError('');
+    api(`/admin/dashboard/overview?${params}`, { signal: controller.signal })
+      .then((response) => setData(response.data))
+      .catch((issue) => { if (issue.name !== 'AbortError') setError(issue.message); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [appliedRange,retryCount]);
+
+  const applyPreset = (nextPreset) => {
+    setPreset(nextPreset);
+    if (nextPreset !== 'custom') {
+      const nextRange = getDashboardDateRange(nextPreset);
+      setDateRange(nextRange);
+      setAppliedRange(nextRange);
+    }
+  };
+  const applyCustomRange = (event) => {
+    event.preventDefault();
+    setPreset('custom');
+    setAppliedRange({ ...dateRange });
+  };
+  if (!data && loading) return <div className="loading dashboard-loading"><span className="spinner"/>{t('loading')} administrator dashboard…</div>;
+  if (!data && error) return <section className="dashboard-error" role="alert"><div className="alert error">{translateText(error,language)}</div><button className="button" onClick={()=>setRetryCount((count)=>count+1)}>Retry dashboard</button></section>;
+
+  const number = (value) => Number(value || 0).toLocaleString();
+  const money = (value,currency) => {
+    try { return new Intl.NumberFormat('en-ET',{style:'currency',currency,maximumFractionDigits:2}).format(Number(value || 0)); }
+    catch { return `${number(value)} ${currency}`; }
+  };
+  const dateTime = (value) => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+  };
+  const metricGroups = [
+    { title: 'Registered users', total: data.users.total_users, values: [] },
+    { title: 'Vendors', total: data.vendors.total_vendors, values: [['Verified',data.vendors.verified_vendors],['Pending applications',data.vendors.pending_vendors]] },
+    { title: 'Events', total: data.events.total_events, values: [['Published',data.events.published_events],['Upcoming',data.events.upcoming_events]] },
+    { title: 'Bookings', total: data.bookings.total_bookings, values: [['Pending',data.bookings.pending_bookings],['Confirmed',data.bookings.confirmed_bookings],['Completed',data.bookings.completed_bookings],['Cancelled',data.bookings.cancelled_bookings]] },
+    { title: 'Payments', total: data.payments.total_payments, values: [['Successful',data.payments.successful_payments],['Pending / authorized',data.payments.pending_payments],['Refund requests',data.payments.refund_requests]] },
+    { title: 'Open complaints', total: data.complaints.open_complaints, values: [['All complaints',data.complaints.total_complaints]] },
+    { title: 'Reviews', total: data.reviews.total_reviews, values: [] },
+  ];
+  const maxActivity = Math.max(1,...data.bookingTrend.map((row)=>Math.max(Number(row.bookings),Number(row.paidTransactions))));
+  const maxCategory = Math.max(1,...data.eventCategories.map((row)=>Number(row.total)));
+  const maxRevenueByCurrency = Object.fromEntries(data.revenueByCurrency.map((row)=>[
+    row.currency,
+    Math.max(1,...data.bookingTrend.map((trend)=>Number(trend.salesByCurrency[row.currency] || 0))),
+  ]));
+  const bookingStatusTotal = data.bookingStatuses.reduce((total,row)=>total+Number(row.total),0);
+  const statusColors = ['#3074b3','#38a98b','#edaa45','#7984ea','#d96b72','#94a3b8','#44a1aa'];
+  let statusOffset = 0;
+  const statusGradient = bookingStatusTotal ? data.bookingStatuses.map((row,index)=>{
+    const end = statusOffset + Number(row.total) / bookingStatusTotal * 100;
+    const segment = `${statusColors[index % statusColors.length]} ${statusOffset}% ${end}%`;
+    statusOffset = end;
+    return segment;
+  }).join(', ') : '#e7eaf1 0% 100%';
+  return <>
+    <div className="welcome"><div><p className="eyebrow">{t('adminConsole')}</p><h2>{t('platformOverview')}</h2><p className="muted">Live database metrics for {appliedRange.startDate} through {appliedRange.endDate}. Revenue includes successful payments only and remains grouped by currency.</p></div><span className="live-dot">{t('liveDataLabel')}</span></div>
+    {error&&<div className="alert error dashboard-inline-error" role="alert">{translateText(error,language)} <button className="text-action" onClick={()=>setRetryCount((count)=>count+1)}>Retry</button></div>}
+    <section className="panel dashboard-filter" aria-label="Dashboard date filters">
+      <div className="dashboard-filter-heading"><div><strong>Dashboard date range</strong><span>Updates counts, charts, and recent records</span></div>{loading&&<span className="dashboard-refreshing" role="status"><span className="spinner"/>Refreshing</span>}</div>
+      <div className="dashboard-presets" role="group" aria-label="Date range presets">
+        {[['today','Today'],['7d','Last 7 Days'],['30d','Last 30 Days'],['custom','Custom Range']].map(([value,label])=><button type="button" key={value} className={`button secondary dashboard-preset ${preset===value?'selected':''}`} aria-pressed={preset===value} onClick={()=>applyPreset(value)}>{label}</button>)}
+      </div>
+      {preset==='custom'&&<form className="dashboard-custom-range" onSubmit={applyCustomRange}>
+        <label className="field"><span>From</span><input type="date" required value={dateRange.startDate} max={dateRange.endDate} onChange={(event)=>setDateRange((current)=>({...current,startDate:event.target.value}))}/></label>
+        <label className="field"><span>Through</span><input type="date" required value={dateRange.endDate} min={dateRange.startDate} onChange={(event)=>setDateRange((current)=>({...current,endDate:event.target.value}))}/></label>
+        <button className="button" disabled={loading}>Apply range</button>
+      </form>}
+    </section>
+    <section className="dashboard-metrics" aria-label="Overview statistics">
+      {metricGroups.map((metric)=><article className="metric-card dashboard-metric" key={metric.title}><p>{metric.title}</p><strong>{number(metric.total)}</strong>{metric.values.length>0&&<div className="dashboard-metric-details">{metric.values.map(([label,value])=><span key={label}><span>{label}</span><b>{number(value)}</b></span>)}</div>}</article>)}
+    </section>
+    <section className="panel dashboard-sales"><div className="dashboard-section-heading"><div><h3>Revenue</h3><p className="muted">Captured payments marked paid; failed, pending, and refund-request records are excluded.</p></div></div>
+      {data.revenueByCurrency.length===0?<div className="empty"><strong>No successful payments in this range</strong><span>Revenue will appear when valid payment records are recorded.</span></div>:<div className="currency-totals">{data.revenueByCurrency.map((row)=><div className="report-row" key={row.currency}><span>{row.currency} revenue</span><strong>{money(row.total,row.currency)}</strong></div>)}</div>}
+    </section>
+    <section className="dashboard-quick-actions" aria-label="Quick actions">
+      <h3>Quick actions</h3><div>{[['users','Users'],['vendors','Vendors'],['events','Events'],['bookings','Bookings'],['reports','Reports'],['settings','Settings']].map(([target,label])=><button type="button" className="button secondary" key={target} onClick={()=>onNavigate(target)}>{label}<ChevronRight size={15}/></button>)}</div>
+    </section>
+    <div className="dashboard-chart-grid">
+      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Booking trends</h3><p className="muted">Daily bookings and successful payment counts</p></div></div>
+        {data.bookingTrend.length===0?<div className="empty"><strong>No booking activity in this range</strong></div>:<><div className="trend-legend"><span><i className="trend-bookings"/>Bookings</span><span><i className="trend-payments"/>Paid transactions</span></div><div className="trend-chart" role="list" aria-label="Daily bookings and paid transactions">{data.bookingTrend.map((row)=><div className="trend-month" key={row.period} role="listitem" aria-label={`${row.period}: ${row.bookings} bookings, ${row.paidTransactions} paid transactions`}><div className="trend-bars"><span className="trend-bar trend-bookings" style={{height:`${Math.max(3,Number(row.bookings)/maxActivity*100)}%`}} title={`${number(row.bookings)} bookings`}/><span className="trend-bar trend-payments" style={{height:`${Math.max(3,Number(row.paidTransactions)/maxActivity*100)}%`}} title={`${number(row.paidTransactions)} paid transactions`}/></div><strong>{row.period.slice(5)}</strong><small>{number(row.bookings)} bookings</small><small>{number(row.paidTransactions)} paid</small></div>)}</div></>}
+      </section>
+      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Revenue trends</h3><p className="muted">Paid transaction totals shown separately by currency</p></div></div>
+        {data.revenueByCurrency.length===0?<div className="empty"><strong>No revenue activity in this range</strong></div>:<div className="revenue-series">{data.revenueByCurrency.map(({currency})=><div className="revenue-series-item" key={currency}><div className="revenue-series-heading"><strong>{currency}</strong><span>{money(data.revenueByCurrency.find((row)=>row.currency===currency)?.total,currency)}</span></div><div className="trend-chart revenue-chart" role="list" aria-label={`${currency} daily revenue`}>{data.bookingTrend.map((row)=>{const amount=Number(row.salesByCurrency[currency]||0);return <div className="trend-month" key={`${currency}-${row.period}`} role="listitem" aria-label={`${row.period}: ${money(amount,currency)}`}><div className="trend-bars"><span className="trend-bar trend-revenue" style={{height:`${Math.max(amount?3:0,amount/maxRevenueByCurrency[currency]*100)}%`}} title={money(amount,currency)}/></div><strong>{row.period.slice(5)}</strong></div>;})}</div></div>)}</div>}
+      </section>
+      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Events by category</h3><p className="muted">Event types created in the selected range</p></div></div>
+        {data.eventCategories.length===0?<div className="empty"><strong>No events in this range</strong></div>:<div className="category-chart">{data.eventCategories.map((row,index)=><div className="category-bar-row" key={row.category}><div><span>{row.category}</span><strong>{number(row.total)}</strong></div><span className="category-bar-track"><i style={{width:`${Number(row.total)/maxCategory*100}%`,background:statusColors[index%statusColors.length]}}/></span></div>)}</div>}
+      </section>
+      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Booking statuses</h3><p className="muted">Status distribution in the selected range</p></div></div>
+        {bookingStatusTotal===0?<div className="empty"><strong>No bookings in this range</strong></div>:<div className="status-chart"><div className="status-donut" role="img" aria-label={`Booking status distribution across ${number(bookingStatusTotal)} bookings`} style={{background:`conic-gradient(${statusGradient})`}}><div><strong>{number(bookingStatusTotal)}</strong><span>bookings</span></div></div><div className="status-legend">{data.bookingStatuses.map((row,index)=><div key={row.status}><i style={{background:statusColors[index%statusColors.length]}}/><span>{translateText(row.status,language)}</span><strong>{number(row.total)}</strong></div>)}</div></div>}
+      </section>
+    </div>
+    <div className="dashboard-recent-grid">
+      <section className="panel dashboard-recent"><h3>Recent bookings</h3>{data.recentBookings.length===0?<div className="empty"><strong>No bookings in this range</strong></div>:<div className="dashboard-list">{data.recentBookings.map((row)=><article className="dashboard-list-row dashboard-booking-row" key={row.id}><div><strong>{row.event_title}</strong><span>{row.customer_name} · {row.vendor_name}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span><strong>{money(row.quoted_amount,row.currency)}</strong></article>)}</div>}</section>
+      <section className="panel dashboard-recent"><h3>Recent vendor applications</h3>{data.recentVendorRequests.length===0?<div className="empty"><strong>No pending vendor applications</strong></div>:<div className="dashboard-list">{data.recentVendorRequests.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{row.business_name}</strong><span>{row.applicant_name} · {row.email}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div><span className="pill pending">Pending</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('vendors')}>Review vendors</button></section>
+      <section className="panel dashboard-recent"><h3>Recent complaints</h3>{data.recentComplaints.length===0?<div className="empty"><strong>No complaints in this range</strong></div>:<div className="dashboard-list">{data.recentComplaints.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{row.subject}</strong><span>{row.customer_name} · {dateTime(row.created_at)}</span></div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('complaints')}>Manage complaints</button></section>
+      <section className="panel dashboard-recent"><h3>Recent reviews</h3>{data.recentReviews.length===0?<div className="empty"><strong>No reviews in this range</strong></div>:<div className="dashboard-list">{data.recentReviews.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{'★'.repeat(Number(row.rating))} · {row.vendor_name}</strong><span>{row.customer_name} · {dateTime(row.created_at)}</span>{row.comment&&<span className="dashboard-review-comment">{row.comment}</span>}</div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('reviews')}>Manage reviews</button></section>
+    </div>
+  </>;
 }
 
 function DataPage({slug,user,onUserChange}) {
@@ -2177,6 +2291,7 @@ function SettingsPage({ onEdit }) {
 export default function App(){
   const language = useLanguage();
   const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => window.location.pathname || '/');
+  const [expandedNavGroups,setExpandedNavGroups]=useState({overview:true,management:true,operations:true,insights:true,configuration:true});
 
   const normalizePath = useCallback((path) => {
     if (!path || path === '') return '/';
@@ -2202,7 +2317,7 @@ export default function App(){
     const found = nextPath.match(/^\/admin(?:\/([^/]+))?\/?(?:\?.*)?$/);
     if (found) {
       const next = found[1] || 'overview';
-      setSlug(['overview','users','roles','vendors','categories','events','bookings','package-requests','payments','reviews','messages','reports','notifications','audit-logs','settings','profile'].includes(next) ? next : 'overview');
+      setSlug(['overview','users','roles','vendors','categories','events','bookings','package-requests','payments','reviews','complaints','messages','reports','notifications','audit-logs','settings','profile'].includes(next) ? next : 'overview');
     }
   }, [normalizePath]);
 
@@ -2295,5 +2410,5 @@ export default function App(){
   if (portal === 'organizer') return <OrganizerDashboard user={user} onLogout={logout}/>;
   if (portal === 'vendor') return <VendorDashboard user={user} onLogout={logout}/>;
   const activeMenu=menu.find(([id])=>id===slug);const pageTitle=translateText(activeMenu?.[1]||'Dashboard Overview',language);
-  return <div className="app-shell"><aside className={`sidebar ${sidebarOpen?'open':''}`}><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{translate('adminDashboard',language).toUpperCase()}</span></div><button className="mobile-close icon-button" onClick={()=>setSidebarOpen(false)} aria-label={translate('close',language)}><X size={18}/></button></div><div className="nav-caption">{translate('systemControl',language)}</div><nav>{menu.map(([id,label,Icon])=><button key={id} className={`nav-item ${slug===id?'active':''}`} onClick={id === 'logout' ? logout : ()=>navigate(id)}><Icon size={18}/><span>{translateText(label,language)}</span>{id==='vendors'&&<span className="nav-dot"/>}</button>)}</nav></aside><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><header className="topbar"><button className="icon-button menu-button" onClick={()=>setSidebarOpen(true)} aria-label={translate('mainNavigation',language)}><Menu size={20}/></button><div className="breadcrumb">{translate('adminDashboard',language)} <span>/</span> <strong>{pageTitle}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{translate('secureSession',language)}</span><button className="top-user" onClick={()=>navigate('profile')}><span className="avatar small-avatar">{user.full_name?.slice(0,1)||'A'}</span>{user.full_name}</button></div></header><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='overview'?<Overview/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<DataPage slug="settings" user={user} onUserChange={setUser}/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div>;
+  return <div className="app-shell"><aside className={`sidebar ${sidebarOpen?'open':''}`}><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{translate('adminDashboard',language).toUpperCase()}</span></div><button className="mobile-close icon-button" onClick={()=>setSidebarOpen(false)} aria-label={translate('close',language)}><X size={18}/></button></div><div className="nav-caption">{translate('systemControl',language)}</div><nav>{menuGroups.map((group)=><div className="nav-group" key={group.id}><button className="nav-group-toggle" type="button" aria-expanded={Boolean(expandedNavGroups[group.id])} onClick={()=>setExpandedNavGroups((current)=>({...current,[group.id]:!current[group.id]}))}><span>{group.label}</span><span aria-hidden="true">{expandedNavGroups[group.id]?'−':'+'}</span></button>{expandedNavGroups[group.id]&&group.items.map(([id,label,Icon])=><button key={id} className={`nav-item ${slug===id?'active':''}`} aria-current={slug===id?'page':undefined} onClick={id === 'logout' ? logout : ()=>navigate(id)}><Icon size={18}/><span>{translateText(label,language)}</span>{id==='vendors'&&<span className="nav-dot"/>}</button>)}</div>)}</nav></aside><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><header className="topbar"><button className="icon-button menu-button" onClick={()=>setSidebarOpen(true)} aria-label={translate('mainNavigation',language)}><Menu size={20}/></button><div className="breadcrumb">{translate('adminDashboard',language)} <span>/</span> <strong>{pageTitle}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{translate('secureSession',language)}</span><button className="top-user" onClick={()=>navigate('profile')}><span className="avatar small-avatar">{user.full_name?.slice(0,1)||'A'}</span>{user.full_name}</button></div></header><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='overview'?<Overview onNavigate={navigate}/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<DataPage slug="settings" user={user} onUserChange={setUser}/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div>;
 }
