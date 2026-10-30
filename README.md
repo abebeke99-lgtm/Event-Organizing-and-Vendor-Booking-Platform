@@ -70,7 +70,7 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 ## Deployment
 
-- Render API: build with `npm ci` and start with `npm run start` from the repository root. Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_CA`, `WEB_ORIGIN`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Enter the password and Aiven CA PEM only in Render's secure environment settings. `npm --workspace backend run db:check` performs a read-only `SELECT 1`; it does not migrate or modify data.
+- Render API: build with `npm ci` and start with `npm run start` from the repository root. Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL=true`, `DB_SSL_CA`, `WEB_ORIGIN`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Enter the password and Aiven CA PEM only in Render's secure environment settings. `npm --workspace backend run db:check` performs read-only connection, `SELECT 1`, and selected-database checks; it does not migrate or modify data.
 - Netlify frontend: set `VITE_API_URL` to the verified public Render API origin, without `/api` or a trailing slash, then redeploy. The frontend appends `/api` to API requests and includes cookies.
 - After deployment, verify `GET /` returns `200 {"status":"ok"}` and `GET /api/health` returns `200 {"status":"ok"}`. Database unavailability must produce a `503` from `/api/health`.
 - Do not run database initialization or migrations as part of deployment without first reviewing the SQL against the existing schema and taking a backup.
@@ -142,6 +142,7 @@ For a production deployment, use:
 - Netlify base directory: repository root
 - Netlify build command: `npm ci && npm run build`
 - Netlify publish directory: `frontend/dist`
+- SPA fallback: `frontend/public/_redirects` and `netlify.toml` rewrite routes to `/index.html`
 - Set Netlify `VITE_API_URL` to the verified public Render API origin. The API allows credentialed requests only from the configured frontend origin in production.
 - Render root directory: repository root
 - Render build command: `npm ci`

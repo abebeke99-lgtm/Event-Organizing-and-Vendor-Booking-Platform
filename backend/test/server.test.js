@@ -124,10 +124,15 @@ test('database diagnostics retain error details while redacting passwords and co
 
 let healthQueryCount = 0;
 const app = createApp({
+  expectedDatabase: 'defaultdb',
   database: {
     async query(sql) {
-      assert.equal(sql, 'SELECT 1');
       healthQueryCount += 1;
+      if (sql === 'SELECT DATABASE() AS database_name') {
+        return [[{ database_name: 'defaultdb' }], []];
+      }
+      assert.equal(sql, 'SELECT 1');
+      return [[], []];
     },
   },
 });
@@ -235,7 +240,34 @@ test('database health route remains available and checks database connectivity',
 
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: 'ok' });
-  assert.equal(healthQueryCount, 1);
+  assert.equal(healthQueryCount, 2);
+});
+
+test('database health route reports unavailable when DB_NAME does not match the selected database', async () => {
+  const mismatchedApp = createApp({
+    expectedDatabase: 'defaultdb',
+    database: {
+      async query(sql) {
+        if (sql === 'SELECT DATABASE() AS database_name') {
+          return [[{ database_name: 'unexpected' }], []];
+        }
+        return [[], []];
+      },
+    },
+  });
+  const mismatchedServer = mismatchedApp.listen(0, '127.0.0.1');
+  await once(mismatchedServer, 'listening');
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${mismatchedServer.address().port}/api/health`);
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { status: 'unavailable' });
+  } finally {
+    await new Promise((resolve, reject) => {
+      mismatchedServer.close((error) => error ? reject(error) : resolve());
+      mismatchedServer.closeAllConnections();
+    });
+  }
 });
 
 test('database health route reports unavailable when the database query fails', async () => {

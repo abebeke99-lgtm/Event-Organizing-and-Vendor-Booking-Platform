@@ -12,10 +12,10 @@ import vendorRoutes from './routes/vendor.js';
 import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { requirePlatformRole } from './middleware/requirePlatformUser.js';
-import { formatDatabaseError, pool } from './db.js';
+import { formatDatabaseError, pool, verifyDatabaseConnection } from './db.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 
-export function createApp({ database = pool } = {}) {
+export function createApp({ database = pool, expectedDatabase = process.env.DB_NAME } = {}) {
   const app = express();
   const localOrigins = process.env.NODE_ENV === 'production'
     ? []
@@ -55,7 +55,7 @@ export function createApp({ database = pool } = {}) {
   }));
   app.get('/api/health', asyncHandler(async (req, res) => {
     try {
-      await database.query('SELECT 1');
+      await verifyDatabaseConnection(database, expectedDatabase);
     } catch (error) {
       console.error('Database health check failed:', formatDatabaseError(error));
       return res.status(503).json({ status: 'unavailable' });
