@@ -79,6 +79,35 @@ test('database verifier executes only the read-only SELECT 1 query', async () =>
   assert.deepEqual(statements, ['SELECT 1']);
 });
 
+test('database verifier checks the selected database when requested', async () => {
+  const statements = [];
+  await verifyDatabaseConnection({
+    async query(statement) {
+      statements.push(statement);
+      if (statement === 'SELECT DATABASE() AS database_name') {
+        return [[{ database_name: 'defaultdb' }], []];
+      }
+      return [[], []];
+    },
+  }, 'defaultdb');
+
+  assert.deepEqual(statements, ['SELECT 1', 'SELECT DATABASE() AS database_name']);
+});
+
+test('database verifier rejects a connection to a different database', async () => {
+  await assert.rejects(
+    verifyDatabaseConnection({
+      async query(statement) {
+        if (statement === 'SELECT DATABASE() AS database_name') {
+          return [[{ database_name: 'unexpected' }], []];
+        }
+        return [[], []];
+      },
+    }, 'defaultdb'),
+    { message: 'Connected database does not match DB_NAME.' },
+  );
+});
+
 test('database diagnostics retain error details while redacting passwords and connection strings', () => {
   const error = Object.assign(new Error(
     'Access failed for password=secret-pass mysql://avnadmin:secret-pass@db.example:11713',
@@ -123,7 +152,10 @@ test('root returns a lightweight service status without a database query', async
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('access-control-allow-origin'), 'http://localhost:5173');
   assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
-  assert.deepEqual(await response.json(), { status: 'ok' });
+  assert.deepEqual(await response.json(), {
+    status: 'ok',
+    service: 'event-organizing-and-vendor-booking-api',
+  });
   assert.equal(healthQueryCount, 0);
 });
 

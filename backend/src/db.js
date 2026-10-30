@@ -90,8 +90,14 @@ export function createDatabaseConfig(environment = process.env) {
 
 export const pool = mysql.createPool(createDatabaseConfig());
 
-export async function verifyDatabaseConnection(database = pool) {
+export async function verifyDatabaseConnection(database = pool, expectedDatabase) {
   await database.query('SELECT 1');
+  if (expectedDatabase) {
+    const [rows] = await database.query('SELECT DATABASE() AS database_name');
+    if (rows[0]?.database_name !== expectedDatabase) {
+      throw new Error('Connected database does not match DB_NAME.');
+    }
+  }
 }
 
 export async function inTransaction(work) {

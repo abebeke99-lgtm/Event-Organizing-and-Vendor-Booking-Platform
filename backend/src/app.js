@@ -49,7 +49,10 @@ export function createApp({ database = pool } = {}) {
     }
     next();
   });
-  app.get('/', (req, res) => res.json({ status: 'ok' }));
+  app.get('/', (req, res) => res.json({
+    status: 'ok',
+    service: 'event-organizing-and-vendor-booking-api',
+  }));
   app.get('/api/health', asyncHandler(async (req, res) => {
     try {
       await database.query('SELECT 1');
