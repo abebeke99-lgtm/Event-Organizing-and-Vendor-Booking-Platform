@@ -8,7 +8,6 @@ test('normalizeContactForm trims values and lowercases email', () => {
     email: ' ADA@EXAMPLE.COM ',
     phone: ' +251 911 000 000 ',
     subject: '  Support request  ',
-    inquiry_type: 'booking_assistance',
     message: '  Hello world  ',
   });
 
@@ -16,7 +15,7 @@ test('normalizeContactForm trims values and lowercases email', () => {
   assert.equal(form.email, 'ada@example.com');
   assert.equal(form.phone, '+251 911 000 000');
   assert.equal(form.subject, 'Support request');
-  assert.equal(form.inquiry_type, 'booking_assistance');
+  assert.equal(form.inquiry_type, 'general_inquiry');
   assert.equal(form.message, 'Hello world');
 });
 
@@ -30,6 +29,7 @@ test('validateContactForm rejects invalid email and short messages', () => {
 
   assert.equal(result.errors.full_name, 'Full name is required.');
   assert.equal(result.errors.email, 'Please enter a valid email address.');
+  assert.equal('inquiry_type' in result.errors, false);
   assert.match(result.errors.subject, /between 4 and 200/);
   assert.match(result.errors.message, /between 20 and 2500/);
 });
@@ -47,6 +47,31 @@ test('buildContactInfo excludes empty settings', () => {
 });
 
 test('inquiry types include the supported contact categories', () => {
-  assert.ok(INQUIRY_TYPES.some((entry) => entry.value === 'partnership'));
+  assert.equal(INQUIRY_TYPES.length, 10);
+  assert.ok(INQUIRY_TYPES.some((entry) => entry.value === 'partnership_inquiry'));
   assert.ok(INQUIRY_TYPES.some((entry) => entry.value === 'technical_support'));
+  assert.ok(INQUIRY_TYPES.some((entry) => entry.value === 'payment_billing'));
+});
+
+test('contact validation accepts a valid form without an inquiry type', () => {
+  const { normalized, errors } = validateContactForm({
+    full_name: 'Ada Lovelace',
+    email: 'ada@example.com',
+    subject: 'Event support',
+    message: 'Please help me with my event booking.',
+  });
+
+  assert.deepEqual(errors, {});
+  assert.equal(normalized.inquiry_type, 'general_inquiry');
+});
+
+test('buildContactInfo ignores unsafe social links', () => {
+  const info = buildContactInfo({
+    socials: [
+      { label: 'EventFlow', url: 'https://example.com' },
+      { label: 'Unsafe', url: 'javascript:alert(1)' },
+    ],
+  });
+
+  assert.deepEqual(info.socials, [{ label: 'EventFlow', url: 'https://example.com' }]);
 });

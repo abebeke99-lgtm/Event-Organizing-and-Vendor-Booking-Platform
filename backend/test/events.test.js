@@ -132,14 +132,70 @@ test('database event mapping uses persisted fields without invented details', ()
   assert.deepEqual(event, {
     id: 42,
     title: 'Database event',
+    description: '',
     type: 'Wedding',
     category: 'wedding',
     location: null,
+    venue: null,
     startDate: '2026-11-18T03:00:00',
     endDate: null,
     budget: 240000,
     status: 'active',
+    coverImage: null,
+    galleryImages: [],
+    capacity: null,
+    organizerName: null,
+    startingPrice: null,
+    availableQuantity: null,
+    publishedAt: null,
+    createdAt: null,
   });
+});
+
+test('ticket-price and availability filters combine with safe price sorting', () => {
+  const events = [
+    { id: 1, title: 'Affordable', category: 'music', startDate: '2027-01-10T18:00:00', status: 'active', startingPrice: 20, availableQuantity: 10 },
+    { id: 2, title: 'Premium', category: 'music', startDate: '2027-01-12T18:00:00', status: 'active', startingPrice: 80, availableQuantity: 4 },
+    { id: 3, title: 'Sold out', category: 'music', startDate: '2027-01-14T18:00:00', status: 'active', startingPrice: 40, availableQuantity: 0 },
+  ];
+
+  const result = listPublicEvents(events, {
+    minPrice: 30,
+    maxPrice: 100,
+    status: 'available',
+    sort: 'price_desc',
+    page: 1,
+    limit: 10,
+  });
+  assert.deepEqual(result.events.map((event) => event.id), [2]);
+});
+
+test('database event mapping decodes persisted gallery and ticket inventory fields', () => {
+  const event = mapDatabaseEvent({
+    id: 9,
+    title: 'Gallery event',
+    event_type: 'Music',
+    description: 'Live performances',
+    venue: 'City Hall',
+    city: 'Addis Ababa',
+    cover_image_url: 'https://example.test/cover.jpg',
+    gallery_images: '["https://example.test/one.jpg"]',
+    start_date: '2027-02-01T10:00:00',
+    end_date: null,
+    budget: null,
+    capacity: 250,
+    organizer_name: 'Event Organizer',
+    starting_price: '35.00',
+    available_quantity: '120',
+    status: 'active',
+  });
+  assert.equal(event.description, 'Live performances');
+  assert.equal(event.venue, 'City Hall');
+  assert.deepEqual(event.galleryImages, ['https://example.test/one.jpg']);
+  assert.equal(event.capacity, 250);
+  assert.equal(event.organizerName, 'Event Organizer');
+  assert.equal(event.startingPrice, 35);
+  assert.equal(event.availableQuantity, 120);
 });
 
 test('public categories are normalized and filtered cleanly', () => {
@@ -185,6 +241,19 @@ test('event creation rejects invalid dates, reversed date ranges, and invalid am
   }).success, false);
   assert.equal(createEventSchema.safeParse({ ...base, budget: -1 }).success, false);
   assert.equal(createEventSchema.safeParse({ ...base, guestCount: 0 }).success, false);
+});
+
+test('event creation validates public image URLs, gallery entries, and capacity', () => {
+  const base = {
+    title: 'Family celebration',
+    type: 'Private event',
+    startDate: '2027-06-14T16:30',
+  };
+
+  assert.equal(createEventSchema.safeParse({ ...base, coverImageUrl: 'javascript:alert(1)' }).success, false);
+  assert.equal(createEventSchema.safeParse({ ...base, coverImageUrl: 'https://example.test/cover.jpg' }).success, true);
+  assert.equal(createEventSchema.safeParse({ ...base, galleryImages: ['data:image/png;base64,abc'] }).success, false);
+  assert.equal(createEventSchema.safeParse({ ...base, capacity: 0 }).success, false);
 });
 
 test('event date values are converted to MySQL DATETIME without timezone shifts', () => {

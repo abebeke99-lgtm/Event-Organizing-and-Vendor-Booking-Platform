@@ -66,10 +66,10 @@ const resources = {
   events: {
     table: 'events',
     id: 'id',
-    columns: ['id', 'organizer_id', 'title', 'event_type', 'city', 'start_date', 'end_date', 'budget', 'status', 'notes', 'created_at'],
-    search: ['title', 'event_type', 'city'],
+    columns: ['id', 'organizer_id', 'title', 'event_type', 'description', 'city', 'venue', 'cover_image_url', 'start_date', 'end_date', 'budget', 'capacity', 'status', 'notes', 'created_at'],
+    search: ['title', 'event_type', 'city', 'venue'],
     statuses: ['draft', 'active', 'booked', 'in_progress', 'completed', 'cancelled'],
-    mutable: ['organizer_id', 'title', 'event_type', 'city', 'start_date', 'end_date', 'budget', 'status', 'notes'],
+    mutable: ['organizer_id', 'title', 'event_type', 'description', 'city', 'venue', 'cover_image_url', 'start_date', 'end_date', 'budget', 'capacity', 'status', 'notes'],
     required: ['organizer_id', 'title', 'event_type', 'start_date'],
     deactivate: { column: 'status', value: 'cancelled' },
   },
@@ -151,6 +151,23 @@ function validBody(resource, body, creating = false) {
           issues: [{ path: [field], message: 'Required.' }],
         });
       }
+    }
+  }
+  if (resource.table === 'events' && body.cover_image_url) {
+    let imageUrl;
+    try {
+      imageUrl = new URL(body.cover_image_url);
+    } catch {
+      throw Object.assign(new Error('Invalid request data.'), {
+        name: 'ZodError',
+        issues: [{ path: ['cover_image_url'], message: 'Enter a valid HTTP image URL.' }],
+      });
+    }
+    if (!['http:', 'https:'].includes(imageUrl.protocol)) {
+      throw Object.assign(new Error('Invalid request data.'), {
+        name: 'ZodError',
+        issues: [{ path: ['cover_image_url'], message: 'Enter a valid HTTP image URL.' }],
+      });
     }
   }
   return body;

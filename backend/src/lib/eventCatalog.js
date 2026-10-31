@@ -11,17 +11,32 @@ export function sanitizeText(value, fallback = '') {
   return text.length ? text : fallback;
 }
 
+function mapGalleryImages(value) {
+  const parsed = Array.isArray(value) ? value : typeof value === 'string' && value ? JSON.parse(value) : [];
+  return Array.isArray(parsed) ? parsed.filter((image) => typeof image === 'string') : [];
+}
+
 export function mapDatabaseEvent(row) {
   return {
     id: Number(row.id),
     title: sanitizeText(row.title),
+    description: sanitizeText(row.description || row.notes),
     type: sanitizeText(row.event_type),
     category: sanitizeText(row.event_type).toLowerCase(),
     location: sanitizeText(row.city) || null,
+    venue: sanitizeText(row.venue) || null,
     startDate: row.start_date || null,
     endDate: row.end_date || null,
     budget: row.budget === null || row.budget === undefined ? null : Number(row.budget),
     status: sanitizeText(row.status),
+    coverImage: sanitizeText(row.cover_image_url) || null,
+    galleryImages: mapGalleryImages(row.gallery_images),
+    capacity: row.capacity === null || row.capacity === undefined ? null : Number(row.capacity),
+    organizerName: sanitizeText(row.organizer_name) || null,
+    startingPrice: row.starting_price === null || row.starting_price === undefined ? null : Number(row.starting_price),
+    availableQuantity: row.available_quantity === null || row.available_quantity === undefined ? null : Number(row.available_quantity),
+    publishedAt: row.published_at || null,
+    createdAt: row.created_at || null,
   };
 }
 
@@ -44,6 +59,8 @@ export function buildEventFilters(raw = {}) {
   const startDate = sanitizeText(raw.startDate, '');
   const endDate = sanitizeText(raw.endDate, '');
   const sort = sanitizeText(raw.sort, 'upcoming').toLowerCase();
+  const minPrice = raw.minPrice === '' || raw.minPrice === undefined ? null : Number(raw.minPrice);
+  const maxPrice = raw.maxPrice === '' || raw.maxPrice === undefined ? null : Number(raw.maxPrice);
   const page = Number.isFinite(Number(raw.page)) ? Math.max(1, Number(raw.page)) : 1;
   const limit = Number.isFinite(Number(raw.limit)) ? Math.max(1, Math.min(50, Number(raw.limit))) : 12;
 
@@ -53,7 +70,10 @@ export function buildEventFilters(raw = {}) {
     location,
     startDate,
     endDate,
-    sort: ['upcoming', 'earliest', 'latest', 'alphabetical', 'recent'].includes(sort) ? sort : 'upcoming',
+    minPrice: Number.isFinite(minPrice) && minPrice >= 0 ? minPrice : null,
+    maxPrice: Number.isFinite(maxPrice) && maxPrice >= 0 ? maxPrice : null,
+    status: sanitizeText(raw.status, '').toLowerCase(),
+    sort: ['upcoming', 'earliest', 'latest', 'alphabetical', 'recent', 'price_asc', 'price_desc'].includes(sort) ? sort : 'upcoming',
     page,
     limit,
   };
@@ -68,9 +88,15 @@ export function listPublicEvents(events = [], filters = {}) {
     const description = sanitizeText(event?.description, '').toLowerCase();
     const eventCategory = sanitizeText(event?.category, '').toLowerCase();
     const eventLocation = sanitizeText(event?.location, '').toLowerCase();
+    const venue = sanitizeText(event?.venue, '').toLowerCase();
+    const organizer = sanitizeText(event?.organizerName, '').toLowerCase();
     const start = normalizeEventDate(event?.startDate || event?.start_date);
+    const price = event?.startingPrice === null || event?.startingPrice === undefined
+      ? null
+      : Number(event.startingPrice);
+    const status = sanitizeText(event?.status, '').toLowerCase();
 
-    if (options.search && ![title, description, eventCategory, eventLocation].some((value) => value.includes(options.search))) {
+    if (options.search && ![title, description, eventCategory, eventLocation, venue, organizer].some((value) => value.includes(options.search))) {
       return false;
     }
 
@@ -91,10 +117,19 @@ export function listPublicEvents(events = [], filters = {}) {
 
     if (options.endDate) {
       const endBoundary = normalizeEventDate(options.endDate);
+      if (endBoundary && /^\d{4}-\d{2}-\d{2}$/.test(options.endDate)) endBoundary.setHours(23, 59, 59, 999);
       if (endBoundary && start && start > endBoundary) {
         return false;
       }
     }
+
+    if (options.minPrice !== null && (price === null || price < options.minPrice)) return false;
+    if (options.maxPrice !== null && (price === null || price > options.maxPrice)) return false;
+    if (options.status === 'upcoming' && start && start < new Date()) return false;
+    if (options.status === 'available' && Number(event?.availableQuantity ?? 0) <= 0) return false;
+    if (options.status === 'free' && price !== 0) return false;
+    if (options.status === 'paid' && (price === null || price <= 0)) return false;
+    if (options.status && !['upcoming', 'available', 'free', 'paid'].includes(options.status) && status !== options.status) return false;
 
     return true;
   });
@@ -110,6 +145,10 @@ export function listPublicEvents(events = [], filters = {}) {
         return sanitizeText(a?.title, '').localeCompare(sanitizeText(b?.title, '')) || aStart.getTime() - bStart.getTime();
       case 'recent':
         return (normalizeEventDate(b?.publishedAt || b?.createdAt) ?? new Date(0)).getTime() - (normalizeEventDate(a?.publishedAt || a?.createdAt) ?? new Date(0)).getTime();
+      case 'price_asc':
+        return Number(a?.startingPrice ?? 0) - Number(b?.startingPrice ?? 0) || aStart.getTime() - bStart.getTime();
+      case 'price_desc':
+        return Number(b?.startingPrice ?? 0) - Number(a?.startingPrice ?? 0) || aStart.getTime() - bStart.getTime();
       case 'earliest':
         return aStart.getTime() - bStart.getTime();
       case 'upcoming':

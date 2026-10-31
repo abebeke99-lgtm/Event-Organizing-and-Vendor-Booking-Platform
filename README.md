@@ -127,26 +127,68 @@ The platform includes the requested features for:
 
 ## 9. Local Setup
 
-1. Open the workspace folder.
-2. Use the configured runtime to install dependencies if needed.
-3. Start the backend from the workspace with the project runtime.
-4. Start the frontend with Vite.
-5. Use the demo accounts or create your own platform users through the auth endpoints.
+1. Use Node.js 20 and install dependencies from the repository root with `npm install`.
+2. The frontend defaults to browser-only demo authentication in development through `frontend/.env.development` (`VITE_DEMO_AUTH=true`). Demo registration and four predefined role logins need no API or database. Enter a demo account's email or username and password directly on the Login page. Demo profiles store only name, email, and role in localStorage; passwords and tokens are never stored there. Demo mode is limited to Vite development and is for UI testing only, not authorization or real data access.
+3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173`. To use real authentication, set `VITE_DEMO_AUTH=false`, configure `VITE_API_URL`, and start the backend with `backend/.env` configured for a provisioned MySQL database.
+4. For a real backend, apply migrations with `npm run migrate` after configuring the database. Never enable demo authentication in production.
 
 ## 10. Test Access
 
-No production or demo credentials are shipped as a supported sign-in method. Create an administrator with the `bootstrap:admin` command and a private `ADMIN_BOOTSTRAP_*` environment configuration only after the database is provisioned. Do not publish those values.
+The predefined demo credentials are mock-only and are not valid for production or backend access:
+
+| Role | Email | Password |
+|---|---|---|
+| Admin | `admin@demo.eventhub` | `AdminDemo123` |
+| Customer | `customer@demo.eventhub` | `CustomerDemo12` |
+| Organizer | `organizer@demo.eventhub` | `Organizer12Ab` |
+| Vendor | `vendor@demo.eventhub` | `VendorDemo12` |
+
+For production, create an administrator with the `bootstrap:admin` command and private `ADMIN_BOOTSTRAP_*` environment configuration only after the database is provisioned. Never publish those production values.
 
 ## 11. Acceptance Criteria Covered
 
 This implementation includes the core event platform flow:
 
 - registration and login foundation
-- event and vendor marketplace basics
+- searchable event discovery, event details, related events, and organizer contact
+- organizer-owned ticket types with safe inventory reservations and customer booking history
 - booking lifecycle validation
 - admin dashboard access patterns
 - vendor/service browsing
 - role-aware platform summary and protection rules
+
+### Event Tickets
+
+Ticket sales use separate `event_ticket_types` and `event_ticket_bookings` tables; existing vendor-service bookings are unchanged. Apply migration `006_event_discovery_tickets.sql` with `npm run migrate` before enabling the ticket workflow.
+
+The current platform API routes are:
+
+- `GET /api/platform/categories` and `GET /api/platform/categories/:slug`
+- `GET /api/platform/vendors` and `GET /api/platform/vendors/:id`
+- `GET /api/platform/services` and `GET /api/platform/services/:id`
+- `GET /api/platform/events` (search, filters, sorting, and pagination)
+- `GET /api/platform/events/:id`
+- `GET /api/platform/events/:id/related`
+- `GET /api/platform/events/:id/tickets`
+- `POST /api/platform/events/:id/contact` (authenticated customers)
+- `POST /api/platform/ticket-bookings` (authenticated customers)
+- `GET /api/platform/ticket-bookings/mine`
+- `GET /api/platform/ticket-bookings/:id`
+- `PATCH /api/platform/ticket-bookings/:id/cancel`
+- `POST /api/platform/events/:id/tickets` and `PATCH /api/platform/events/:id/tickets/:ticketId` (event owner)
+
+Ticket reservations are held for 15 minutes and remain `pending_payment`; no payment provider or verified payment callback is configured, so the app does not mark them paid or confirmed. Organizer ticket setup APIs are available, while image upload and payment/refund integrations still require implementation/configuration.
+
+### Homepage and Vendor Applications
+
+- `GET /api/about/homepage-statistics` returns public aggregate metrics from active/verified vendor profiles, published reviews, active or completed events, and schema-valid booking statuses. The response is cached briefly; it does not expose individual records.
+- `GET /api/platform/vendor-application` and `POST /api/platform/vendor-application` require an authenticated customer or organizer. Applications are stored as pending vendor profiles, duplicate pending applications are rejected, and submitting an application does not change the account role or grant vendor access.
+
+### Contact Support
+
+The public contact form submits to `POST /api/contact`; `GET /api/contact` returns configured support details and the FAQ. Submissions are rate-limited and stored in `contact_messages`. Administrators can search and filter the inbox with `GET /api/admin/contact`, update message status with `PATCH /api/admin/contact/:id/status`, and delete a message with `DELETE /api/admin/contact/:id`. These inbox routes require an administrator session.
+
+Apply `007_contact_inquiry_types.sql` with `npm run migrate` to enable the full inquiry type list and resolved status. Configure actual support contact details in `system_settings` (`support_email`, `support_phone`, `support_address`, `support_hours`, and `social_links`); unconfigured details are not shown publicly.
 
 ## 12. Deployment Considerations
 

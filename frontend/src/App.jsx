@@ -1,41 +1,135 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, BadgeCheck, Bell, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, ChevronLeft, ChevronRight, ClipboardList, CreditCard, Eye, EyeOff, Languages, LayoutDashboard, LogOut, Menu, MessageSquareWarning, Search, Settings, Shield, Tags, UserRound, Users, X } from 'lucide-react';
+import axios from 'axios';
+import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, Mail, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate } from './eventUtils.js';
 import { setLanguage, translate, translateText, useLanguage } from './language.js';
+import { setTheme, useTheme } from './theme.js';
 import { getDashboardDateRange } from './dashboardUtils.js';
+import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoSession, saveDemoAccount, saveDemoSession } from './utils/demoAuth.js';
+import { EventDetailsPage, MyEventBookingsPage, OrganizerEventsManager } from './EventsExperience.jsx';
 
+const DEMO_AUTH_ENABLED = import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTH === 'true';
 const menu = [
   ['overview','Dashboard Overview',LayoutDashboard], ['users','User Management',Users], ['roles','Role and Permission Management',Shield],
   ['vendors','Vendor Verification',BadgeCheck], ['categories','Service Category Management',Tags], ['events','Event Management',CalendarDays],
   ['bookings','Booking Management',ClipboardList], ['package-requests','Event Package Requests',ClipboardList], ['payments','Payment and Refund Management',CreditCard], ['reviews','Reviews and Complaints',MessageSquareWarning], ['complaints','Complaint Management',MessageSquareWarning],
   ['messages','Contact Messages',MessageSquareWarning], ['reports','Reports and Analytics',ChartNoAxesCombined], ['notifications','Notifications',Bell], ['audit-logs','Audit Logs',Activity],
-  ['settings','System Settings',Settings], ['profile','Profile',UserRound], ['logout','Logout',LogOut]
+  ['settings','System Settings',Settings], ['profile','Profile',UserRound]
 ];
 const menuGroups = [
   { id: 'overview', label: 'Dashboard', items: [menu[0]] },
   { id: 'management', label: 'Platform Management', items: menu.slice(1, 8) },
-  { id: 'operations', label: 'Operations', items: menu.slice(8, 12).concat(menu[13]) },
+  { id: 'operations', label: 'Operations', items: menu.slice(8, 12).concat([menu[13]]) },
   { id: 'insights', label: 'Insights and Security', items: [menu[12], menu[14]] },
-  { id: 'configuration', label: 'Configuration', items: menu.slice(15, 17).concat(menu[17]) },
+  { id: 'configuration', label: 'Configuration', items: menu.slice(15, 17) },
 ];
 const modules = {
   users:{title:'User Management', endpoint:'users', columns:['id','full_name','email','phone','roles','status','created_at'], fields:[['full_name','Full name','text'],['email','Email','email'],['phone','Phone','text']], create:true, actions:['role','status']},
   roles:{title:'Role and Permission Management', endpoint:'roles', columns:['id','name','description','is_active','created_at'], fields:[['name','Role name','text'],['description','Description','text']], create:true, actions:['permissions']},
   vendors:{title:'Vendor Verification', endpoint:'vendors', columns:['id','business_name','user_id','category_id','city','verification_status','verification_reason','verified_at'], actions:['verify','reject']},
   categories:{title:'Service Category Management', endpoint:'categories', columns:['id','name','description','is_active','created_at'], fields:[['name','Category name','text'],['description','Description','text']], create:true, actions:['edit','deactivate']},
-  events:{title:'Event Management', endpoint:'events', columns:['id','title','event_type','organizer_id','city','start_date','budget','status'], fields:[['organizer_id','Organizer user ID','number'],['title','Title','text'],['event_type','Event type','text'],['city','City','text'],['start_date','Start date','datetime-local'],['end_date','End date','datetime-local'],['budget','Budget','number'],['status','Status','select','draft,active,booked,in_progress,completed,cancelled'],['notes','Notes','textarea']], create:true, actions:['edit','deactivate']},
+  events:{title:'Event Management', endpoint:'events', columns:['id','title','event_type','organizer_id','city','venue','start_date','capacity','status'], fields:[['organizer_id','Organizer user ID','number'],['title','Title','text'],['event_type','Event type','text'],['description','Description (optional)','textarea'],['city','City (optional)','text'],['venue','Venue (optional)','text'],['cover_image_url','Cover image URL (optional)','url'],['start_date','Start date','datetime-local'],['end_date','End date (optional)','datetime-local'],['budget','Budget (optional)','number'],['capacity','Capacity (optional)','number'],['status','Status','select','draft,active,booked,in_progress,completed,cancelled'],['notes','Notes (optional)','textarea']], create:true, actions:['edit','deactivate']},
   bookings:{title:'Booking Management', endpoint:'bookings', columns:['id','event_id','vendor_id','service_description','quoted_amount','currency','status','moderation_reason','created_at'], actions:['moderate']},
   'package-requests':{title:'Event Package Requests', endpoint:'event-package-requests', columns:['id','event_id','event_title','event_type','requested_date','requested_location','requester_name','requester_email','service_category','guest_count','budget','notes','status','created_at'], actions:['package-status'], statuses:['new','reviewed','replied','closed']},
   payments:{title:'Payment and Refund Management', endpoint:'payments', columns:['id','booking_id','amount','currency','provider','provider_reference','status','created_at'], actions:['refund']},
   reviews:{title:'Reviews and Complaints', endpoint:'reviews', columns:['id','booking_id','rating','comment','status','created_at'], actions:['review']},
   complaints:{title:'Reviews and Complaints', endpoint:'complaints', columns:['id','user_id','booking_id','subject','details','status','resolution','created_at'], actions:['complaint']},
-  messages:{title:'Contact Messages', endpoint:'contact', columns:['id','full_name','email','subject','inquiry_type','status','created_at'], actions:['status'], statuses:['new','reviewed','replied','closed']},
+  messages:{title:'Contact Messages', endpoint:'contact', columns:['id','full_name','email','phone','subject','inquiry_type','message','status','created_at'], actions:['view','status','delete'], statuses:['new','reviewed','in_progress','replied','resolved','closed'], inquiryTypes:INQUIRY_TYPES},
   notifications:{title:'Notifications', endpoint:'notifications', columns:['id','user_id','title','message','status','created_at'], fields:[['user_id','Recipient user ID (optional)','number'],['title','Title','text'],['message','Message','textarea']], create:true},
   'audit-logs':{title:'Audit Logs', endpoint:'audit-logs', columns:['id','actor_id','action','entity_type','entity_id','details','ip_address','created_at'], readonly:true},
 };
 const permissions = ['users:read','users:write','vendors:verify','events:write','bookings:moderate','payments:read','reviews:moderate','categories:write','reports:read','notifications:write'];
 const slugPath = (slug) => slug === 'overview' ? '/admin' : `/admin/${slug}`;
+const dashboardPathForRole = (role) => role === 'admin' ? '/admin' : `/${role}/dashboard`;
+
+const dashboardMenuIcons = {
+  overview: LayoutDashboard,
+  vendors: BriefcaseBusiness,
+  services: Search,
+  categories: Tags,
+  bookings: ClipboardList,
+  history: History,
+  events: CalendarDays,
+  favorites: Heart,
+  quotations: MessageSquareWarning,
+  payments: Wallet,
+  messages: MessageSquareWarning,
+  reviews: Star,
+  notifications: Bell,
+  profile: UserRound,
+  account: UserRound,
+  settings: Settings,
+  verification: BadgeCheck,
+  'add-edit-services': BriefcaseBusiness,
+  pricing: CreditCard,
+  availability: CalendarDays,
+  requests: ClipboardList,
+  confirmed: ClipboardList,
+  reports: ChartNoAxesCombined,
+};
+
+function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, onToggle, collapsed, mobileOpen, onCloseMobile, language, className = '' }) {
+  const sidebarRef = useRef(null);
+  const [expandedGroups, setExpandedGroups] = useState(() => Object.fromEntries(groups.map((group) => [group.id, true])));
+  const [flyout, setFlyout] = useState(null);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        setFlyout(null);
+        if (window.matchMedia('(max-width: 760px)').matches) onCloseMobile();
+      }
+    }
+    function handlePointerDown(event) {
+      if (flyout && !sidebarRef.current?.contains(event.target)) setFlyout(null);
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [flyout, onCloseMobile]);
+
+  function toggleGroup(event, group) {
+    if (collapsed && group.flyoutWhenCollapsed && !window.matchMedia('(max-width: 760px)').matches) {
+      const currentFlyout = flyout?.groupId === group.id;
+      setExpandedGroups((current) => ({ ...current, [group.id]: true }));
+      setFlyout(currentFlyout ? null : { groupId: group.id, top: event.currentTarget.getBoundingClientRect().top });
+      return;
+    }
+    const shouldExpand = !expandedGroups[group.id];
+    setExpandedGroups((current) => ({ ...current, [group.id]: shouldExpand }));
+    setFlyout(null);
+  }
+
+  function renderItems(items, flyoutItems = false) {
+    return items.map(([id, label, Icon]) => {
+      const ItemIcon = Icon || dashboardMenuIcons[id] || LayoutDashboard;
+      const accessibleLabel = translateText(label, language);
+      return <button key={id} className={`nav-item ${activePage === id ? 'active' : ''}`} title={accessibleLabel} data-tooltip={accessibleLabel} aria-label={accessibleLabel} aria-current={activePage === id ? 'page' : undefined} onClick={() => {
+        setFlyout(null);
+        onNavigate(id);
+        if (window.matchMedia('(max-width: 760px)').matches) onCloseMobile();
+      }}><ItemIcon size={18}/><span>{accessibleLabel}</span>{!flyoutItems && id === 'vendors' && <span className="nav-dot"/>}</button>;
+    });
+  }
+
+  return <aside ref={sidebarRef} className={`sidebar role-dashboard-sidebar ${className} ${mobileOpen ? 'open' : ''}`} aria-label={`${roleTitle} navigation`}>
+    <button className="sidebar-collapse-toggle" type="button" onClick={onToggle} aria-label={collapsed ? 'Expand dashboard navigation' : 'Collapse dashboard navigation'} aria-expanded={!collapsed} title={collapsed ? 'Expand navigation' : 'Collapse navigation'}><span className="desktop-sidebar-chevron" aria-hidden="true">{collapsed ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</span></button>
+    <div className="sidebar-brand"><div className="brand-mark small" aria-label="EventFlow">EF</div><div className="sidebar-brand-copy"><strong>EventFlow</strong><span>{roleTitle}</span></div></div>
+    <nav aria-label="Dashboard sections">{groups.map((group) => <div className={`nav-group ${group.flyoutWhenCollapsed ? 'has-collapsed-flyout' : 'nav-group-flat'}`} key={group.id}>
+      <button className="nav-group-toggle" type="button" title={group.label} data-tooltip={group.label} aria-label={`${group.label} navigation section`} aria-expanded={collapsed && !mobileOpen ? flyout?.groupId === group.id : Boolean(expandedGroups[group.id])} onClick={(event) => toggleGroup(event, group)}><span>{group.label}</span><span className="nav-group-indicator" aria-hidden="true">{collapsed && !mobileOpen ? <ChevronRight size={15}/> : expandedGroups[group.id] ? '−' : '+'}</span></button>
+      {expandedGroups[group.id] && <div className="sidebar-group-items">{renderItems(group.items)}</div>}
+    </div>)}</nav>
+    {flyout && (() => {
+      const group = groups.find((entry) => entry.id === flyout.groupId);
+      return group ? <div className="sidebar-flyout" style={{ top: `${Math.min(flyout.top, window.innerHeight - Math.min(group.items.length * 45 + 24, window.innerHeight - 24))}px` }} aria-label={`${group.label} navigation`}>{renderItems(group.items, true)}</div> : null;
+    })()}
+  </aside>;
+}
+const toDemoUser = (profile) => ({ ...profile, full_name: profile.name, id: `demo-${profile.email}` });
 const configuredApiUrl = (import.meta.env.VITE_API_URL || '').trim();
 let apiBaseUrl = '';
 if (configuredApiUrl) {
@@ -58,15 +152,79 @@ function navigateBrowserPath(path) {
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
+function DemoModeBanner() {
+  return null;
+}
+
 async function api(path, options={}) {
+  if (DEMO_AUTH_ENABLED) {
+    if (options.signal?.aborted) throw Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
+    const route = path.split('?')[0];
+    if (options.method && options.method !== 'GET') {
+      let data = {};
+      if (options.body) {
+        try {
+          data = JSON.parse(options.body);
+        } catch {
+          throw new Error('Invalid demo request data.');
+        }
+      }
+      return { data: { ...data, id: `demo-${Date.now()}` }, message: 'Demo mode: changes are not sent to a server.' };
+    }
+    if (route === '/admin/dashboard/overview') {
+      return {
+        data: {
+          users: { total_users: 0 },
+          vendors: { total_vendors: 0, verified_vendors: 0, pending_vendors: 0 },
+          events: { total_events: 0, published_events: 0, upcoming_events: 0 },
+          bookings: { total_bookings: 0, pending_bookings: 0, confirmed_bookings: 0, completed_bookings: 0, cancelled_bookings: 0 },
+          payments: { total_payments: 0, successful_payments: 0, pending_payments: 0, refund_requests: 0 },
+          complaints: { open_complaints: 0, total_complaints: 0 },
+          reviews: { total_reviews: 0 },
+          bookingTrend: [],
+          eventCategories: [],
+          revenueByCurrency: [],
+          bookingStatuses: [],
+          recentBookings: [],
+          recentVendorRequests: [],
+          recentComplaints: [],
+          recentReviews: [],
+        },
+      };
+    }
+    if (route === '/platform/overview' || route === '/customer/overview' || route === '/vendor/overview') {
+      return { data: {} };
+    }
+    if (route === '/about' || route === '/contact' || route === '/vendor/profile' || route === '/vendor/account' || route === '/customer/profile') {
+      return { data: {} };
+    }
+    return { data: [], pagination: { page: 1, total: 0, totalPages: 1, limit: 12 } };
+  }
   if (!apiBaseUrl && import.meta.env.PROD) {
     throw new Error('API is not configured. Set VITE_API_URL in the deployment environment and redeploy.');
   }
-  const response = await fetch(`${apiBaseUrl}/api${path}`, { credentials:'include', ...options, headers:{ ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) } });
-  if (response.status === 204) return null;
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(result.message || result.error || `Request failed (${response.status}).`), { status: response.status });
-  return result;
+  try {
+    const response = await axios.request({
+      url: `${apiBaseUrl}/api${path}`,
+      method: options.method || 'GET',
+      data: options.body,
+      signal: options.signal,
+      withCredentials: true,
+      headers: { ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) },
+    });
+    if (response.status === 204) return null;
+    return response.data === '' || response.data === undefined ? {} : response.data;
+  } catch (error) {
+    if (axios.isCancel(error)) {
+      throw Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
+    }
+    if (axios.isAxiosError(error) && error.response) {
+      const result = error.response.data;
+      const message = result && typeof result === 'object' && (result.message || result.error);
+      throw Object.assign(new Error(message || `Request failed (${error.response.status}).`), { status: error.response.status });
+    }
+    throw error;
+  }
 }
 function display(value) {
   if (value === null || value === undefined || value === '') return '—';
@@ -93,6 +251,11 @@ const PUBLIC_NAV_ITEMS = [
   { key: 'about', label: 'About Us', path: '/about' },
   { key: 'contact', label: 'Contact Us', path: '/contact' },
 ];
+const PUBLIC_NOTIFICATION_ENDPOINTS = {
+  admin: '/admin/notifications?page=1&pageSize=8',
+  customer: '/customer/notifications',
+  vendor: '/vendor/notifications',
+};
 
 const ROUTE_LABELS = {
   '/': 'Home',
@@ -112,66 +275,247 @@ const ROUTE_LABELS = {
 
 function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpenRegister }) {
   const language = useLanguage();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationItems, setNotificationItems] = useState([]);
+  const [notificationLoading, setNotificationLoading] = useState(false);
+  const [notificationError, setNotificationError] = useState('');
+  const [notificationRetry, setNotificationRetry] = useState(0);
   const isAuthenticated = Boolean(user);
-  const guestItems = [...PUBLIC_NAV_ITEMS];
-  let roleItems = guestItems;
+  const routePath = currentPath.split('?')[0];
+  const accountMenuRef = useRef(null);
+  const headerToolsRef = useRef(null);
+  const role = user?.role || 'customer';
+  const dashboardPath = dashboardPathForRole(role);
+  const displayName = user?.name || user?.full_name || user?.email || 'EventHub User';
+  const notificationEndpoint = isAuthenticated ? PUBLIC_NOTIFICATION_ENDPOINTS[role] : null;
+  const unreadCount = notificationItems.filter((item) => !(item.read || item.status === 'read')).length;
 
-  if (isAuthenticated) {
-    const role = user.role || 'customer';
-    if (role === 'admin') {
-      roleItems = [
-        { key: 'dashboard', label: 'Admin Dashboard', path: '/admin/dashboard' },
-        { key: 'users', label: 'User Management', path: '/admin/users' },
-        { key: 'roles', label: 'Role and Permission Management', path: '/admin/roles' },
-        { key: 'vendors', label: 'Vendor Verification', path: '/admin/vendor-verification' },
-        { key: 'bookings', label: 'Bookings', path: '/admin/bookings' },
-        { key: 'reports', label: 'Reports', path: '/admin/reports' },
-        { key: 'system', label: 'System Control Center', path: '/admin/system-control' },
-      ];
-    } else if (role === 'organizer') {
-      roleItems = [
-        { key: 'dashboard', label: 'Organizer Dashboard', path: '/organizer/dashboard' },
-        { key: 'events', label: 'My Events', path: '/organizer/events' },
-        { key: 'vendors', label: 'Find Vendors', path: '/organizer/vendors' },
-        { key: 'bookings', label: 'My Bookings', path: '/organizer/bookings' },
-        { key: 'quotations', label: 'Quotations', path: '/organizer/quotations' },
-        { key: 'budget', label: 'Budget', path: '/organizer/budget' },
-      ];
-    } else if (role === 'vendor') {
-      roleItems = [
-        { key: 'dashboard', label: 'Vendor Dashboard', path: '/vendor/dashboard' },
-        { key: 'services', label: 'My Services', path: '/vendor/services' },
-        { key: 'availability', label: 'Availability', path: '/vendor/availability' },
-        { key: 'bookings', label: 'Booking Requests', path: '/vendor/bookings' },
-        { key: 'quotations', label: 'Quotations', path: '/vendor/quotations' },
-        { key: 'earnings', label: 'Earnings', path: '/vendor/earnings' },
-      ];
-    } else {
-      roleItems = [
-        { key: 'dashboard', label: 'Customer Dashboard', path: '/customer/dashboard' },
-        { key: 'vendors', label: 'Browse Vendors', path: '/customer/vendors' },
-        { key: 'bookings', label: 'My Bookings', path: '/customer/bookings' },
-        { key: 'events', label: 'My Events', path: '/customer/events' },
-        { key: 'favorites', label: 'Saved Vendors', path: '/customer/favorites' },
-        { key: 'payments', label: 'Payments', path: '/customer/payments' },
-      ];
+  useEffect(() => {
+    if (!notificationEndpoint) {
+      setNotificationItems([]);
+      setNotificationLoading(false);
+      setNotificationError('');
+      return undefined;
     }
-  }
 
-  const navItems = isAuthenticated ? roleItems : guestItems;
+    const controller = new AbortController();
+    setNotificationLoading(true);
+    setNotificationError('');
+    api(notificationEndpoint, { signal: controller.signal })
+      .then((response) => {
+        if (!Array.isArray(response?.data)) throw new Error('Notifications could not be loaded because the response was invalid.');
+        setNotificationItems(response.data);
+      })
+      .catch((error) => {
+        if (error.name === 'AbortError') return;
+        setNotificationError(error.message || 'Notifications could not be loaded.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setNotificationLoading(false);
+      });
 
-  return <header className="site-header"><div className="site-header-inner"><button type="button" className="site-brand" onClick={() => onNavigate('/')} aria-label={translate('goHome', language)}><span className="brand-mark small">EH</span><div><strong>EventHub</strong><small>{translate('platform', language)}</small></div></button><nav className="site-nav" aria-label={translate('mainNavigation', language)}>{navItems.map((item) => <button key={item.path} type="button" className={`nav-link ${currentPath === item.path ? 'active' : ''}`} onClick={() => onNavigate(item.path)}>{translateText(item.label, language)}</button>)}<LanguageSelector/></nav><div className="header-actions"><button type="button" className="icon-button ghost" aria-label={translate('search', language)} title={translate('search', language)}><Search size={16}/></button><button type="button" className="icon-button ghost" aria-label={translate('notifications', language)} title={translate('notifications', language)}><Bell size={16}/></button>{isAuthenticated ? <><button type="button" className="button secondary small" onClick={() => onNavigate(roleItems[0]?.path || '/')}>{translate(`${user?.role || 'customer'}Dashboard`, language)}</button><button type="button" className="button secondary small" onClick={onLogout}>{translate('logout', language)}</button></> : <><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></>}</div></div></header>;
+    return () => controller.abort();
+  }, [notificationEndpoint, notificationRetry]);
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (!headerToolsRef.current?.contains(event.target)) {
+        setNotificationsOpen(false);
+      }
+    }
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        setNotificationsOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  return <header className="site-header"><div className="site-header-inner">
+    <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}><span className="brand-mark small">EH</span><div><strong>EventHub</strong><small>{translate('platform', language)}</small></div></a>
+    <button type="button" className="mobile-nav-toggle" aria-label={translate(mobileMenuOpen ? 'closeMenu' : 'openMenu', language)} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X size={20}/> : <Menu size={20}/>}</button>
+    <nav className={`site-nav ${mobileMenuOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}>{PUBLIC_NAV_ITEMS.map((item) => <a key={item.path} href={item.path} className={`nav-link ${routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'active' : ''}`} aria-current={routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'page' : undefined} onClick={(event) => { event.preventDefault(); setMobileMenuOpen(false); onNavigate(item.path); }}>{translateText(item.label, language)}</a>)}</nav>
+    <div className="header-actions">
+      {isAuthenticated && <div className="public-header-tools" ref={headerToolsRef}>
+        <div className="public-notification-anchor">
+          <button type="button" className="icon-button public-notification-toggle" aria-label={`${translate('notifications', language)}${unreadCount ? `, ${unreadCount} unread` : ''}`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Bell size={17}/>{unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}</button>
+          {notificationsOpen && <section className="public-notification-panel" aria-label={translate('notifications', language)} aria-live="polite">
+            <div className="public-notification-heading"><strong>{translate('notifications', language)}</strong><span>{notificationEndpoint ? (unreadCount ? `${unreadCount} unread` : 'All caught up') : 'Notifications are not available for this account role.'}</span></div>
+            {!notificationEndpoint ? <div className="public-notification-empty">Notifications are not available for this account role.</div> :
+              notificationLoading ? <div className="public-notification-empty">Loading notifications…</div> :
+                notificationError ? <div className="public-notification-error"><span>{notificationError}</span><button type="button" onClick={() => setNotificationRetry((retry) => retry + 1)}>Retry</button></div> :
+                  notificationItems.length ? <ul>{notificationItems.slice(0, 8).map((item) => <li key={item.id}>
+                    <strong>{item.title}</strong><p>{item.message}</p>
+                    {(item.createdAt || item.created_at) && <time dateTime={item.createdAt || item.created_at}>{new Date(item.createdAt || item.created_at).toLocaleString()}</time>}
+                  </li>)}</ul> : <div className="public-notification-empty">You’re all caught up.</div>}
+          </section>}
+        </div>
+      </div>}
+      <LanguageSelector/><ThemeToggle/>
+      {isAuthenticated ? <details className="public-account" ref={accountMenuRef}>
+      <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
+      <div className="public-account-menu"><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
+    </details> : <div className="public-auth-actions"><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></div>}</div>
+  </div></header>;
 }
 
 function LanguageSelector() {
   const language = useLanguage();
-  return <label className="language-picker"><Languages size={15} aria-hidden="true"/><span className="sr-only">{translate('language', language)}</span><select aria-label={translate('language', language)} value={language} onChange={(event) => setLanguage(event.target.value)}><option value="en">English</option><option value="am">አማርኛ</option></select></label>;
+  return <label className="language-picker">
+    <span className="visually-hidden">{translate('languageLabel', language)}</span>
+    <select value={language} aria-label={translate('languageLabel', language)} onChange={(event) => setLanguage(event.target.value)}>
+      <option value="en">English</option>
+      <option value="am">አማርኛ</option>
+    </select>
+  </label>;
 }
 
-function PasswordField({ name, label, value, onChange, autoComplete = 'current-password', language }) {
+function ThemeToggle() {
+  const language = useLanguage();
+  const theme = useTheme();
+  const nextTheme = theme === 'light' ? 'dark' : 'light';
+  return <button type="button" className="theme-toggle" aria-label={translate(theme === 'light' ? 'switchToDarkMode' : 'switchToLightMode', language)} title={translate(theme === 'light' ? 'switchToDarkMode' : 'switchToLightMode', language)} onClick={() => setTheme(nextTheme)}>
+    {theme === 'light' ? <Moon size={16}/> : <Sun size={16}/>}<span>{translate(theme === 'light' ? 'lightMode' : 'darkMode', language)}</span>
+  </button>;
+}
+
+function DashboardHeader({ user, onLogout, onToggleSidebar, sidebarExpanded }) {
+  const [activePanel, setActivePanel] = useState('');
+  const [viewingPhoto, setViewingPhoto] = useState(false);
+  const [avatar, setAvatar] = useState(() => {
+    try {
+      return window.localStorage.getItem(`eventhub-demo-avatar:${user.email}`) || '';
+    } catch {
+      return '';
+    }
+  });
+  const headerRef = useRef(null);
+  const photoButtonRef = useRef(null);
+  const closePhotoButtonRef = useRef(null);
+  const role = user.role || 'customer';
+  const name = user.name || user.full_name || 'EventHub User';
+  const notifications = [
+    { id: 'booking', title: 'Booking update', message: 'Your recent booking activity is ready to review.', unread: true },
+    { id: 'profile', title: 'Profile reminder', message: 'Keep your account details up to date.', unread: true },
+    { id: 'welcome', title: 'Welcome to EventHub', message: 'Explore your dashboard and discover what you can do.', unread: false },
+  ];
+  const [items, setItems] = useState(notifications);
+  const unreadCount = items.filter((item) => item.unread).length;
+
+  useEffect(() => {
+    try {
+      setAvatar(window.localStorage.getItem(`eventhub-demo-avatar:${user.email}`) || '');
+    } catch {
+      setAvatar('');
+    }
+  }, [user.email]);
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (!headerRef.current?.contains(event.target)) setActivePanel('');
+    }
+    function handleKeyDown(event) {
+      if (event.key === 'Escape') {
+        setActivePanel('');
+        setViewingPhoto(false);
+      }
+    }
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!viewingPhoto) return undefined;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    closePhotoButtonRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      photoButtonRef.current?.focus();
+    };
+  }, [viewingPhoto]);
+
+  return <header className="dashboard-header" ref={headerRef}>
+    <button className="icon-button dashboard-menu-toggle" type="button" onClick={onToggleSidebar} aria-label={sidebarExpanded ? 'Close dashboard navigation' : 'Open dashboard navigation'} aria-expanded={sidebarExpanded}><Menu size={19}/></button>
+    <div className="dashboard-header-actions">
+      <LanguageSelector/>
+      <ThemeToggle/>
+      <div className="dashboard-popover-anchor">
+        <button className="icon-button notification-toggle" type="button" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} aria-expanded={activePanel === 'notifications'} onClick={() => setActivePanel((current) => current === 'notifications' ? '' : 'notifications')}><Bell size={19}/>{unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}</button>
+        {activePanel === 'notifications' && <section className="dashboard-popover notification-popover" aria-label="Notifications">
+          <div className="popover-heading"><div><strong>Notifications</strong><span>{unreadCount ? `${unreadCount} unread` : 'All caught up'}</span></div><button className="text-action" type="button" onClick={() => setItems((current) => current.map((item) => ({ ...item, unread: false })))} disabled={!unreadCount}>Mark all read</button></div>
+          {items.length ? <div className="notification-list">{items.map((item) => <article className={`notification-item ${item.unread ? 'unread' : ''}`} key={item.id}><div><strong>{item.title}</strong><p>{item.message}</p></div>{item.unread && <button className="text-action" type="button" onClick={() => setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry))}>Mark read</button>}</article>)}</div> : <div className="notification-empty"><Bell size={20}/><strong>No notifications</strong><span>You’re all caught up.</span></div>}
+          <div className="popover-footer"><button className="text-action subtle-danger" type="button" onClick={() => setItems([])} disabled={!items.length}>Clear notifications</button></div>
+        </section>}
+      </div>
+      <button ref={photoButtonRef} className="dashboard-photo-toggle" type="button" aria-label={`View ${name}'s profile photo`} title="View photo" onClick={() => { setActivePanel(''); setViewingPhoto(true); }}>
+        <span className="dashboard-avatar">{avatar ? <img src={avatar} alt="" /> : <UserRound size={19}/>}</span>
+      </button>
+      <div className="dashboard-profile-copy"><strong>{name}</strong><small>{role}</small></div>
+      <button className="icon-button dashboard-logout" type="button" aria-label="Logout" title="Logout" onClick={onLogout}><LogOut size={17}/></button>
+    </div>
+    {viewingPhoto && <div className="profile-photo-overlay" onClick={(event) => { if (event.target === event.currentTarget) setViewingPhoto(false); }}>
+      <section className="profile-photo-modal" role="dialog" aria-modal="true" aria-labelledby="profile-photo-title">
+        <button ref={closePhotoButtonRef} className="icon-button profile-photo-close" type="button" aria-label="Close photo" onClick={() => setViewingPhoto(false)}><X size={19}/></button>
+        <h2 id="profile-photo-title">Profile photo</h2>
+        <div className="profile-photo-preview">{avatar ? <img src={avatar} alt={`${name}'s profile`} /> : <UserRound size={104} aria-label="Default profile avatar"/>}</div>
+        <strong className="profile-photo-name">{name}</strong>
+        <span className="profile-photo-email">{user.email}</span>
+        <span className="profile-photo-role">{role}</span>
+      </section>
+    </div>}
+  </header>;
+}
+
+function DashboardSettings({ user }) {
+  const storageKey = `eventhub-demo-settings:${user.email}`;
+  const [initialPreferences] = useState(() => {
+    try {
+      const saved = window.localStorage.getItem(storageKey);
+      if (saved === null) return { settings: { emailNotifications: true, weeklySummary: false }, error: '' };
+      const parsed = JSON.parse(saved);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Saved preferences are invalid.');
+      return { settings: { emailNotifications: parsed.emailNotifications !== false, weeklySummary: parsed.weeklySummary === true }, error: '' };
+    } catch {
+      return { settings: { emailNotifications: true, weeklySummary: false }, error: 'Preferences could not be loaded from browser storage.' };
+    }
+  });
+  const [settings, setSettings] = useState(initialPreferences.settings);
+  const [storageError, setStorageError] = useState(initialPreferences.error);
+  function toggleSetting(key) {
+    const next = { ...settings, [key]: !settings[key] };
+    setSettings(next);
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(next));
+      setStorageError('');
+    } catch {
+      setStorageError('Changes apply for this visit, but browser storage is unavailable.');
+    }
+  }
+  return <section className="dashboard-settings">
+    <div className="page-heading"><div><p className="eyebrow">ACCOUNT</p><h2>Account settings</h2><p className="muted">Manage local preferences for this browser.</p></div></div>
+    <div className="panel settings-preferences">
+      <label><span><strong>Email notifications</strong><small>Show account and booking updates in this demo.</small></span><input type="checkbox" checked={Boolean(settings.emailNotifications)} onChange={() => toggleSetting('emailNotifications')}/></label>
+      <label><span><strong>Weekly summary</strong><small>Enable a weekly activity summary preference.</small></span><input type="checkbox" checked={Boolean(settings.weeklySummary)} onChange={() => toggleSetting('weeklySummary')}/></label>
+      {storageError && <p className="field-error" role="status">{storageError}</p>}
+    </div>
+  </section>;
+}
+
+function PasswordField({ name, label, value, onChange, autoComplete = 'current-password', language, placeholder, minLength, maxLength, describedBy, invalid = false }) {
   const [visible, setVisible] = useState(false);
   const inputId = `auth-${name}`;
-  return <div className="field"><span id={`${inputId}-label`}>{label}</span><div className="password-input-wrap"><input id={inputId} aria-labelledby={`${inputId}-label`} name={name} type={visible ? 'text' : 'password'} autoComplete={autoComplete} value={value} onChange={onChange} required /><button className="password-visibility" type="button" aria-label={translate(visible ? 'hidePassword' : 'showPassword', language)} title={translate(visible ? 'hidePassword' : 'showPassword', language)} onClick={() => setVisible((current) => !current)}>{visible ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div>;
+  return <div className="field"><span id={`${inputId}-label`}>{label}</span><div className="password-input-wrap"><input id={inputId} aria-labelledby={`${inputId}-label`} aria-describedby={describedBy} aria-invalid={invalid || undefined} name={name} type={visible ? 'text' : 'password'} autoComplete={autoComplete} placeholder={placeholder} minLength={minLength} maxLength={maxLength} value={value} onChange={onChange} required /><button className="password-visibility" type="button" aria-label={translate(visible ? 'hidePassword' : 'showPassword', language)} title={translate(visible ? 'hidePassword' : 'showPassword', language)} onClick={() => setVisible((current) => !current)}>{visible ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div>;
 }
 
 function AppFooter() {
@@ -232,14 +576,211 @@ function BackToTopButton() {
   return <button type="button" className="back-to-top" aria-label="Back to top" onClick={() => window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' })}>↑</button>;
 }
 
-function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
+function SearchResultsPage({ initialQuery, onNavigate }) {
+  const [query, setQuery] = useState(initialQuery);
+  const [results, setResults] = useState({ events: [], vendors: [], services: [], categories: [] });
+  const [errors, setErrors] = useState({});
+  const [loading, setLoading] = useState(Boolean(initialQuery));
+  const [searchError, setSearchError] = useState('');
+  const [retryKey, setRetryKey] = useState(0);
+
+  useEffect(() => {
+    setQuery(initialQuery);
+  }, [initialQuery]);
+
+  useEffect(() => {
+    const term = initialQuery.trim();
+    if (!term) {
+      setLoading(false);
+      setResults({ events: [], vendors: [], services: [], categories: [] });
+      setErrors({});
+      return undefined;
+    }
+
+    let active = true;
+    setLoading(true);
+    setErrors({});
+    const encoded = encodeURIComponent(term);
+    Promise.allSettled([
+      api(`/platform/events?search=${encoded}&page=1&limit=6`),
+      api(`/platform/vendors?search=${encoded}&page=1&limit=6`),
+      api(`/platform/services?search=${encoded}&page=1&limit=6`),
+      api(`/platform/categories?search=${encoded}`),
+    ]).then((responses) => {
+      if (!active) return;
+      const keys = ['events', 'vendors', 'services', 'categories'];
+      const nextResults = {};
+      const nextErrors = {};
+      responses.forEach((result, index) => {
+        const key = keys[index];
+        if (result.status === 'rejected') {
+          nextResults[key] = [];
+          nextErrors[key] = result.reason?.message || `Unable to search ${key}.`;
+        } else {
+          nextResults[key] = Array.isArray(result.value?.data) ? result.value.data : [];
+        }
+      });
+      setResults(nextResults);
+      setErrors(nextErrors);
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+
+    return () => { active = false; };
+  }, [initialQuery, retryKey]);
+
+  function submitSearch(event) {
+    event.preventDefault();
+    const term = query.trim();
+    if (!term) {
+      setSearchError('Enter a search term.');
+      return;
+    }
+    setSearchError('');
+    onNavigate(`/search?q=${encodeURIComponent(term)}`);
+  }
+
+  const sections = [
+    { key: 'events', title: 'Events', getTitle: (item) => item.title, getPath: (item) => `/events/${encodeURIComponent(item.id)}` },
+    { key: 'vendors', title: 'Vendors', getTitle: (item) => item.business_name || item.name, getPath: (item) => `/vendors/${encodeURIComponent(item.id)}` },
+    { key: 'services', title: 'Services', getTitle: (item) => item.title, getPath: (item) => `/services/${encodeURIComponent(item.id)}` },
+    { key: 'categories', title: 'Categories', getTitle: (item) => item.name, getPath: (item) => `/categories/${encodeURIComponent(item.slug || item.name)}` },
+  ];
+  const hasResults = Object.values(results).some((items) => items.length > 0);
+
+  return <main className="page-shell"><div className="content-stack">
+    <div className="section-header"><div><p className="eyebrow">DISCOVERY</p><h1>Search EventFlow</h1><p className="muted">Search events, vendors, services, categories, and locations.</p></div></div>
+    <form className="panel home-global-search" role="search" onSubmit={submitSearch}>
+      <label className="search-box"><Search size={16}/><input autoFocus type="search" maxLength="120" value={query} onChange={(event) => { setQuery(event.target.value); setSearchError(''); }} aria-label="Search events, vendors, services, categories, and locations" placeholder="Try a service, city, or category" /></label>
+      <button className="button" type="submit">Search</button>
+    </form>
+    {searchError && <p className="field-error" role="alert">{searchError}</p>}
+    {loading ? <div className="loading" role="status"><span className="spinner"/>Searching public listings…</div>
+      : initialQuery ? <div className="search-result-sections">
+        {sections.map((section) => <section key={section.key} className="content-stack">
+          <div className="section-header compact-header"><div><p className="eyebrow">{section.title.toUpperCase()}</p><h2>{section.title}</h2></div></div>
+          {errors[section.key] ? <div className="alert error" role="alert">{errors[section.key]}<button className="button secondary small" type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry search</button></div>
+            : results[section.key].length ? <div className="search-result-list">{results[section.key].map((item) => <button className="info-card" key={item.id} type="button" onClick={() => onNavigate(section.getPath(item))}>
+              <strong>{section.getTitle(item) || 'Untitled listing'}</strong>
+              <span>{item.city || item.location || item.type || item.category || item.description || ''}</span>
+            </button>)}</div>
+              : <p className="muted">No matching {section.title.toLowerCase()}.</p>}
+        </section>)}
+        {!hasResults && !Object.keys(errors).length && <div className="empty panel"><strong>No results found</strong><span>Try a different search term or browse the public listings.</span></div>}
+      </div> : <div className="empty panel"><strong>Search public listings</strong><span>Enter an event, vendor, service, category, or location above.</span></div>}
+  </div></main>;
+}
+
+function VendorApplicationPage({ user, onNavigate }) {
+  const [application, setApplication] = useState(null);
+  const [categories, setCategories] = useState([]);
+  const [form, setForm] = useState({ businessName: '', categoryId: '', city: '', description: '' });
+  const [loading, setLoading] = useState(Boolean(user));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [categoryError, setCategoryError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  useEffect(() => {
+    if (!user || !['customer', 'organizer'].includes(user.role)) {
+      setLoading(false);
+      return undefined;
+    }
+    let active = true;
+    Promise.allSettled([api('/platform/vendor-application'), api('/platform/categories')]).then(([applicationResult, categoryResult]) => {
+      if (!active) return;
+      if (applicationResult.status === 'rejected') {
+        setError(applicationResult.reason?.message || 'Unable to load vendor application details.');
+        return;
+      }
+      const applicationResponse = applicationResult.value;
+      const categoryResponse = categoryResult.status === 'fulfilled' ? categoryResult.value : null;
+      const current = applicationResponse?.data && !Array.isArray(applicationResponse.data) ? applicationResponse.data : null;
+      setApplication(current);
+      setCategories(Array.isArray(categoryResponse?.data) ? categoryResponse.data : []);
+      if (categoryResult.status === 'rejected') setCategoryError(categoryResult.reason?.message || 'Service categories are unavailable.');
+      if (current) {
+        setForm({
+          businessName: current.business_name || '',
+          categoryId: current.category_id ? String(current.category_id) : '',
+          city: current.city || '',
+          description: current.description || '',
+        });
+      }
+      setError('');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, [user]);
+
+  async function submitApplication(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await api('/platform/vendor-application', {
+        method: 'POST',
+        body: JSON.stringify({
+          businessName: form.businessName.trim(),
+          categoryId: form.categoryId || null,
+          city: form.city.trim(),
+          description: form.description.trim(),
+        }),
+      });
+      if (response?.data?.verificationStatus === 'pending') {
+        setApplication({ ...response.data, business_name: form.businessName.trim() });
+      }
+      setNotice(response?.message || 'Your application was submitted for review.');
+    } catch (issue) {
+      setError(issue.message || 'Unable to submit your vendor application.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!user) return <main className="page-shell"><div className="content-stack"><div className="empty panel"><strong>Sign in to apply as a vendor</strong><span>Vendor applications are linked to your EventFlow account and reviewed before approval.</span><button className="button" type="button" onClick={() => { sessionStorage.setItem('eventhub_after_login', '/vendor-application'); onNavigate('/login'); }}>Sign in</button><button className="button secondary" type="button" onClick={() => onNavigate('/register?role=vendor')}>Create a vendor account</button></div></div></main>;
+  if (user.role === 'vendor') return <main className="page-shell"><div className="empty panel"><strong>Vendor account</strong><span>Manage your vendor profile and application status from your dashboard.</span><button className="button" type="button" onClick={() => onNavigate('/vendor/dashboard')}>Open vendor dashboard</button></div></main>;
+  if (user.role === 'admin') return <main className="page-shell"><div className="empty panel"><strong>Admin account</strong><span>Vendor approval and role management remain with the admin dashboard.</span><button className="button" type="button" onClick={() => onNavigate('/admin')}>Open admin dashboard</button></div></main>;
+  if (!['customer', 'organizer'].includes(user.role)) return <main className="page-shell"><div className="alert error">This account is not eligible to submit a vendor application.</div></main>;
+
+  return <main className="page-shell"><div className="content-stack vendor-application-page">
+    <div className="section-header"><div><p className="eyebrow">VENDOR ONBOARDING</p><h1>Apply to become a vendor</h1><p className="muted">Applications are reviewed by the EventFlow team. Submitting this form does not grant vendor access.</p></div></div>
+    {error && <div className="alert error" role="alert">{error}</div>}
+    {categoryError && <div className="alert warning" role="status">{categoryError} You may submit without selecting a category.</div>}
+    {notice && <div className="alert success" role="status">{notice}</div>}
+    {loading ? <div className="loading" role="status"><span className="spinner"/>Loading application status…</div>
+      : application?.verification_status === 'pending' ? <section className="panel vendor-application-status"><span className="pill pending">Pending review</span><h2>{application.business_name}</h2><p>Your application is already with our review team. You can’t submit another application while this one is pending.</p>{application.category_name && <p>Category: {application.category_name}</p>}</section>
+        : application?.verification_status === 'verified' ? <section className="panel vendor-application-status"><span className="pill verified">Approved</span><h2>{application.business_name}</h2><p>Your vendor profile has been approved. Vendor permissions are not granted automatically; contact an administrator if your account role has not been updated.</p></section>
+          : <form className="panel vendor-application-form" onSubmit={submitApplication}>
+            {application?.verification_status === 'rejected' && <p className="alert error">Previous application was not approved: {application.verification_reason || 'No reason was provided.'} You may update the details and resubmit.</p>}
+            <label className="field"><span>Business name</span><input name="businessName" minLength="2" maxLength="160" required value={form.businessName} onChange={(event) => setForm((current) => ({ ...current, businessName: event.target.value }))}/></label>
+            <label className="field"><span>Service category</span><select name="categoryId" value={form.categoryId} onChange={(event) => setForm((current) => ({ ...current, categoryId: event.target.value }))}><option value="">Select a category (optional)</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+            <label className="field"><span>City or service area</span><input name="city" maxLength="120" value={form.city} onChange={(event) => setForm((current) => ({ ...current, city: event.target.value }))}/></label>
+            <label className="field"><span>Business description</span><textarea name="description" rows="4" maxLength="1500" value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}/></label>
+            <button type="submit" className="button" disabled={busy || loading}>{busy ? 'Submitting…' : application?.verification_status === 'rejected' ? 'Resubmit application' : 'Submit application'}</button>
+          </form>}
+  </div></main>;
+}
+
+function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [vendors, setVendors] = useState([]);
   const [services, setServices] = useState([]);
   const [events, setEvents] = useState([]);
-  const [summary, setSummary] = useState({ totalUsers: 0, totalVendors: 0, totalEvents: 0, totalBookings: 0 });
+  const [categories, setCategories] = useState([]);
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState({});
+  const [retryKey, setRetryKey] = useState(0);
   const [activeSlide, setActiveSlide] = useState(0);
+  const [carouselPaused, setCarouselPaused] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [searchError, setSearchError] = useState('');
+  const [requestService, setRequestService] = useState(null);
+  const touchStartX = useRef(null);
 
   const featureSlides = useMemo(() => [
     { title: t('weddingPlanning'), image: 'https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=1200&q=80', description: t('weddingPlanningCopy') },
@@ -247,61 +788,116 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
     { title: t('birthdayCelebrations'), image: 'https://images.unsplash.com/photo-1469371670807-013ccf25f16a?auto=format&fit=crop&w=1200&q=80', description: t('birthdayCelebrationsCopy') },
   ], [language]);
 
-  const categoryCards = [
-    { name: t('weddings'), image: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=80', path: '/events' },
-    { name: t('catering'), image: 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=900&q=80', path: '/services' },
-    { name: t('photography'), image: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80', path: '/vendors' },
-    { name: t('decorStyling'), image: 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80', path: '/categories' },
+  const categoryExamples = [
+    { name: t('weddings'), image: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=80' },
+    { name: t('catering'), image: 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=900&q=80' },
+    { name: t('photography'), image: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80' },
+    { name: t('decorStyling'), image: 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80' },
   ];
+  const categoryCards = categories.slice(0, 4).map((category, index) => ({
+    ...category,
+    image: category.image || categoryExamples[index % categoryExamples.length].image,
+    path: `/categories/${encodeURIComponent(category.slug || category.name)}`,
+  }));
+  const categoryChips = ['Weddings', 'Corporate', 'Graduations', 'Catering', 'Decor', 'Photography'].map((name) => {
+    const category = categories.find((item) => `${item.name} ${item.slug}`.toLowerCase().includes(name.toLowerCase()));
+    return {
+      name: category?.name || name,
+      path: category
+        ? `/categories/${encodeURIComponent(category.slug || category.name)}`
+        : `/categories?search=${encodeURIComponent(name)}`,
+    };
+  });
 
   useEffect(() => {
     const controller = new AbortController();
     async function loadLandingData() {
-      try {
-        const [overviewResponse, vendorsResponse, servicesResponse, eventsResponse] = await Promise.all([
-          api('/platform/overview', { signal: controller.signal }),
-          api('/platform/vendors', { signal: controller.signal }),
-          api('/platform/services', { signal: controller.signal }),
-          api('/platform/events', { signal: controller.signal }),
-        ]);
+      setLoading(true);
+      const results = await Promise.allSettled([
+        api('/about/homepage-statistics', { signal: controller.signal }),
+        api('/platform/categories', { signal: controller.signal }),
+        api('/platform/vendors?page=1&limit=4&sort=recommended', { signal: controller.signal }),
+        api('/platform/services?page=1&limit=4&sort=recommended', { signal: controller.signal }),
+        api('/platform/events?page=1&limit=3&sort=upcoming', { signal: controller.signal }),
+      ]);
+      if (controller.signal.aborted) return;
 
-        setSummary(overviewResponse?.data || {});
-        setVendors(Array.isArray(vendorsResponse?.data) ? vendorsResponse.data : []);
-        setServices(Array.isArray(servicesResponse?.data) ? servicesResponse.data : []);
-        setEvents(Array.isArray(eventsResponse?.data) ? eventsResponse.data : []);
-      } catch (error) {
-        if (error.name === 'AbortError') return;
-        setVendors([]);
-        setServices([]);
-        setEvents([]);
-      }
+      const [statisticsResult, categoriesResult, vendorsResult, servicesResult, eventsResult] = results;
+      const nextErrors = {};
+      const getData = (result, key) => {
+        if (result.status === 'rejected') {
+          nextErrors[key] = result.reason?.message || `Unable to load ${key}.`;
+          return null;
+        }
+        return result.value?.data;
+      };
+      const statistics = getData(statisticsResult, 'statistics');
+      const categoryData = getData(categoriesResult, 'categories');
+      const vendorData = getData(vendorsResult, 'vendors');
+      const serviceData = getData(servicesResult, 'services');
+      const eventData = getData(eventsResult, 'events');
+      setSummary(statistics && typeof statistics === 'object' ? statistics : null);
+      setCategories(Array.isArray(categoryData) ? categoryData : []);
+      setVendors(Array.isArray(vendorData) ? vendorData : []);
+      setServices(Array.isArray(serviceData) ? serviceData : []);
+      setEvents(Array.isArray(eventData) ? eventData : []);
+      setLoadErrors(nextErrors);
+      setLoading(false);
     }
 
     loadLandingData();
     return () => controller.abort();
-  }, []);
+  }, [retryKey]);
 
   useEffect(() => {
     const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReducedMotion) return undefined;
+    if (prefersReducedMotion || carouselPaused) return undefined;
     const timer = window.setInterval(() => {
       setActiveSlide((current) => (current + 1) % featureSlides.length);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [featureSlides]);
-
-  const stats = [
-    { label: t('vendorsLive'), value: `${summary.totalVendors || vendors.length || 120}+` },
-    { label: t('eventsPlanned'), value: `${summary.totalEvents || events.length || 4800}` },
-    { label: t('bookingsClosed'), value: `${summary.totalBookings || 9400}` },
-  ];
+  }, [featureSlides.length, carouselPaused]);
 
   const displayVendors = vendors.slice(0, 4);
   const displayServices = services.slice(0, 4);
   const displayEvents = events.slice(0, 3);
+  const stats = summary ? [
+    { label: 'Average vendor rating', value: summary.averageVendorRating },
+    { label: 'Confirmed or completed bookings', value: summary.confirmedOrCompletedBookingCount },
+    { label: 'Approved active vendors', value: summary.activeVendorCount },
+    { label: 'Published or completed events', value: summary.publishedEventCount },
+    { label: 'Completed bookings', value: summary.completedBookingCount },
+  ].filter((stat) => stat.value !== null && stat.value !== undefined) : [];
+
+  function submitSearch(event) {
+    event.preventDefault();
+    const query = searchTerm.trim();
+    if (!query) {
+      setSearchError('Enter a search term to find events, vendors, services, categories, or locations.');
+      return;
+    }
+    setSearchError('');
+    onNavigate(`/search?q=${encodeURIComponent(query)}`);
+  }
+
+  function moveSlide(direction) {
+    setActiveSlide((current) => (current + direction + featureSlides.length) % featureSlides.length);
+  }
+
+  function becomeVendor() {
+    if (!user) {
+      onNavigate('/register?role=vendor');
+    } else if (user.role === 'vendor') {
+      onNavigate('/vendor/dashboard');
+    } else if (user.role === 'admin') {
+      onNavigate('/admin');
+    } else {
+      onNavigate('/vendor-application');
+    }
+  }
 
   return <>
-    <AppHeader user={null} currentPath={currentPath || '/'} onNavigate={onNavigate} onLogout={() => {}} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />
+    <AppHeader user={user} currentPath={currentPath || '/'} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />
     <main className="platform-landing">
       <section className="hero-section premium-hero">
         <div className="hero-copy reveal reveal-up is-visible">
@@ -312,37 +908,33 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
             <button className="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
             <button className="button secondary" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button>
           </div>
-          <div className="hero-search">
-            <input type="search" placeholder={t('searchAll')} aria-label={t('searchAll')} />
-            <button type="button">{t('search')}</button>
-          </div>
+          <form className="hero-search" role="search" onSubmit={submitSearch}>
+            <input type="search" maxLength="120" value={searchTerm} onChange={(event) => { setSearchTerm(event.target.value); setSearchError(''); }} placeholder={t('searchAll')} aria-label={t('searchAll')} />
+            <button type="submit">{t('search')}</button>
+          </form>
+          {searchError && <p className="hero-search-error" role="alert">{searchError}</p>}
           <div className="chip-row">
-            {['Weddings', 'Corporate', 'Graduations', 'Catering', 'Decor', 'Photography'].map((item) => <span key={item} className="chip">{item}</span>)}
+            {categoryChips.map((item) => <button key={item.name} type="button" className="chip" onClick={() => onNavigate(item.path)}>{item.name}</button>)}
           </div>
         </div>
 
         <div className="hero-visual reveal reveal-right is-visible">
-          <div className="hero-visual-card hero-card-main">
-            <img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt="Wedding venue celebration" />
+          <div className="hero-visual-card hero-card-main" role="group" aria-label="Venue inspiration">
+            <img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt="Decorated event venue inspiration" loading="eager" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
             <div className="hero-overlay-card">
-              <span>{t('featuredVenue')}</span>
-              <strong>Fountain Hall</strong>
-              <small>{t('weddingCeremonyReception')}</small>
+              <span>VENUE INSPIRATION</span>
+              <strong>Explore event venues</strong>
+              <small>Browse real, verified venue vendors and services.</small>
+              <button type="button" className="button small" onClick={() => onNavigate('/vendors?search=venue')}>Browse venues</button>
             </div>
-          </div>
-          <div className="hero-floating-card hero-floating-top">
-            <strong>4.9/5</strong>
-            <span>{t('averageVendorRating')}</span>
-          </div>
-          <div className="hero-floating-card hero-floating-bottom">
-            <strong>320+</strong>
-            <span>{t('urbanEventBookings')}</span>
           </div>
         </div>
       </section>
 
       <Reveal className="stat-strip" direction="up">
-        {stats.map(({ label, value }) => <div key={label} className="stat-pill"><strong>{value}</strong><span>{label}</span></div>)}
+        {loading ? <div className="home-stat-skeletons" role="status" aria-label="Loading homepage statistics"><span/><span/><span/><span/></div>
+          : loadErrors.statistics ? <div className="home-data-error" role="alert"><span>Statistics are temporarily unavailable.</span><button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>
+            : stats.map(({ label, value }) => <div key={label} className="stat-pill"><strong>{label.toLowerCase().includes('rating') ? `${Number(value).toFixed(1)}/5` : Number(value).toLocaleString()}</strong><span>{label}</span></div>)}
       </Reveal>
 
       <Reveal className="section-block" direction="up">
@@ -353,10 +945,14 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/categories')}>{t('browseAll')}</button>
         </div>
+        {loadErrors.categories && <div className="home-data-error" role="alert">{loadErrors.categories}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
         <div className="category-grid">
-          {categoryCards.map((category) => (
+          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading popular categories"><span/><span/><span/><span/></div>
+            : !loadErrors.categories && !categories.length
+            ? <div className="empty-card">No public categories are available right now. <button type="button" className="button secondary small" onClick={() => onNavigate('/categories')}>Browse categories</button></div>
+            : categoryCards.map((category) => (
             <button key={category.name} type="button" className="category-card" onClick={() => onNavigate(category.path)}>
-              <img src={category.image} alt={category.name} loading="lazy" />
+              <img src={category.image} alt={category.name} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
               <span>{category.name}</span>
             </button>
           ))}
@@ -366,29 +962,38 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-              <p className="eyebrow">{t('featuredEvents')}</p>
+              <p className="eyebrow">EVENT INSPIRATION</p>
             <h2>{t('eventInspiration')}</h2>
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewAll')}</button>
         </div>
 
-        <div className="carousel-shell">
-          <button type="button" className="carousel-control" aria-label="Previous slide" onClick={() => setActiveSlide((activeSlide - 1 + featureSlides.length) % featureSlides.length)}>{'‹'}</button>
-          <div className="carousel-stage">
+        <div className="carousel-shell" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocusCapture={() => setCarouselPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onTouchStart={(event) => { touchStartX.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={(event) => {
+          if (touchStartX.current === null) return;
+          const delta = event.changedTouches[0]?.clientX - touchStartX.current;
+          if (Math.abs(delta) > 40) moveSlide(delta < 0 ? 1 : -1);
+          touchStartX.current = null;
+        }} onKeyDown={(event) => {
+          if (event.key === 'ArrowLeft') { event.preventDefault(); moveSlide(-1); }
+          if (event.key === 'ArrowRight') { event.preventDefault(); moveSlide(1); }
+        }} tabIndex="0" aria-label="Event inspiration carousel. Use the arrow keys to change slides.">
+          <button type="button" className="carousel-control" aria-label="Previous slide" onClick={() => moveSlide(-1)}>{'‹'}</button>
+          <div className="carousel-stage" aria-live="polite">
             {featureSlides.map((slide, index) => (
               <article key={slide.title} className={`slideshow-card ${index === activeSlide ? 'active' : ''}`}>
-                <img src={slide.image} alt={slide.title} loading="eager" />
+                <img src={slide.image} alt={slide.title} loading={index === activeSlide ? 'eager' : 'lazy'} onError={(event) => { event.currentTarget.style.display = 'none'; }} />
                 <div className="slideshow-content">
                   <p>{slide.title}</p>
                   <span>{slide.description}</span>
+                  {index === activeSlide && <button type="button" className="button small" onClick={() => onNavigate('/events')}>Explore published events</button>}
                 </div>
               </article>
             ))}
           </div>
-          <button type="button" className="carousel-control" aria-label="Next slide" onClick={() => setActiveSlide((activeSlide + 1) % featureSlides.length)}>{'›'}</button>
+          <button type="button" className="carousel-control" aria-label="Next slide" onClick={() => moveSlide(1)}>{'›'}</button>
         </div>
         <div className="carousel-dots" aria-label="slide navigation">
-          {featureSlides.map((slide, index) => <button key={slide.title} type="button" className={index === activeSlide ? 'dot active' : 'dot'} aria-label={`Go to slide ${index + 1}`} onClick={() => setActiveSlide(index)} />)}
+          {featureSlides.map((slide, index) => <button key={slide.title} type="button" className={index === activeSlide ? 'dot active' : 'dot'} aria-label={`Go to slide ${index + 1}`} aria-pressed={index === activeSlide} onClick={() => setActiveSlide(index)} />)}
         </div>
       </Reveal>
 
@@ -400,24 +1005,29 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/vendors')}>{t('seeAllVendors')}</button>
         </div>
+        {loadErrors.vendors && <div className="home-data-error" role="alert">{loadErrors.vendors}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
         <div className="card-grid">
-          {displayVendors.length ? displayVendors.map((vendor) => (
+          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading featured vendors"><span/><span/><span/><span/></div>
+            : displayVendors.length ? displayVendors.map((vendor) => {
+              const vendorName = vendor.business_name || vendor.name || 'Vendor';
+              const quoteService = Array.isArray(vendor.services) ? vendor.services.find((service) => service && service.published !== false && service.visibility !== 'private') : null;
+              return (
             <article key={vendor.id} className="vendor-card">
               <div className="card-image-wrap">
-                <img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.name} loading="lazy" />
-                <span className="verify-badge">{vendor.verified ? t('verified') : t('available')}</span>
+                <img src={vendor.image || vendor.logo || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendorName} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+                {vendor.verified && <span className="verify-badge">{t('verified')}</span>}
               </div>
               <div className="card-body">
-                <div className="meta-row"><span>{vendor.category || 'Event Services'}</span><span>★ {vendor.rating || 4.8}</span></div>
-                <h3>{vendor.name}</h3>
-                <p>{vendor.city || vendor.location || translateText('Service area available', language)}</p>
+                <div className="meta-row"><span>{vendor.category || 'Event Services'}</span>{vendor.reviewCount > 0 && Number.isFinite(Number(vendor.rating)) && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div>
+                <h3>{vendorName}</h3>
+                <p>{vendor.description || vendor.city || vendor.location || translateText('Service area available', language)}</p>
                 <div className="card-actions">
-                  <button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>{t('viewProfile')}</button>
-                  <button className="icon-button ghost" type="button" aria-label={`${translate('save', language)} ${vendor.name}`} onClick={() => onNavigate('/vendors')}>♥</button>
+                  <button className="button secondary small" type="button" onClick={() => onNavigate(vendor.id ? `/vendors/${encodeURIComponent(vendor.id)}` : '/vendors')}>{t('viewProfile')}</button>
+                  <button className="button small" type="button" onClick={() => quoteService ? setRequestService(quoteService) : onNavigate(`/vendors/${encodeURIComponent(vendor.id)}`)}>Request Quote</button>
                 </div>
               </div>
             </article>
-          )) : <div className="empty-card">{t('noVendorProfiles')}</div>}
+          );}) : loadErrors.vendors ? null : <div className="empty-card">{t('noVendorProfiles')} <button type="button" className="button secondary small" onClick={() => onNavigate('/vendors')}>Browse vendors</button></div>}
         </div>
       </Reveal>
 
@@ -429,23 +1039,26 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/services')}>{t('browseServices')}</button>
         </div>
+        {loadErrors.services && <div className="home-data-error" role="alert">{loadErrors.services}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
         <div className="card-grid">
-          {displayServices.length ? displayServices.map((service) => (
+          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading popular services"><span/><span/><span/><span/></div>
+            : displayServices.length ? displayServices.map((service) => (
             <article key={service.id} className="service-card">
               <div className="card-image-wrap">
-                <img src={service.image || 'https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=900&q=80'} alt={service.title} loading="lazy" />
+                <img src={service.image || service.coverImage || 'https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=900&q=80'} alt={service.title} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
               </div>
               <div className="card-body">
-                <div className="meta-row"><span>{service.category || 'Event service'}</span><span>★ {service.rating || 4.8}</span></div>
+                <div className="meta-row"><span>{service.category || 'Event service'}</span>{service.reviewCount > 0 && Number.isFinite(Number(service.rating)) && <span>★ {Number(service.rating).toFixed(1)}</span>}</div>
                 <h3>{service.title}</h3>
-                <p>{service.vendorName || 'EventHub vendor'}</p>
+                <p>{service.description || service.vendorName || 'Service details available on request.'}</p>
                 <div className="pricing-row">
-                  <strong>{service.price ? `${service.currency || 'ETB'} ${service.price}` : t('requestQuote')}</strong>
-                  <button type="button" className="button small" onClick={() => onNavigate('/services')}>{t('book')}</button>
+                  <strong>{service.price !== null && service.price !== undefined ? `${service.currency || 'ETB'} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>
+                  <button type="button" className="button small" onClick={() => setRequestService(service)}>Request Service</button>
                 </div>
+                <button type="button" className="button secondary small" onClick={() => onNavigate(`/services/${encodeURIComponent(service.id)}`)}>View Details</button>
               </div>
             </article>
-          )) : <div className="empty-card">{t('noServicesPublished')}</div>}
+          )) : loadErrors.services ? null : <div className="empty-card">{t('noServicesPublished')} <button type="button" className="button secondary small" onClick={() => onNavigate('/services')}>Browse services</button></div>}
         </div>
       </Reveal>
 
@@ -455,20 +1068,26 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
             <p className="eyebrow">{t('publicEventDiscovery')}</p>
             <h2>{t('eventsNextMoment')}</h2>
           </div>
+          <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewAll')}</button>
         </div>
+        {loadErrors.events && <div className="home-data-error" role="alert">{loadErrors.events}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
         <div className="event-grid">
-          {displayEvents.length ? displayEvents.map((event) => (
+          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading public events"><span/><span/><span/><span/></div>
+            : displayEvents.length ? displayEvents.map((event) => (
             <article key={event.id} className="event-card">
-              <img src={event.image || 'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=900&q=80'} alt={event.title} loading="lazy" />
+              <img src={event.coverImage || event.image || 'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=900&q=80'} alt={event.title} loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />
               <div className="event-content">
                 <span className="event-tag">{event.type || 'Event'}</span>
                 <h3>{event.title}</h3>
-                <p>{event.date || translateText('Date available', language)}</p>
-                <small>{event.location || t('locationAvailable')}</small>
-                <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewDetails')}</button>
+                <p>{formatEventDate(event.startDate || event.date, language) || translateText('Date available', language)}</p>
+                <small>{[event.venue, event.location || event.city].filter(Boolean).join(' · ') || t('locationAvailable')}</small>
+                <div className="card-actions">
+                  <button type="button" className="button secondary small" onClick={() => onNavigate(`/events/${encodeURIComponent(event.id)}`)}>{t('viewDetails')}</button>
+                  <button type="button" className="button small" onClick={() => onNavigate(`/events/${encodeURIComponent(event.id)}`)}>Book Now</button>
+                </div>
               </div>
             </article>
-          )) : <div className="empty-card">{t('noPublicEvents')}</div>}
+          )) : loadErrors.events ? null : <div className="empty-card">{t('noPublicEvents')} <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>Explore events</button></div>}
         </div>
       </Reveal>
 
@@ -479,11 +1098,12 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
             ['2', t('compare'), t('compareCopy')],
             ['3', t('bookStep'), t('bookCopy')],
           ].map(([step, title, copy]) => (
-            <div key={step} className="process-card">
+            <button type="button" key={step} className="process-card" onClick={() => onNavigate(step === '1' ? '/vendors' : step === '2' ? '/services' : '/events')}>
               <span className="process-number">{step}</span>
               <h3>{title}</h3>
               <p>{copy}</p>
-            </div>
+              <span className="process-card-action">{step === '1' ? 'Explore vendors' : step === '2' ? 'Browse services' : 'Find events'}</span>
+            </button>
           ))}
         </div>
       </Reveal>
@@ -496,13 +1116,14 @@ function PublicOverview({ onOpenDashboard, currentPath, onNavigate }) {
           </div>
           <div className="cta-banner-actions">
             <button className="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
-            <button className="button pale" onClick={() => onNavigate('/register')}>{t('becomeVendor')}</button>
+            <button className="button pale" onClick={becomeVendor}>{user?.role === 'vendor' ? 'Open vendor dashboard' : t('becomeVendor')}</button>
           </div>
         </div>
       </Reveal>
     </main>
     <AppFooter />
     <BackToTopButton />
+    {requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)} />}
   </>;
 }
 
@@ -513,6 +1134,7 @@ function PublicPageLayout({ currentPath, user, onNavigate, onLogout, children })
 function EventsPage({ onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
+  const initialQuery = new URLSearchParams(window.location.search);
   const [events, setEvents] = useState([]);
   const [categories, setCategories] = useState([]);
   const [featured, setFeatured] = useState(null);
@@ -524,11 +1146,17 @@ function EventsPage({ onNavigate }) {
   const [reloadKey, setReloadKey] = useState(0);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState('');
-  const [search, setSearch] = useState('');
-  const [location, setLocation] = useState('');
-  const [category, setCategory] = useState('');
-  const [sort, setSort] = useState('upcoming');
-  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState(initialQuery.get('search') || '');
+  const [location, setLocation] = useState(initialQuery.get('location') || '');
+  const [category, setCategory] = useState(initialQuery.get('category') || '');
+  const [startDate, setStartDate] = useState(initialQuery.get('startDate') || '');
+  const [endDate, setEndDate] = useState(initialQuery.get('endDate') || '');
+  const [minPrice, setMinPrice] = useState(initialQuery.get('minPrice') || '');
+  const [maxPrice, setMaxPrice] = useState(initialQuery.get('maxPrice') || '');
+  const [eventStatus, setEventStatus] = useState(initialQuery.get('status') || '');
+  const [sort, setSort] = useState(initialQuery.get('sort') || 'upcoming');
+  const [page, setPage] = useState(Math.max(1, Number(initialQuery.get('page')) || 1));
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [pagination, setPagination] = useState({ total: 0, page: 1, totalPages: 1, limit: 6 });
   const [requestEvent, setRequestEvent] = useState(null);
   const [requestForm, setRequestForm] = useState({ event_title: '', event_type: '', requested_date: '', requested_location: '', requester_name: '', requester_email: '', service_category: '', guest_count: '', budget: '', notes: '' });
@@ -546,6 +1174,11 @@ function EventsPage({ onNavigate }) {
         if (search.trim()) params.set('search', search.trim());
         if (category) params.set('category', category);
         if (location) params.set('location', location);
+        if (startDate) params.set('startDate', startDate);
+        if (endDate) params.set('endDate', endDate);
+        if (minPrice) params.set('minPrice', minPrice);
+        if (maxPrice) params.set('maxPrice', maxPrice);
+        if (eventStatus) params.set('status', eventStatus);
         const response = await api(`/platform/events?${params.toString()}`);
         if (!active) return;
         setEvents(Array.isArray(response?.data) ? response.data : []);
@@ -560,7 +1193,20 @@ function EventsPage({ onNavigate }) {
       }
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [search, location, category, sort, page, reloadKey]);
+  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page, reloadKey]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries({
+      search: search.trim(), location, category, startDate, endDate, minPrice, maxPrice, status: eventStatus,
+    })) {
+      if (value) params.set(key, value);
+    }
+    if (sort !== 'upcoming') params.set('sort', sort);
+    if (page > 1) params.set('page', String(page));
+    const query = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page]);
 
   useEffect(() => {
     let active = true;
@@ -586,18 +1232,7 @@ function EventsPage({ onNavigate }) {
   }, []);
 
   async function viewDetails(eventId) {
-    setDetailsLoading(true);
-    setDetailsError('');
-    setSelectedEvent(null);
-    try {
-      const response = await api(`/platform/events/${encodeURIComponent(eventId)}`);
-      setSelectedEvent(response?.data || null);
-      if (!response?.data) setDetailsError(t('detailNotFound'));
-    } catch (issue) {
-      setDetailsError(issue.status === 404 ? t('detailNotFound') : issue.status ? `${t('detailError')} (${issue.status})` : t('detailError'));
-    } finally {
-      setDetailsLoading(false);
-    }
+    onNavigate(`/events/${encodeURIComponent(eventId)}`);
   }
 
   function openPackageRequest(event) {
@@ -652,13 +1287,30 @@ function EventsPage({ onNavigate }) {
     setSearch('');
     setLocation('');
     setCategory('');
+    setStartDate('');
+    setEndDate('');
+    setMinPrice('');
+    setMaxPrice('');
+    setEventStatus('');
     setSort('upcoming');
     setPage(1);
   }
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">EVENTS</p><h2>{t('upcomingExperiences')}</h2><p className="muted">{t('pageDescription')}</p></div><button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button></div>
+  const activeFilters = [
+    search.trim() && `Search: ${search.trim()}`,
+    location && `Location: ${location}`,
+    category && `Category: ${category}`,
+    startDate && `From: ${startDate}`,
+    endDate && `To: ${endDate}`,
+    minPrice && `Min ETB ${minPrice}`,
+    maxPrice && `Max ETB ${maxPrice}`,
+    eventStatus && `Status: ${eventStatus}`,
+  ].filter(Boolean);
+
+  return <main className="page-shell"><div className="content-stack"><nav className="event-breadcrumb" aria-label="Breadcrumb"><button type="button" onClick={() => onNavigate('/')}>{t('homeNav')}</button><span>/</span><strong>Events</strong></nav><div className="section-header"><div><p className="eyebrow">EVENTS</p><h2>{t('upcomingExperiences')}</h2><p className="muted">{t('pageDescription')}</p></div><button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button></div>
     <div className="panel event-filter-panel">
-      <div className="toolbar stacked-toolbar">
+      <button className="button secondary event-filter-toggle" type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>Filters {filtersOpen ? '−' : '+'}</button>
+      <div className={`toolbar stacked-toolbar ${filtersOpen ? 'is-open' : ''}`}>
         <input className="field-input" aria-label={t('searchEvents')} maxLength={120} value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder={t('searchEvents')} />
         <select className="filter-select" aria-label={t('allLocations')} value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }}>
           <option value="">{t('allLocations')}</option><option value="Addis Ababa">Addis Ababa</option><option value="Bahir Dar">Bahir Dar</option><option value="Hawassa">Hawassa</option><option value="Dire Dawa">Dire Dawa</option>
@@ -668,22 +1320,33 @@ function EventsPage({ onNavigate }) {
           {categoryOptions.map((value) => <option key={value} value={value.toLowerCase()}>{t(value.toLowerCase()) === value.toLowerCase() ? value : t(value.toLowerCase())}</option>)}
         </select>
         <select className="filter-select" aria-label={t('upcoming')} value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
-          <option value="upcoming">{t('upcoming')}</option><option value="earliest">{t('earliest')}</option><option value="latest">{t('latest')}</option><option value="alphabetical">{t('alphabetical')}</option>
+          <option value="upcoming">{t('upcoming')}</option><option value="latest">{t('latest')}</option><option value="recent">Newest first</option><option value="price_asc">Price: Low to High</option><option value="price_desc">Price: High to Low</option><option value="alphabetical">{t('alphabetical')}</option>
         </select>
-        <button type="button" className="button secondary small" onClick={resetFilters}>{t('reset')}</button>
+        <input className="filter-select" aria-label="Start date" type="date" value={startDate} onChange={(event) => { setPage(1); setStartDate(event.target.value); }} />
+        <input className="filter-select" aria-label="End date" type="date" value={endDate} onChange={(event) => { setPage(1); setEndDate(event.target.value); }} />
+        <input className="filter-select" aria-label="Minimum ticket price" type="number" min="0" placeholder="Min price" value={minPrice} onChange={(event) => { setPage(1); setMinPrice(event.target.value); }} />
+        <input className="filter-select" aria-label="Maximum ticket price" type="number" min="0" placeholder="Max price" value={maxPrice} onChange={(event) => { setPage(1); setMaxPrice(event.target.value); }} />
+        <select className="filter-select" aria-label="Event availability" value={eventStatus} onChange={(event) => { setPage(1); setEventStatus(event.target.value); }}>
+          <option value="">All availability</option><option value="upcoming">Upcoming</option><option value="available">Available</option><option value="free">Free</option><option value="paid">Paid</option>
+        </select>
+        <button type="button" className="button secondary small" onClick={resetFilters}>Clear Filters</button>
       </div>
+      {activeFilters.length > 0 && <div className="event-active-filters" aria-label="Active filters">
+        <span>Active filters:</span>{activeFilters.map((filter) => <span className="event-filter-chip" key={filter}>{filter}</span>)}
+      </div>}
     </div>
 
+    {!loading && !error && <p className="event-results-count" role="status">{pagination.total} events found</p>}
     {loading ? <div className="loading" role="status"><span className="spinner" />{t('loadingEvents')}</div> : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></div> : <>
       {events.length ? <>
         <div className="card-grid event-list-grid">
           {events.map((event) => <article key={event.id} className="info-card event-tile">
-            <div className="event-thumb" aria-hidden="true"><span>{event.type || 'Event'}</span></div>
+            <div className="event-thumb" aria-hidden="true">{event.coverImage && <img src={event.coverImage} alt="" loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />}<span>{event.type || 'Event'}</span></div>
             <div className="event-tile-body">
               <span className="event-tag">{event.type || 'Event'}</span><h3>{event.title}</h3>
-              <p>{event.location || t('locationTbd')}</p>
+              <p>{[event.venue, event.location].filter(Boolean).join(', ') || t('locationTbd')}</p>
               <small>{formatEventDate(event.startDate, language) || t('dateTbd')}</small>
-              <div className="pricing-row compact-row"><strong>{formatEventBudget(event.budget, language) || '—'}</strong><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button></div>
+              <div className="pricing-row compact-row"><strong>{event.startingPrice === null || event.startingPrice === undefined ? 'Tickets unavailable' : Number(event.startingPrice) === 0 ? 'Free' : formatEventBudget(event.startingPrice, language)}</strong><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button><button type="button" className="button small" onClick={() => viewDetails(event.id)}>Book Now</button></div>
             </div>
           </article>)}
         </div>
@@ -734,13 +1397,155 @@ function EventsPage({ onNavigate }) {
   </main>;
 }
 
-function VendorDetailPage({ vendorId, onNavigate }) {
+function QuoteRequestModal({ service, user, onNavigate, onClose }) {
+  const [form, setForm] = useState({ guestCount: '', budget: '', notes: '' });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    if (busy) return;
+    if (!user) {
+      sessionStorage.setItem('eventhub_after_login', window.location.pathname);
+      onNavigate('/login');
+      return;
+    }
+    if (!['customer', 'organizer'].includes(user.role)) {
+      setError('Only customer and organizer accounts can request quotes.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const body = {
+        serviceId: service.id,
+        ...(form.guestCount ? { guestCount: Number(form.guestCount) } : {}),
+        ...(form.budget ? { budget: Number(form.budget) } : {}),
+        notes: form.notes.trim(),
+      };
+      await api('/platform/service-quote-requests', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setSuccess('Your request was sent to the vendor. Track its status in your dashboard quotations.');
+    } catch (issue) {
+      setError(issue.message || 'Unable to send the quote request.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
+    <form className="modal" role="dialog" aria-modal="true" aria-labelledby="quote-request-title" onSubmit={submit}>
+      <div className="modal-head"><h2 id="quote-request-title">Request a quote</h2><button className="icon-button" type="button" onClick={onClose} aria-label="Close" disabled={busy}><X size={18}/></button></div>
+      <div className="modal-body">
+        <p><strong>{service.title}</strong> · {service.vendorName}</p>
+        <label className="field"><span>Guest count (optional)</span><input type="number" min="1" max="100000" step="1" value={form.guestCount} onChange={(event) => setForm((current) => ({ ...current, guestCount: event.target.value }))}/></label>
+        <label className="field"><span>Budget (optional)</span><input type="number" min="0" max="100000000" step="0.01" value={form.budget} onChange={(event) => setForm((current) => ({ ...current, budget: event.target.value }))}/></label>
+        <label className="field"><span>Requirements</span><textarea rows="4" maxLength="2000" value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}/></label>
+        {error && <div className="alert error" role="alert">{error}</div>}
+        {success && <div className="alert success" role="status">{success}</div>}
+      </div>
+      <div className="modal-foot"><button type="button" className="button secondary" onClick={onClose} disabled={busy}>{success ? 'Done' : 'Cancel'}</button>{!success && <button className="button" disabled={busy}>{busy ? 'Sending…' : 'Send request'}</button>}</div>
+    </form>
+  </div>;
+}
+
+function VendorQuoteResponseForm({ quote, onResponded }) {
+  const [amount, setAmount] = useState('');
+  const [notes, setNotes] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function respond(event, status) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await api(`/platform/quotations/${quote.id}/respond`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status,
+          ...(status === 'sent' ? { amount: Number(amount) } : {}),
+          notes,
+        }),
+      });
+      onResponded(response.data);
+    } catch (issue) {
+      setError(issue.message || 'Unable to respond to this request.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <form className="vendor-quote-response" onSubmit={(event) => respond(event, 'sent')}>
+    {quote.notes && <small>{quote.notes}</small>}
+    <label className="field"><span>Quote amount ({quote.currency || 'ETB'})</span><input type="number" min="0" max="100000000" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required/></label>
+    <label className="field"><span>Response details</span><textarea rows="2" maxLength="2000" value={notes} onChange={(event) => setNotes(event.target.value)}/></label>
+    {error && <div className="alert error" role="alert">{error}</div>}
+    <div className="card-actions"><button className="button small" type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send quote'}</button><button className="button secondary small" type="button" disabled={busy} onClick={(event) => respond(event, 'declined')}>Decline</button></div>
+  </form>;
+}
+
+function ServiceDetailPage({ serviceId, user, onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
+  const [service, setService] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [requestOpen, setRequestOpen] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    async function loadService() {
+      setLoading(true);
+      setError('');
+      try {
+        const response = await api(`/platform/services/${encodeURIComponent(serviceId)}`);
+        if (active) setService(response.data || null);
+      } catch (issue) {
+        if (active) {
+          setService(null);
+          setError(issue.message || 'Unable to load this service.');
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    loadService();
+    return () => { active = false; };
+  }, [serviceId]);
+
+  if (loading) return <main className="page-shell"><div className="loading" role="status"><span className="spinner"/>{t('loadingServices')}</div></main>;
+  if (error || !service) return <main className="page-shell"><div className="empty panel"><strong>Service unavailable</strong><span>{error || 'This service is no longer available.'}</span><button className="button secondary" type="button" onClick={() => onNavigate('/services')}>Back to Services</button></div></main>;
+
+  return <main className="page-shell"><div className="content-stack">
+    <button className="text-action" type="button" onClick={() => onNavigate('/services')}>← Back to Services</button>
+    <section className="info-card wide"><p className="eyebrow">{service.category}</p><h1>{service.title}</h1><p>{service.description}</p><div className="detail-meta-grid">
+      <div><span>Provider</span><strong>{service.vendorName}</strong></div>
+      <div><span>Location</span><strong>{service.city || t('locationAvailable')}</strong></div>
+      <div><span>Starting price</span><strong>{service.price ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('priceOnRequest')}</strong></div>
+      {service.reviewCount > 0 && <div><span>Customer rating</span><strong>{Number(service.rating).toFixed(1)} / 5 ({service.reviewCount})</strong></div>}
+    </div><button className="button" type="button" onClick={() => setRequestOpen(true)}>Request Service</button></section>
+    <section className="panel"><div className="panel-header"><h2>Other services from this provider</h2></div>
+      {service.packages?.filter((item) => item.id !== service.id).length ? <div className="card-grid">{service.packages.filter((item) => item.id !== service.id).map((item) => <article className="info-card" key={item.id}><h3>{item.title}</h3><p>{item.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{item.price ? `${item.currency} ${Number(item.price).toLocaleString()}` : t('priceOnRequest')}</strong><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${item.id}`)}>View Details</button></div></article>)}</div> : <p>No other published services are listed for this provider.</p>}
+    </section>
+    {service.availability?.length > 0 && <section className="panel"><div className="panel-header"><h2>Availability</h2></div><div className="list-stack">{service.availability.map((entry) => <div className="list-card" key={String(entry.date)}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
+    <section className="panel"><div className="panel-header"><h2>Customer reviews</h2></div>
+      {service.reviews?.length ? <div className="list-stack">{service.reviews.map((review, index) => <article className="list-card" key={`${review.createdAt}-${index}`}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div> : <p>No published reviews are available for this service yet.</p>}
+    </section>
+  </div>{requestOpen && <QuoteRequestModal service={service} user={user} onNavigate={onNavigate} onClose={() => setRequestOpen(false)}/>}</main>;
+}
+
+function VendorDetailPage({ vendorId, user, onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [vendor, setVendor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [bookingState, setBookingState] = useState('');
+  const [requestService, setRequestService] = useState(null);
 
   useEffect(() => {
     async function loadVendor() {
@@ -759,31 +1564,6 @@ function VendorDetailPage({ vendorId, onNavigate }) {
     loadVendor();
   }, [vendorId]);
 
-  const handleBookService = async (service) => {
-    const selectedService = service || vendor?.services?.[0];
-    if (!selectedService) {
-      setBookingState(t('serviceUnavailable'));
-      return;
-    }
-
-    try {
-      setBookingState(t('submittingBooking'));
-      await api('/platform/bookings', {
-        method: 'POST',
-        body: JSON.stringify({
-          serviceTitle: selectedService.title || `${vendor.business_name} service`,
-          quotedAmount: Number(selectedService.price || vendor.priceFrom || 0),
-          currency: 'ETB',
-          status: 'pending',
-        }),
-      });
-      setBookingState(t('bookingCreated'));
-      window.setTimeout(() => onNavigate('/login'), 1000);
-    } catch (issue) {
-      setBookingState(t('unableCreateBooking'));
-    }
-  };
-
   if (loading) {
     return <main className="page-shell"><div className="content-stack"><div className="info-card wide"><div className="loading"><span className="spinner" />{t('loadingVendorProfile')}</div></div></div></main>;
   }
@@ -799,11 +1579,10 @@ function VendorDetailPage({ vendorId, onNavigate }) {
         <div>
           <h3>{vendor.business_name || vendor.name}</h3>
           <p className="muted">{vendor.category || 'Event services'} • {vendor.city || 'Remote service area'}</p>
-          <p>{vendor.verified ? t('verifiedBusinessProfile') : t('publicListing')} • {vendor.reviewCount || 0} {t('vendorReviews')} • ★ {Number(vendor.rating || 0).toFixed(1)}</p>
+          <p>{vendor.verified ? t('verifiedBusinessProfile') : t('publicListing')}{vendor.reviewCount > 0 ? ` • ${vendor.reviewCount} ${t('vendorReviews')} • ★ ${Number(vendor.rating).toFixed(1)}` : ''}</p>
         </div>
-        <button className="button" type="button" onClick={() => handleBookService()}>{bookingState.startsWith('Submitting') ? 'Processing…' : 'Book service'}</button>
+        {vendor.services?.some((service) => service.published !== false && service.visibility !== 'private') && <button className="button" type="button" onClick={() => setRequestService(vendor.services.find((service) => service.published !== false && service.visibility !== 'private'))}>Request Quote</button>}
       </div>
-      {bookingState && <div className="alert success" style={{ marginTop: '14px' }}>{bookingState}</div>}
       <div className="report-grid" style={{ marginTop: '18px' }}>
         <div className="info-card"><h3>{t('about')}</h3><p>{vendor.description || translateText('A trusted event partner helping clients plan memorable experiences.', language)}</p></div>
         <div className="info-card"><h3>{t('startingFrom')}</h3><p>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('priceOnRequest')}</p></div>
@@ -813,31 +1592,42 @@ function VendorDetailPage({ vendorId, onNavigate }) {
 
     <section className="content-stack">
       <div className="section-header compact-header"><div><p className="eyebrow">{t('publishedServices')}</p><h2>{t('availableServicePackages')}</h2></div></div>
-      {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong><button className="button secondary small" type="button" onClick={() => handleBookService(service)}>{t('bookService')}</button></div></article>)}</div> : <div className="empty-card">{t('noPublishedServices')}</div>}
+      {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong><button className="button secondary small" type="button" onClick={() => setRequestService(service)}>Request Quote</button></div></article>)}</div> : <div className="empty-card">{t('noPublishedServices')}</div>}
     </section>
-  </div></main>;
+    {vendor.reviews?.length > 0 && <section className="panel"><div className="panel-header"><h3>Customer reviews</h3></div><div className="list-stack">{vendor.reviews.map((review, index) => <article className="list-card" key={`${review.createdAt}-${index}`}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div></section>}
+    {Array.isArray(vendor.availability) && vendor.availability.length > 0 && <section className="panel"><div className="panel-header"><h3>Availability</h3></div><div className="list-stack">{vendor.availability.map((entry) => <div className="list-card" key={entry.date}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
+  </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
 }
 
 function VendorsPage({ onNavigate, user }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [vendors, setVendors] = useState([]);
+  const [categoryOptions, setCategoryOptions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('all');
+  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
+  const [category, setCategory] = useState(() => new URLSearchParams(window.location.search).get('category') || 'all');
   const [location, setLocation] = useState('all');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
   const [sort, setSort] = useState('recommended');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: 12 });
   const [notice, setNotice] = useState('');
+  const [categoryError, setCategoryError] = useState('');
+  const [filterError, setFilterError] = useState('');
+  const [requestService, setRequestService] = useState(null);
 
-  const fetchVendors = useCallback(async (nextPage = page, nextFilters = { search, category, location, sort }) => {
+  const fetchVendors = useCallback(async (nextPage, nextFilters) => {
     setLoading(true);
+    setNotice('');
     try {
       const params = new URLSearchParams({ page: String(nextPage), limit: '12', sort: nextFilters.sort || 'recommended' });
       if (nextFilters.search) params.set('search', nextFilters.search);
       if (nextFilters.category && nextFilters.category !== 'all') params.set('category', nextFilters.category);
       if (nextFilters.location && nextFilters.location !== 'all') params.set('location', nextFilters.location);
+      if (nextFilters.minPrice) params.set('minPrice', nextFilters.minPrice);
+      if (nextFilters.maxPrice) params.set('maxPrice', nextFilters.maxPrice);
       const response = await api(`/platform/vendors?${params.toString()}`);
       setVendors(response.data || []);
       setPagination({
@@ -853,70 +1643,69 @@ function VendorsPage({ onNavigate, user }) {
     } finally {
       setLoading(false);
     }
-  }, [page, search, category, location, sort]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const queryCategory = params.get('category');
-    if (queryCategory) {
-      setCategory(queryCategory);
-    } else {
-      setCategory('all');
-    }
   }, []);
 
   useEffect(() => {
-    fetchVendors(1, { search, category, location, sort });
-    setPage(1);
-  }, [search, category, location, sort]);
+    let active = true;
+    async function loadCategories() {
+      try {
+        const response = await api('/platform/categories');
+        if (active) setCategoryOptions(Array.isArray(response.data) ? response.data : []);
+      } catch (issue) {
+        if (active) {
+          setCategoryOptions([]);
+          setCategoryError(issue.message || 'Unable to load vendor category filters.');
+        }
+      }
+    }
+    loadCategories();
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
-    fetchVendors(page, { search, category, location, sort });
-  }, [page]);
+    if (minPrice && maxPrice && Number(maxPrice) < Number(minPrice)) {
+      setLoading(false);
+      setFilterError('Maximum price must be greater than or equal to minimum price.');
+      return;
+    }
+    setFilterError('');
+    fetchVendors(page, { search, category, location, minPrice, maxPrice, sort });
+  }, [fetchVendors, page, search, category, location, minPrice, maxPrice, sort]);
 
   const categories = Array.from(new Set(vendors.map((vendor) => vendor.category).filter(Boolean))).sort();
   const locations = Array.from(new Set(vendors.map((vendor) => vendor.city).filter(Boolean))).sort();
 
-  const handleBookService = async (vendorRecord) => {
+  const handleQuoteRequest = (vendorRecord) => {
     const selectedService = Array.isArray(vendorRecord?.services) ? vendorRecord.services.find((service) => service && service.published !== false && service.visibility !== 'private') : null;
-    const serviceTitle = selectedService?.title || `${vendorRecord.business_name || vendorRecord.name} service`;
-    const amount = Number(selectedService?.price || vendorRecord.priceFrom || 0);
-
-    try {
-      await api('/platform/bookings', {
-        method: 'POST',
-        body: JSON.stringify({ serviceTitle, quotedAmount: amount, currency: 'ETB', status: 'pending' }),
-      });
-      setNotice(`Booking request created for ${serviceTitle}.`);
-      if (!user) {
-        window.setTimeout(() => onNavigate('/login'), 600);
-      }
-    } catch (issue) {
-      setNotice(issue.message || 'Unable to create your booking request.');
-    }
+    if (selectedService) setRequestService(selectedService);
+    else setNotice('This vendor has no published services available for a quote request.');
   };
 
   return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div></div>
     {notice && <div className="alert success">{notice}</div>}
+    {categoryError && <div className="alert error" role="alert">{categoryError}</div>}
+    {filterError && <div className="alert error" role="alert">{filterError}</div>}
     <div className="panel" style={{ padding: '18px 20px' }}>
       <div className="toolbar">
-        <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchVendors')} /></div>
-        <select className="filter-select" value={category} onChange={(event) => setCategory(event.target.value)}>
+        <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder={t('searchVendors')} /></div>
+        <select className="filter-select" value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
           <option value="all">{t('allCategories')}</option>
-          {categories.map((item) => <option key={item} value={item}>{item}</option>)}
+          {(categoryOptions.length ? categoryOptions.map((item) => item.name) : categories).map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-        <select className="filter-select" value={location} onChange={(event) => setLocation(event.target.value)}>
+        <select className="filter-select" value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }}>
           <option value="all">{t('allLocations')}</option>
           {locations.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-        <select className="filter-select" value={sort} onChange={(event) => setSort(event.target.value)}>
+        <input className="filter-select" aria-label="Minimum vendor price" type="number" min="0" value={minPrice} onChange={(event) => { setPage(1); setMinPrice(event.target.value); }} placeholder="Min price" />
+        <input className="filter-select" aria-label="Maximum vendor price" type="number" min="0" value={maxPrice} onChange={(event) => { setPage(1); setMaxPrice(event.target.value); }} placeholder="Max price" />
+        <select className="filter-select" value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
           <option value="recommended">{t('recommended')}</option>
           <option value="highest-rated">{t('highestRated')}</option>
           <option value="most-reviewed">{t('mostReviewed')}</option>
           <option value="price-low">{t('priceLowHigh')}</option>
           <option value="price-high">{t('priceHighLow')}</option>
         </select>
-        <button type="button" className="button secondary small" onClick={() => { setSearch(''); setCategory('all'); setLocation('all'); setSort('recommended'); }}>{t('reset')}</button>
+        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearch(''); setCategory('all'); setLocation('all'); setMinPrice(''); setMaxPrice(''); setSort('recommended'); }}>{t('reset')}</button>
       </div>
     </div>
 
@@ -928,13 +1717,13 @@ function VendorsPage({ onNavigate, user }) {
             {vendor.verified && <span className="verify-badge">{t('verified')}</span>}
           </div>
           <div className="card-body">
-            <div className="meta-row"><span>{vendor.category || 'Event services'}</span><span>★ {Number(vendor.rating || 0).toFixed(1)}</span></div>
+            <div className="meta-row"><span>{vendor.category || 'Event services'}</span>{vendor.reviewCount > 0 && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div>
             <h3>{vendor.business_name || vendor.name}</h3>
-            <p>{vendor.city || t('locationAvailable')}</p>
+            <p>{vendor.city || t('locationAvailable')}</p><p>{vendor.description || ''}</p>
             <div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount || 0} {t('vendorReviews')}</span></div>
             <div className="card-actions">
               <button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button>
-              <button className="button small" type="button" onClick={() => handleBookService(vendor)}>{t('bookService')}</button>
+              <button className="button small" type="button" onClick={() => handleQuoteRequest(vendor)}>Request Quote</button>
             </div>
           </div>
         </article>)}
@@ -946,22 +1735,34 @@ function VendorsPage({ onNavigate, user }) {
         <button className="icon-button" type="button" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage((value) => Math.min(pagination.totalPages || 1, value + 1))}><ChevronRight size={18}/></button>
       </div></div>
     </> : <EmptyState title={t('noVendorMatches')} message={t('tryDifferentFilters')} />}
-  </div></main>;
+  </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
 }
 
-function ServicesPage({ onNavigate }) {
+function ServicesPage({ onNavigate, user }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [services, setServices] = useState([]);
-  const [status, setStatus] = useState('');
-  const [filters, setFilters] = useState({ search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' });
+  const [categories, setCategories] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+  const [filters, setFilters] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return { search: params.get('search') || '', category: params.get('category') || 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' };
+  });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [categoryError, setCategoryError] = useState('');
+  const [requestService, setRequestService] = useState(null);
 
-  async function loadServices(nextFilters = filters) {
+  async function loadServices(nextFilters = filters, page = 1) {
     setLoading(true);
-    setStatus('');
+    setError('');
+    if (nextFilters.minPrice && nextFilters.maxPrice && Number(nextFilters.maxPrice) < Number(nextFilters.minPrice)) {
+      setError('Maximum price must be greater than or equal to minimum price.');
+      setLoading(false);
+      return;
+    }
     try {
-      const params = new URLSearchParams({ page: '1', limit: '12', sort: nextFilters.sort || 'recommended' });
+      const params = new URLSearchParams({ page: String(page), limit: '12', sort: nextFilters.sort || 'recommended' });
       if (nextFilters.search) params.set('search', nextFilters.search);
       if (nextFilters.category && nextFilters.category !== 'all') params.set('category', nextFilters.category);
       if (nextFilters.location && nextFilters.location !== 'all') params.set('location', nextFilters.location);
@@ -969,47 +1770,74 @@ function ServicesPage({ onNavigate }) {
       if (nextFilters.maxPrice) params.set('maxPrice', nextFilters.maxPrice);
       const response = await api(`/platform/services?${params.toString()}`);
       setServices(Array.isArray(response.data) ? response.data : []);
+      setPagination(response.pagination || { page: 1, totalPages: 1, total: 0 });
     } catch (issue) {
       setServices([]);
-      setStatus(issue.message || 'Unable to load services.');
+      setError(issue.message || 'Unable to load services.');
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { loadServices(filters); }, []);
-
-  async function submitQuoteRequest(service) {
-    try {
-      setStatus(translateText('Submitting quote request…', language));
-      const payload = {
-        serviceId: service.id,
-        serviceTitle: service.title,
-        vendorId: service.vendorId,
-        vendorName: service.vendorName || 'Vendor',
-        eventDate: new Date().toISOString().slice(0, 10),
-        guestCount: 100,
-        budget: Number(service.price || 0),
-        notes: `Requesting a quote for ${service.title}.`,
-      };
-      await api('/platform/service-quote-requests', { method: 'POST', body: JSON.stringify(payload) });
-      setStatus(translateText('Quote request submitted successfully.', language));
-    } catch (issue) {
-      setStatus(issue.message || 'Unable to submit a quote request.');
+  useEffect(() => {
+    let active = true;
+    async function loadCategories() {
+      try {
+        const response = await api('/platform/categories');
+        if (active) setCategories(Array.isArray(response.data) ? response.data : []);
+      } catch (issue) {
+        if (active) {
+          setCategories([]);
+          setCategoryError(issue.message || 'Unable to load service category filters.');
+        }
+      }
     }
-  }
+    loadCategories();
+    loadServices(filters, 1);
+    return () => { active = false; };
+  }, []);
 
-  const categories = Array.from(new Set(services.map((service) => service.category).filter(Boolean))).sort();
   const locations = Array.from(new Set(services.map((service) => service.city).filter(Boolean))).sort();
+  const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
+  const applyFilters = () => loadServices(filters, 1);
+  const resetFilters = () => {
+    const emptyFilters = { search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' };
+    setFilters(emptyFilters);
+    loadServices(emptyFilters, 1);
+  };
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('servicesEyebrow')}</p><h2>{t('servicesHeading')}</h2></div></div>{status && <div className="alert success">{status}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><input className="field-input" aria-label={t('searchServices')} value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder={t('searchServices')} /><select className="filter-select" value={filters.category} onChange={(event) => setFilters((current) => ({ ...current, category: event.target.value }))}><option value="all">{t('allCategories')}</option>{categories.map((category) => <option key={category} value={category}>{category}</option>)}</select><select className="filter-select" value={filters.location} onChange={(event) => setFilters((current) => ({ ...current, location: event.target.value }))}><option value="all">{t('allLocations')}</option>{locations.map((location) => <option key={location} value={location}>{location}</option>)}</select><select className="filter-select" value={filters.sort} onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value }))}><option value="recommended">{t('recommended')}</option><option value="highest-rated">{t('highestRated')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option></select><button type="button" className="button secondary small" onClick={() => { const next = { search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' }; setFilters(next); loadServices(next); }}>{t('reset')}</button><button type="button" className="button small" onClick={() => loadServices(filters)}>{t('applyFilters')}</button></div></div>{loading ? <div className="loading"><span className="spinner"/>{t('loadingServices')}</div> : services.length ? <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.vendorName || 'EventHub partner'}</p><small>{service.category} • {service.city}</small><div className="pricing-row compact-row"><strong>{service.price ? `${service.currency || 'ETB'} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong><span>{service.rating ? `${Number(service.rating).toFixed(1)}★` : t('new')}</span></div><p>{service.description || translateText('Custom package tailored to your event needs.', language)}</p><button className="button secondary small" onClick={() => submitQuoteRequest(service)}>{t('requestQuote')}</button></article>)}</div> : <EmptyState title={t('noServicesMatch')} message={t('emptyMessage')} />}</div></main>;
+  return <main className="page-shell"><div className="content-stack">
+    <div className="section-header"><div><p className="eyebrow">{t('servicesEyebrow')}</p><h2>{t('servicesHeading')}</h2></div></div>
+    {categoryError && <div className="alert error" role="alert">{categoryError}</div>}
+    <div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar">
+      <input className="field-input" aria-label={t('searchServices')} value={filters.search} onChange={(event) => updateFilter('search', event.target.value)} placeholder={t('searchServices')} />
+      <select className="filter-select" aria-label={t('allCategories')} value={filters.category} onChange={(event) => updateFilter('category', event.target.value)}><option value="all">{t('allCategories')}</option>{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select>
+      <select className="filter-select" aria-label={t('allLocations')} value={filters.location} onChange={(event) => updateFilter('location', event.target.value)}><option value="all">{t('allLocations')}</option>{locations.map((location) => <option key={location} value={location}>{location}</option>)}</select>
+      <input className="filter-select" aria-label="Minimum price" type="number" min="0" value={filters.minPrice} onChange={(event) => updateFilter('minPrice', event.target.value)} placeholder="Min price" />
+      <input className="filter-select" aria-label="Maximum price" type="number" min="0" value={filters.maxPrice} onChange={(event) => updateFilter('maxPrice', event.target.value)} placeholder="Max price" />
+      <select className="filter-select" aria-label="Sort services" value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)}><option value="recommended">{t('recommended')}</option><option value="highest-rated">{t('highestRated')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option><option value="alphabetical">{t('alphabetical')}</option></select>
+      <button type="button" className="button secondary small" onClick={resetFilters}>{t('reset')}</button><button type="button" className="button small" onClick={applyFilters}>{t('applyFilters')}</button>
+    </div></div>
+    {!loading && !error && <p role="status">{pagination.total || services.length} services found</p>}
+    {loading ? <div className="loading" role="status"><span className="spinner"/>{t('loadingServices')}</div>
+      : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => loadServices(filters, pagination.page || 1)}>{t('retry')}</button></div>
+        : services.length ? <>
+          <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card">
+            <p className="eyebrow">{service.category}</p><h3>{service.title}</h3><p>{service.description || ''}</p>
+            <p>{service.vendorName} · {service.city}</p>
+            <div className="pricing-row compact-row"><strong>{service.price ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>{service.reviewCount > 0 && <span>{Number(service.rating).toFixed(1)}★ ({service.reviewCount})</span>}</div>
+            <div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${service.id}`)}>View Details</button><button className="button small" type="button" onClick={() => setRequestService(service)}>Request Service</button></div>
+          </article>)}</div>
+          <div className="pagination-row" aria-label="Service pages"><button className="button secondary small" type="button" disabled={(pagination.page || 1) <= 1} onClick={() => loadServices(filters, (pagination.page || 1) - 1)}>{t('previous')}</button><span>{t('page')} {pagination.page || 1} {t('of')} {pagination.totalPages || 1}</span><button className="button secondary small" type="button" disabled={(pagination.page || 1) >= (pagination.totalPages || 1)} onClick={() => loadServices(filters, (pagination.page || 1) + 1)}>{t('next')}</button></div>
+        </> : <EmptyState title={t('noServicesMatch')} message={t('emptyMessage')} />}
+  </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
 }
 
 function CategoriesPage({ onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [categories, setCategories] = useState([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -1046,6 +1874,7 @@ function CategoryDetailPage({ slug, onNavigate }) {
   const [category, setCategory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -1073,28 +1902,41 @@ function CategoryDetailPage({ slug, onNavigate }) {
   if (error) return <main className="page-shell"><div className="content-stack"><div className="empty panel"><strong>{t('categoryUnavailable')}</strong><span>{translateText(error, language)}</span><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>{t('backToCategories')}</button></div></div></main>;
   if (!category) return <main className="page-shell"><div className="content-stack"><EmptyState title={t('categoryNotFound')} message={t('categoryNotPublic')} /></div></main>;
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">CATEGORY</p><h2>{category.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>Back to categories</button></div><div className="info-card wide"><img src={category.image || 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80'} alt={category.name} className="category-detail-image" /><div className="category-detail-copy"><p>{category.description || 'Available service category'}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} active vendors` : 'No vendors currently available'}</span><span>{category.serviceCount ? `${category.serviceCount} available services` : 'No services listed'}</span></div><button className="button" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>View vendors</button></div></div><div className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">VENDORS</p><h3>Relevant vendors</h3></div></div>{Array.isArray(category.vendors) && category.vendors.length ? <div className="card-grid">{category.vendors.map((vendor) => <article key={vendor.id} className="vendor-card"><div className="card-image-wrap"><img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.business_name || vendor.name} loading="lazy" />{vendor.verified && <span className="verify-badge">Verified</span>}</div><div className="card-body"><div className="meta-row"><span>{vendor.category || 'Event services'}</span><span>★ {Number(vendor.rating || 0).toFixed(1)}</span></div><h3>{vendor.business_name || vendor.name}</h3><p>{vendor.city || 'Location available'}</p><div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : 'Request quote'}</strong><span>{vendor.reviewCount || 0} reviews</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>View profile</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>Book service</button></div></div></article>)}</div> : <EmptyState title="No vendors currently available" message="This category has no eligible vendors right now." />}</div><div className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">SERVICES</p><h3>Available services</h3></div></div>{Array.isArray(category.services) && category.services.length ? <div className="card-grid">{category.services.map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.vendorName || 'EventHub partner'}</p><small>{service.category} • {service.city}</small><div className="pricing-row compact-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : 'Request quote'}</strong><span>{service.rating ? `${Number(service.rating).toFixed(1)}★` : 'New'}</span></div><p>{service.description || 'Custom package tailored to your event needs.'}</p></article>)}</div> : <EmptyState title="No services listed" message="This category does not currently have published services available." />}</div></div></main>;
+  const query = search.trim().toLowerCase();
+  const events = (category.events || []).filter((item) => `${item.title} ${item.description} ${item.location}`.toLowerCase().includes(query));
+  const vendors = (category.vendors || []).filter((item) => `${item.business_name} ${item.category} ${item.city} ${item.description}`.toLowerCase().includes(query));
+  const services = (category.services || []).filter((item) => `${item.title} ${item.vendorName} ${item.category} ${item.city} ${item.description}`.toLowerCase().includes(query));
+
+  return <main className="page-shell"><div className="content-stack">
+    <div className="section-header"><div><p className="eyebrow">CATEGORY</p><h2>{category.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>Back to categories</button></div>
+    <div className="info-card wide"><img src={category.image} alt="" className="category-detail-image" /><div className="category-detail-copy"><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.eventCount || 0} events</span><span>{category.vendorCount || 0} active vendors</span><span>{category.serviceCount || 0} available services</span></div><button className="button" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></div>
+    <div className="panel"><label className="field"><span>Search related listings</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search events, vendors, and services"/></label></div>
+    <section className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">EVENTS</p><h3>Related events</h3></div></div>{events.length ? <div className="card-grid">{events.map((event) => <article className="info-card" key={event.id}><h3>{event.title}</h3><p>{event.location || t('locationAvailable')}</p><p>{formatEventDate(event.startDate, language)}</p><button className="button secondary small" type="button" onClick={() => onNavigate(`/events/${event.id}`)}>View event</button></article>)}</div> : <EmptyState title="No related events" message="There are no public events in this category right now."/>}</section>
+    <section className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">VENDORS</p><h3>Relevant vendors</h3></div></div>{vendors.length ? <div className="card-grid">{vendors.map((vendor) => <article key={vendor.id} className="vendor-card"><div className="card-image-wrap"><img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.business_name || vendor.name} loading="lazy" />{vendor.verified && <span className="verify-badge">Verified</span>}</div><div className="card-body"><div className="meta-row"><span>{vendor.category || 'Event services'}</span>{vendor.reviewCount > 0 && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div><h3>{vendor.business_name || vendor.name}</h3><p>{vendor.description || vendor.city || t('locationAvailable')}</p><div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount || 0} reviews</span></div><button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button></div></article>)}</div> : <EmptyState title="No vendors currently available" message="This category has no eligible vendors right now." />}</section>
+    <section className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">SERVICES</p><h3>Available services</h3></div></div>{services.length ? <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.vendorName} · {service.city}</p><div className="pricing-row compact-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>{service.reviewCount > 0 && <span>{Number(service.rating).toFixed(1)}★</span>}</div><p>{service.description}</p><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${service.id}`)}>View details</button></article>)}</div> : <EmptyState title="No services listed" message="This category does not currently have published services available." />}</section>
+  </div></main>;
 }
 
-function AboutPage() {
+function AboutPage({ onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [content, setContent] = useState(null);
+  const [statistics, setStatistics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
 
-    async function loadAboutContent() {
+    async function loadAboutStatistics() {
       try {
         setLoading(true);
         const response = await api('/about');
         if (active) {
-          setContent(response?.data || null);
+          setStatistics(response?.data?.statistics || null);
           setError('');
         }
-      } catch (issue) {
+      } catch {
         if (active) {
           setError(t('aboutLoadError'));
         }
@@ -1103,107 +1945,175 @@ function AboutPage() {
       }
     }
 
-    loadAboutContent();
+    loadAboutStatistics();
     return () => { active = false; };
-  }, [language]);
+  }, [language, reloadKey]);
 
   if (loading) {
     return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />{t('loadingAbout')}</div></div></main>;
   }
 
-  const payload = content || {
-    hero: { heading: 'About EventHub', subtitle: 'Your trusted platform for planning and organizing memorable events.' },
-    hero_heading: 'About EventHub',
-    hero_subtitle: 'Your trusted platform for planning and organizing memorable events.',
-    introduction: 'EventHub helps organizers and customers discover event services, compare categories, request quotations, and coordinate bookings in one place.',
-    mission: 'Simplify event planning by connecting customers with the right service categories and vendors.',
-    vision: 'Make event-service discovery more accessible, better organized, and easier to trust.',
-    values: [
-      { title: 'Trust and Transparency', description: 'Clear information and direct coordination between customers and providers.' },
-      { title: 'Quality Service', description: 'Access to vetted, relevant, and highly rated vendors.' },
-      { title: 'Customer Satisfaction', description: 'A better journey from discovery to event completion.' },
-    ],
-    benefits: [
-      { title: 'Easy discovery', description: 'Browse categories, vendors, and services in one place.' },
-      { title: 'Quick coordination', description: 'Request quotes and communicate with providers faster.' },
-      { title: 'Better planning', description: 'Organize event details, budgets, and schedules in a single workflow.' },
-    ],
-    steps: [
-      { title: 'Explore categories', description: 'Select a service type that matches your event needs.' },
-      { title: 'Compare vendors', description: 'See service details, ratings, and location information.' },
-      { title: 'Book and monitor', description: 'Confirm the booking and track progress from planning to completion.' },
-    ],
-    statistics: { categoryCount: 5, vendorCount: 24, serviceCount: 110, completedBookingCount: 680 },
-    categories: [],
-  };
-
-  const hero = payload.hero || { heading: payload.hero_heading || 'About EventHub', subtitle: payload.hero_subtitle || 'Your trusted platform for planning and organizing memorable events.' };
-  const values = Array.isArray(payload.values) && payload.values.length ? payload.values : [
-    { title: 'Trust and Transparency', description: 'Clear information and direct coordination between customers and vendors.' },
-    { title: 'Quality Service', description: 'Access to relevant, vetted, and highly rated vendors.' },
-    { title: 'Customer Satisfaction', description: 'A smoother event planning experience from discovery to completion.' },
+  const missionObjectives = ['aboutMissionObjective1', 'aboutMissionObjective2', 'aboutMissionObjective3', 'aboutMissionObjective4', 'aboutMissionObjective5', 'aboutMissionObjective6'];
+  const visionPriorities = ['aboutVisionPriority1', 'aboutVisionPriority2', 'aboutVisionPriority3', 'aboutVisionPriority4', 'aboutVisionPriority5', 'aboutVisionPriority6'];
+  const coreValues = [
+    { title: 'aboutValueCustomerTitle', description: 'aboutValueCustomerCopy', icon: Heart },
+    { title: 'aboutValueTrustTitle', description: 'aboutValueTrustCopy', icon: ShieldCheck },
+    { title: 'aboutValueInnovationTitle', description: 'aboutValueInnovationCopy', icon: Lightbulb },
+    { title: 'aboutValueCollaborationTitle', description: 'aboutValueCollaborationCopy', icon: Handshake },
+    { title: 'aboutValueQualityTitle', description: 'aboutValueQualityCopy', icon: Award },
+    { title: 'aboutValueAccessibilityTitle', description: 'aboutValueAccessibilityCopy', icon: Accessibility },
   ];
-  const benefits = Array.isArray(payload.benefits) && payload.benefits.length ? payload.benefits : [
-    { title: 'Easy discovery', description: 'Browse categories, vendors, and services in one place.' },
-    { title: 'Quick coordination', description: 'Request quotes and communicate with providers faster.' },
-    { title: 'Better planning', description: 'Organize event details, budgets, and schedules in a single workflow.' },
+  const workSteps = [
+    { title: 'aboutStepDiscoverTitle', description: 'aboutStepDiscoverCopy', icon: Search },
+    { title: 'aboutStepCompareTitle', description: 'aboutStepCompareCopy', icon: SlidersHorizontal },
+    { title: 'aboutStepConnectTitle', description: 'aboutStepConnectCopy', icon: MessageSquareWarning },
+    { title: 'aboutStepPlanTitle', description: 'aboutStepPlanCopy', icon: ClipboardCheck },
   ];
-  const steps = Array.isArray(payload.steps) && payload.steps.length ? payload.steps : [
-    { title: 'Explore categories', description: 'Select a service type that matches your event needs.' },
-    { title: 'Compare vendors', description: 'See service details, ratings, and location information.' },
-    { title: 'Book and monitor', description: 'Confirm the booking and track progress from planning to completion.' },
+  const platformFeatures = [
+    { title: 'aboutFeatureDiscoveryTitle', description: 'aboutFeatureDiscoveryCopy', icon: Search },
+    { title: 'aboutFeatureMarketplaceTitle', description: 'aboutFeatureMarketplaceCopy', icon: Store },
+    { title: 'aboutFeatureComparisonTitle', description: 'aboutFeatureComparisonCopy', icon: SlidersHorizontal },
+    { title: 'aboutFeatureRequestsTitle', description: 'aboutFeatureRequestsCopy', icon: ClipboardList },
+    { title: 'aboutFeatureResponsiveTitle', description: 'aboutFeatureResponsiveCopy', icon: MonitorSmartphone },
+    { title: 'aboutFeatureSupportTitle', description: 'aboutFeatureSupportCopy', icon: LifeBuoy },
+    { title: 'aboutFeatureDashboardsTitle', description: 'aboutFeatureDashboardsCopy', icon: LayoutDashboard },
+    { title: 'aboutFeatureLanguagesTitle', description: 'aboutFeatureLanguagesCopy', icon: Languages },
   ];
+  const audiences = [
+    { title: 'aboutAudienceCustomersTitle', description: 'aboutAudienceCustomersCopy', action: 'aboutAudienceCustomersAction', destination: '/services', icon: UserRound },
+    { title: 'aboutAudienceVendorsTitle', description: 'aboutAudienceVendorsCopy', action: 'aboutAudienceVendorsAction', destination: '/register?role=vendor', icon: BriefcaseBusiness },
+    { title: 'aboutAudienceOrganizersTitle', description: 'aboutAudienceOrganizersCopy', action: 'aboutAudienceOrganizersAction', destination: '/events', icon: CalendarDays },
+    { title: 'aboutAudienceAdminsTitle', description: 'aboutAudienceAdminsCopy', action: 'aboutAudienceAdminsAction', destination: '/login', icon: Shield },
+  ];
+  const marketplaceStats = [
+    ['categoryCount', 'aboutStatCategories'],
+    ['vendorCount', 'aboutStatVendors'],
+    ['serviceCount', 'aboutStatServices'],
+    ['completedBookingCount', 'aboutStatBookings'],
+  ].filter(([key]) => statistics?.[key] !== null && statistics?.[key] !== undefined && Number.isFinite(Number(statistics[key])));
 
-  const stats = payload.statistics || { categoryCount: 5, vendorCount: 24, serviceCount: 110, completedBookingCount: 680 };
+  return <main className="page-shell about-shell"><div className="content-stack about-page">
+    <section className="about-hero">
+      <div className="about-hero-copy">
+        <p className="about-eyebrow">{t('aboutHeroEyebrow')}</p>
+        <h1>{t('aboutHeroTitle')}</h1>
+        <p className="about-hero-description">{t('aboutHeroCopy')}</p>
+        <div className="about-button-row">
+          <button type="button" className="button" onClick={() => onNavigate('/services')}>{t('aboutExploreServices')}<ArrowRight size={16} aria-hidden="true"/></button>
+          <button type="button" className="button secondary" onClick={() => onNavigate('/vendors')}>{t('aboutFindVendors')}</button>
+        </div>
+        <div className="about-hero-promise"><ShieldCheck size={17} aria-hidden="true"/><span>{t('aboutHeroPromise')}</span></div>
+      </div>
+      <div className="about-hero-media">
+        <img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt={t('aboutHeroImageAlt')} />
+        <div className="about-image-note"><Sparkles size={18} aria-hidden="true"/><span>{t('aboutImageNote')}</span></div>
+      </div>
+    </section>
 
-  return <main className="page-shell"><div className="content-stack about-page"><section className="info-card wide about-hero"><div className="about-copy"><p className="eyebrow">{t('aboutUs')}</p><h2>{hero.heading}</h2><p className="muted">{hero.subtitle}</p><p>{payload.introduction || 'EventHub helps organizers and customers discover event services, compare categories, request quotations, and coordinate bookings in one place.'}</p><div className="cta-row"><button type="button" className="button" onClick={() => navigateBrowserPath('/vendors')}>{t('findVendorsNav')}</button><button type="button" className="button secondary" onClick={() => navigateBrowserPath('/categories')}>{t('browseAll')}</button></div></div><div className="about-hero-media"><img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt="EventHub team planning" /><div className="hero-overlay-card"><strong>{stats.vendorCount || 24}+</strong><span>{t('verified')}</span></div></div></section>
+    {marketplaceStats.length > 0 && <section className="about-stats" aria-label={t('aboutMarketplaceStats')}>
+      {marketplaceStats.map(([key, label]) => <article className="about-stat-card" key={key}><strong>{Number(statistics[key]).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}</strong><span>{t(label)}</span></article>)}
+    </section>}
 
-  <div className="metric-grid"><article className="metric-card"><p>{t('serviceCategories')}</p><strong>{stats.categoryCount || 5}</strong><span>{t('categoriesEyebrow')}</span></article><article className="metric-card"><p>{t('activeVendors')}</p><strong>{stats.vendorCount || 24}</strong><span>{t('verified')}</span></article><article className="metric-card"><p>{t('popularServices')}</p><strong>{stats.serviceCount || 110}</strong><span>{t('availableServices')}</span></article><article className="metric-card"><p>{t('bookingsClosed')}</p><strong>{stats.completedBookingCount || 680}</strong><span>{t('bookings')}</span></article></div>
+    {error && <div className="about-load-error" role="alert"><span>{error}</span><button type="button" className="button secondary small" onClick={() => setReloadKey((key) => key + 1)}>{t('retry')}</button></div>}
 
-  <div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('ourMission')}</h3></div><p>{payload.mission || 'Simplify event planning by connecting customers with the right service categories and vendors.'}</p></article><article className="panel"><div className="panel-header"><h3>{t('ourVision')}</h3></div><p>{payload.vision || 'Make event-service discovery more accessible, better organized, and easier to trust.'}</p></article></div>
+    <section className="about-purpose-section">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutPurposeEyebrow')}</p><h2>{t('aboutPurposeHeading')}</h2></div>
+      <div className="about-purpose-grid">
+        <article className="about-purpose-card">
+          <div className="about-purpose-icon"><Target size={23} aria-hidden="true"/></div>
+          <h3>{t('aboutMissionTitle')}</h3>
+          <p>{t('aboutMissionCopy')}</p>
+          <h4>{t('aboutMissionObjectives')}</h4>
+          <ul>{missionObjectives.map((key) => <li key={key}><Check size={15} aria-hidden="true"/><span>{t(key)}</span></li>)}</ul>
+        </article>
+        <article className="about-purpose-card">
+          <div className="about-purpose-icon"><Compass size={23} aria-hidden="true"/></div>
+          <h3>{t('aboutVisionTitle')}</h3>
+          <p>{t('aboutVisionCopy')}</p>
+          <h4>{t('aboutVisionPriorities')}</h4>
+          <ul>{visionPriorities.map((key) => <li key={key}><Check size={15} aria-hidden="true"/><span>{t(key)}</span></li>)}</ul>
+        </article>
+      </div>
+    </section>
 
-  <section className="panel"><div className="panel-header"><h3>{t('whatWeValue')}</h3></div><div className="card-grid soft-grid">{values.map((item, index) => <article key={`${item.title}-${index}`} className="info-card"><h4>{item.title}</h4><p>{item.description}</p></article>)}</div></section>
+    <section className="about-story">
+      <div className="about-story-mark" aria-hidden="true"><BookOpen size={29}/></div>
+      <div><p className="about-eyebrow">{t('aboutStoryEyebrow')}</p><h2>{t('aboutStoryTitle')}</h2><p>{t('aboutStoryCopy')}</p></div>
+    </section>
 
-  <section className="panel"><div className="panel-header"><h3>{t('howItWorks')}</h3></div><div className="card-grid soft-grid">{steps.map((item, index) => <article key={`${item.title}-${index}`} className="info-card"><span className="eyebrow">{t('step')} {index + 1}</span><h4>{item.title}</h4><p>{item.description}</p></article>)}</div></section>
+    <section className="about-content-section">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutValuesEyebrow')}</p><h2>{t('aboutValuesTitle')}</h2><p>{t('aboutValuesIntro')}</p></div>
+      <div className="about-value-grid">{coreValues.map(({ title, description, icon: Icon }) => <article className="about-value-card" key={title}>
+        <div className="about-card-icon"><Icon size={21} aria-hidden="true"/></div><h3>{t(title)}</h3><p>{t(description)}</p>
+      </article>)}</div>
+    </section>
 
-  <section className="panel"><div className="panel-header"><h3>{t('whyEventHub')}</h3></div><div className="list-stack">{benefits.map((item, index) => <div key={`${item.title}-${index}`} className="list-card"><div><strong>{item.title}</strong><small>{item.description}</small></div></div>)}</div></section>
+    <section className="about-content-section">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutProcessEyebrow')}</p><h2>{t('aboutProcessTitle')}</h2><p>{t('aboutProcessIntro')}</p></div>
+      <div className="about-step-grid">{workSteps.map(({ title, description, icon: Icon }, index) => <article className="about-step-card" key={title}>
+        <div className="about-step-top"><span className="about-step-number">{String(index + 1).padStart(2, '0')}</span><Icon size={22} aria-hidden="true"/></div><h3>{t(title)}</h3><p>{t(description)}</p>
+      </article>)}</div>
+    </section>
 
-  {error && <div className="alert error">{error}<button type="button" className="button secondary small" onClick={() => window.location.reload()}>Retry</button></div>}
+    <section className="about-content-section">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutWhyEyebrow')}</p><h2>{t('aboutWhyTitle')}</h2><p>{t('aboutWhyIntro')}</p></div>
+      <div className="about-feature-grid">{platformFeatures.map(({ title, description, icon: Icon }) => <article className="about-feature-card" key={title}>
+        <Icon size={20} aria-hidden="true"/><div><h3>{t(title)}</h3><p>{t(description)}</p></div>
+      </article>)}</div>
+    </section>
 
-  <section className="info-card wide cta-banner"><div><p className="eyebrow">{t('readyToPlan')}</p><h3>{t('buildNextEvent')}</h3></div><div className="cta-row"><button type="button" className="button" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button><button type="button" className="button secondary" onClick={() => navigateBrowserPath('/contact')}>{t('talkToSupport')}</button></div></section>
+    <section className="about-content-section">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutAudienceEyebrow')}</p><h2>{t('aboutAudienceTitle')}</h2><p>{t('aboutAudienceIntro')}</p></div>
+      <div className="about-audience-grid">{audiences.map(({ title, description, action, destination, icon: Icon }) => <article className="about-audience-card" key={title}>
+        <div className="about-card-icon"><Icon size={21} aria-hidden="true"/></div><h3>{t(title)}</h3><p>{t(description)}</p><button className="about-text-link" type="button" onClick={() => onNavigate(destination)}>{t(action)}<ArrowRight size={15} aria-hidden="true"/></button>
+      </article>)}</div>
+    </section>
+
+    <section className="about-cta">
+      <div><p className="about-eyebrow">{t('aboutCtaEyebrow')}</p><h2>{t('aboutCtaTitle')}</h2><p>{t('aboutCtaCopy')}</p></div>
+      <div className="about-button-row">
+        <button type="button" className="button" onClick={() => onNavigate('/vendors')}>{t('aboutFindVendors')}<ArrowRight size={16} aria-hidden="true"/></button>
+        <button type="button" className="button about-cta-secondary" onClick={() => onNavigate('/events')}>{t('aboutExploreEvents')}</button>
+        <button type="button" className="button about-cta-outline" onClick={() => onNavigate('/contact')}>{t('aboutContactUs')}</button>
+      </div>
+    </section>
   </div></main>;
 }
 
 function ContactPage() {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [page, setPage] = useState({ contact: {}, faq: [] });
-  const [form, setForm] = useState({
+  const emptyForm = {
     full_name: '',
     email: '',
     phone: '',
     subject: '',
-    inquiry_type: 'general_inquiry',
     message: '',
-  });
+  };
+  const [page, setPage] = useState({ contact: {} });
+  const [form, setForm] = useState(emptyForm);
   const [errors, setErrors] = useState({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState('');
-  const [error, setError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [contactDetailsOpen, setContactDetailsOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
+    setLoading(true);
 
     async function loadContactPage() {
       try {
         const response = await api('/contact');
         if (active) {
-          setPage(response?.data || { contact: {}, faq: [] });
-          setError('');
+          setPage(response?.data || { contact: {} });
+          setLoadError('');
         }
       } catch (issue) {
-        if (active) setError(t('contactLoadError'));
+        if (active) setLoadError(t('contactLoadError'));
       } finally {
         if (active) setLoading(false);
       }
@@ -1211,15 +2121,19 @@ function ContactPage() {
 
     loadContactPage();
     return () => { active = false; };
-  }, [language]);
+  }, [language, reloadKey]);
 
   function updateValue(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
     setErrors((current) => ({ ...current, [key]: '' }));
+    setSubmitError('');
+    setSuccess('');
   }
 
   async function submitContact(event) {
     event.preventDefault();
+    if (submitting) return;
+
     const { normalized, errors: validationErrors } = validateContactForm(form, language);
     if (Object.keys(validationErrors).length) {
       setErrors(validationErrors);
@@ -1227,80 +2141,131 @@ function ContactPage() {
     }
 
     setSubmitting(true);
-    setError('');
+    setSubmitError('');
     setSuccess('');
+    setErrors({});
 
     try {
       const response = await api('/contact', {
         method: 'POST',
         body: JSON.stringify(normalized),
       });
-      setSuccess(`${t('emailSent')} ${t('reference')}: ${response?.data?.reference || 'EH-000001'}`);
-      setForm({
-        full_name: '',
-        email: '',
-        phone: '',
-        subject: '',
-        inquiry_type: 'general_inquiry',
-        message: '',
-      });
+      if (!response?.success || !response?.data?.id) {
+        throw new Error(response?.message || t('contactSubmitError'));
+      }
+      const reference = response.data.reference;
+      setSuccess(reference ? `${t('messageSaved')} ${t('reference')}: ${reference}` : t('messageSaved'));
+      setForm({ ...emptyForm });
     } catch (issue) {
-      setError(t('unableToSendMessage'));
+      setSubmitError(issue.status === 429 ? issue.message : issue.message || t('contactSubmitError'));
     } finally {
       setSubmitting(false);
     }
   }
 
   const contactInfo = buildContactInfo(page.contact || {});
-
+  const hasContactInfo = Boolean(contactInfo.email || contactInfo.phone || contactInfo.address || contactInfo.hours || contactInfo.socials.length);
   if (loading) {
-    return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />{t('loadingContactInfo')}</div></div></main>;
+    return <main className="page-shell"><div className="content-stack"><div className="loading" role="status"><span className="spinner" />{t('loadingContactInfo')}</div></div></main>;
   }
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('contactUsNav')}</p><h2>{t('contactHeading')}</h2></div></div>
-    <div className="two-column-layout">
-      <section className="panel">
-        <div className="panel-header"><h3>{t('contactDetails')}</h3></div>
-        <div className="info-list">
-          {contactInfo.email && <div className="list-card"><strong>{t('email')}</strong><small>{contactInfo.email}</small></div>}
-          {contactInfo.phone && <div className="list-card"><strong>{t('phone')}</strong><small>{contactInfo.phone}</small></div>}
-          {contactInfo.address && <div className="list-card"><strong>{t('office')}</strong><small>{contactInfo.address}</small></div>}
-          {contactInfo.hours && <div className="list-card"><strong>{t('supportHours')}</strong><small>{contactInfo.hours}</small></div>}
-        </div>
-        {contactInfo.socials?.length ? <div className="social-links"><strong>{t('followUs')}</strong><div className="link-stack">{contactInfo.socials.map((entry, index) => <a key={`${entry}-${index}`} href={entry.url || '#'} target="_blank" rel="noreferrer">{entry.label || 'Social link'}</a>)}</div></div> : null}
-      </section>
+  const phoneLink = contactInfo.phone.replace(/[^\d+]/g, '');
+  const mapUrl = contactInfo.address
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(contactInfo.address)}`
+    : '';
 
-      <section className="panel">
-        <div className="panel-header"><h3>{t('sendMessage')}</h3></div>
-        {error && <div className="alert error">{error}<button type="button" className="button secondary small" onClick={() => window.location.reload()}>Retry</button></div>}
-        {success && <div className="alert success">{success}</div>}
-        <form className="stack-form" onSubmit={submitContact} noValidate>
-          <div className="form-grid two-col">
-            <label className="field"><span>{t('fullName')}</span><input value={form.full_name} onChange={(event) => updateValue('full_name', event.target.value)} required /></label>
-            <label className="field"><span>{t('email')}</span><input type="email" value={form.email} onChange={(event) => updateValue('email', event.target.value)} required /></label>
-            <label className="field"><span>{t('phone')}</span><input value={form.phone} onChange={(event) => updateValue('phone', event.target.value)} placeholder={t('optional')} /></label>
-            <label className="field"><span>{t('inquiryType')}</span><select value={form.inquiry_type} onChange={(event) => updateValue('inquiry_type', event.target.value)}>
-              {INQUIRY_TYPES.map((option) => <option key={option.value} value={option.value}>{translateText(option.label, language)}</option>)}
-            </select></label>
+  return <main className="page-shell contact-page">
+    <div className="content-stack contact-content">
+      {loadError && <div className="alert error contact-load-error" role="alert">{loadError}<button type="button" className="button secondary small" onClick={() => setReloadKey((value) => value + 1)}>{t('retry')}</button></div>}
+
+      <div className="contact-layout">
+        <section className="panel contact-card contact-information">
+          <h2 className="contact-details-heading">
+            <button type="button" id="contact-details-toggle" aria-expanded={contactDetailsOpen} aria-controls="contact-details-content" onClick={() => setContactDetailsOpen((open) => !open)}>
+              <span>{t('contactDetails')}</span><ChevronDown size={20} aria-hidden="true" />
+            </button>
+          </h2>
+          <div className={`contact-details-content ${contactDetailsOpen ? 'is-open' : ''}`} id="contact-details-content" role="region" aria-labelledby="contact-details-toggle" aria-hidden={!contactDetailsOpen}>
+            <div className="contact-details-inner">
+              {hasContactInfo ? <>
+                <div className="contact-methods">
+                  {contactInfo.email && <div className="contact-method">
+                    <span className="contact-method-icon"><Mail size={19} aria-hidden="true" /></span>
+                    <div><h3>{t('emailAddress')}</h3><a tabIndex={contactDetailsOpen ? 0 : -1} href={`mailto:${contactInfo.email}`}>{contactInfo.email}</a></div>
+                  </div>}
+                  {contactInfo.phone && <div className="contact-method">
+                    <span className="contact-method-icon"><Phone size={19} aria-hidden="true" /></span>
+                    <div><h3>{t('phone')}</h3><a tabIndex={contactDetailsOpen ? 0 : -1} href={`tel:${phoneLink}`}>{contactInfo.phone}</a></div>
+                  </div>}
+                  {contactInfo.address && <div className="contact-method">
+                    <span className="contact-method-icon"><MapPin size={19} aria-hidden="true" /></span>
+                    <div><h3>{t('office')}</h3><p>{contactInfo.address}</p><a tabIndex={contactDetailsOpen ? 0 : -1} className="contact-detail-link" href={mapUrl} target="_blank" rel="noreferrer">{t('viewMap')} <ExternalLink size={13} aria-hidden="true" /></a></div>
+                  </div>}
+                  {contactInfo.hours && <div className="contact-method">
+                    <span className="contact-method-icon"><Clock3 size={19} aria-hidden="true" /></span>
+                    <div><h3>{t('supportHours')}</h3><p>{contactInfo.hours}</p></div>
+                  </div>}
+                </div>
+                {contactInfo.socials.length > 0 && <div className="contact-socials">
+                  <h3>{t('followUs')}</h3>
+                  <div>{contactInfo.socials.map((entry, index) => <a tabIndex={contactDetailsOpen ? 0 : -1} key={`${entry.url}-${index}`} href={entry.url} target="_blank" rel="noopener noreferrer"><Share2 size={15} aria-hidden="true" />{entry.label}<ExternalLink size={13} aria-hidden="true" /></a>)}</div>
+                </div>}
+              </> : <p className="contact-info-empty">{t('contactInfoUnavailable')}</p>}
+            </div>
           </div>
-          <label className="field"><span>{t('subject')}</span><input value={form.subject} onChange={(event) => updateValue('subject', event.target.value)} required /></label>
-          {errors.subject && <small className="field-error">{errors.subject}</small>}
-          <label className="field"><span>{t('message')}</span><textarea rows="6" value={form.message} onChange={(event) => updateValue('message', event.target.value)} required /></label>
-          {errors.message && <small className="field-error">{errors.message}</small>}
-          <button className="button" type="submit" disabled={submitting}>{submitting ? t('sending') : t('sendInquiry')}</button>
-        </form>
-      </section>
-    </div>
+        </section>
 
-    <section className="panel"><div className="panel-header"><h3>{t('frequentlyAskedQuestions')}</h3></div>
-      <div className="accordion-stack">{(page.faq || []).map((item, index) => (
-        <div key={`${item.question}-${index}`} className="info-card"><strong>{item.question}</strong><p>{item.answer}</p></div>
-      ))}</div>
-    </section>
-  </div></main>;
+        <section className="panel contact-card contact-form-card" aria-labelledby="contact-form-title">
+          <div className="contact-card-heading">
+            <h2 id="contact-form-title">{t('sendMessage')}</h2>
+            <p>{t('sendMessageDescription')}</p>
+          </div>
+          {submitError && <div className="alert error" role="alert">{submitError}</div>}
+          {success && <div className="alert success" role="status">{success}</div>}
+          <form className="contact-form" onSubmit={submitContact} noValidate>
+            <div className="contact-form-grid">
+              <label className="contact-field">
+                <span>{t('fullName')} <b aria-hidden="true">*</b></span>
+                <input name="full_name" autoComplete="name" maxLength="160" placeholder={t('fullNamePlaceholder')} aria-invalid={Boolean(errors.full_name)} aria-describedby={errors.full_name ? 'contact-name-error' : undefined} value={form.full_name} onChange={(event) => updateValue('full_name', event.target.value)} required />
+                {errors.full_name && <small className="field-error" id="contact-name-error">{errors.full_name}</small>}
+              </label>
+              <label className="contact-field">
+                <span>{t('emailAddress')} <b aria-hidden="true">*</b></span>
+                <input name="email" type="email" autoComplete="email" maxLength="254" placeholder={t('emailPlaceholder')} aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? 'contact-email-error' : undefined} value={form.email} onChange={(event) => updateValue('email', event.target.value)} required />
+                {errors.email && <small className="field-error" id="contact-email-error">{errors.email}</small>}
+              </label>
+              <label className="contact-field">
+                <span>{t('phoneOptional')}</span>
+                <input name="phone" type="tel" autoComplete="tel" maxLength="40" placeholder={t('phonePlaceholder')} aria-invalid={Boolean(errors.phone)} aria-describedby={errors.phone ? 'contact-phone-error' : undefined} value={form.phone} onChange={(event) => updateValue('phone', event.target.value)} />
+                {errors.phone && <small className="field-error" id="contact-phone-error">{errors.phone}</small>}
+              </label>
+              <label className="contact-field">
+                <span>{t('subject')} <b aria-hidden="true">*</b></span>
+                <input name="subject" minLength="4" maxLength="200" placeholder={t('subjectPlaceholder')} aria-invalid={Boolean(errors.subject)} aria-describedby={errors.subject ? 'contact-subject-error' : undefined} value={form.subject} onChange={(event) => updateValue('subject', event.target.value)} required />
+                {errors.subject && <small className="field-error" id="contact-subject-error">{errors.subject}</small>}
+              </label>
+            </div>
+            <label className="contact-field">
+              <span>{t('message')} <b aria-hidden="true">*</b></span>
+              <textarea name="message" rows="6" minLength="20" maxLength="2500" placeholder={t('messagePlaceholder')} aria-invalid={Boolean(errors.message)} aria-describedby={errors.message ? 'contact-message-error' : undefined} value={form.message} onChange={(event) => updateValue('message', event.target.value)} required />
+              {errors.message && <small className="field-error" id="contact-message-error">{errors.message}</small>}
+            </label>
+            <button className="button contact-submit" type="submit" disabled={submitting}>
+              {submitting ? <><span className="spinner" aria-hidden="true" />{t('sending')}</> : <>{t('sendMessageButton')} <Send size={16} aria-hidden="true" /></>}
+            </button>
+          </form>
+        </section>
+      </div>
+
+    </div>
+  </main>;
 }
 
-function LoginPage({ onLogin }) {
+function AuthHomeLink() {
+  return <a className="auth-home-link" href="/"><ArrowLeft size={16} aria-hidden="true" /><span>Back to Home</span></a>;
+}
+
+function LoginPage({ onLogin, demoMode = false }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
@@ -1309,33 +2274,99 @@ function LoginPage({ onLogin }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email, password); } catch (issue) { setError(translateText(issue.message, language)); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EH</div><p className="eyebrow">{t('eventHubAccount')}</p><h1>{t('signIn')}</h1><p className="muted">{t('accessWorkspace')}</p>{error && <div className="alert error" role="alert">{error}</div>}<form onSubmit={submit}><label className="field"><span>{t('emailAddress')}</span><input type="email" name="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></label><div className="field"><span id="login-password-label">{t('password')}</span><div className="password-input-wrap"><input aria-labelledby="login-password-label" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /><button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div><button className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button></form><div className="inline-links"><button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button></div></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="brand-mark">EH</div><h1>{t('signIn')}</h1><p className="muted">{t('accessWorkspace')}</p>{error && <div className="alert error" role="alert">{error}</div>}<form onSubmit={submit}><label className="field"><span>{demoMode ? 'Email address or username' : t('emailAddress')}</span><input type={demoMode ? 'text' : 'email'} name="email" placeholder={demoMode ? 'Email address or username' : undefined} autoComplete="username" autoCapitalize="none" required value={email} onChange={(e) => setEmail(e.target.value)} /></label><div className="field"><span id="login-password-label">{t('password')}</span><div className="password-input-wrap"><input aria-labelledby="login-password-label" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /><button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div><button className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button></form><div className="inline-links"><button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button></div><div className="auth-home-footer"><AuthHomeLink /></div></div></main>;
 }
 
-function RegisterPage({ onRegister }) {
+function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '', role: 'customer' });
+  const [form, setForm] = useState(() => {
+    const requestedRole = new URLSearchParams(window.location.search).get('role');
+    return { name: '', email: '', password: '', confirmPassword: '', role: ['customer', 'organizer', 'vendor'].includes(requestedRole) ? requestedRole : 'customer' };
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const redirectTimer = useRef(null);
+  const passwordValid = form.password.length >= 12
+    && form.password.length <= 16
+    && /[A-Z]/.test(form.password)
+    && /[a-z]/.test(form.password)
+    && /\d/.test(form.password);
+  const passwordError = Boolean(form.password && !passwordValid);
+  const confirmMismatch = Boolean(form.confirmPassword && form.confirmPassword !== form.password);
+
   async function submit(event) {
     event.preventDefault();
     setError('');
     setSuccess('');
-    if (form.password !== form.confirmPassword) return setError(t('passwordMismatch'));
-    if (form.password.length < 12 || !/[A-Z]/.test(form.password) || !/[a-z]/.test(form.password) || !/\d/.test(form.password)) return setError(t('passwordRequirements'));
+    if (!passwordValid) return;
+    if (form.password !== form.confirmPassword) return;
     setBusy(true);
     try {
-      const result = await onRegister(form.name, form.email, form.password, form.role);
+      const result = await onRegister(form.name.trim(), form.email.trim(), form.password, form.role);
       setSuccess(translateText(result?.message, language) || t('registrationSuccess'));
+      if (result?.demo && result.dashboardPath) {
+        redirectTimer.current = window.setTimeout(() => {
+          onDemoRegistrationComplete(result.profile, result.dashboardPath);
+        }, 800);
+      }
     } catch (issue) {
       setError(translateText(issue.message, language));
     } finally {
       setBusy(false);
     }
   }
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EH</div><p className="eyebrow">{t('eventHubAccount')}</p><h1>{t('createAccountHeading')}</h1><p className="muted">{t('registerAsRole')}</p>{error && <div className="alert error" role="alert">{error}</div>}{success && <div className="alert success" role="status">{success}<div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div></div>}<form onSubmit={submit}><label className="field"><span>{t('fullName')}</span><input name="name" autoComplete="name" minLength="2" maxLength="160" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label><label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></label><PasswordField name="password" label={t('password')} value={form.password} autoComplete="new-password" language={language} onChange={(e) => setForm({ ...form, password: e.target.value })}/><p className="field-hint">{t('passwordRequirements')}</p><PasswordField name="confirm-password" label={t('confirmPassword')} value={form.confirmPassword} autoComplete="new-password" language={language} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}/><label className="field"><span>{t('accountType')}</span><select name="role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="customer">{t('customerDashboard')}</option><option value="organizer">{t('organizerDashboard')}</option><option value="vendor">{t('vendorDashboard')}</option></select></label><button className="button login-button" disabled={busy || Boolean(success)}>{busy ? t('creatingAccount') : t('registerNow')}</button></form><div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div></div></main>;
+  return <main className="login-wrap"><div className="login-card registration-card">
+    <div className="brand-mark">EH</div>
+    <p className="eyebrow">{t('eventHubAccount')}</p>
+    <h1>{t('createAccountHeading')}</h1>
+    <p className="muted">{t('registerAsRole')}</p>
+    {error && <div className="alert error" role="alert">{error}</div>}
+    {success && <div className="alert success" role="status">{success}<div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => { window.clearTimeout(redirectTimer.current); navigateBrowserPath('/login'); }}>{t('loginHere')}</button></div></div>}
+    <form onSubmit={submit}>
+      <label className="field"><span>{t('fullName')}</span><input name="name" autoComplete="name" minLength="2" maxLength="160" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label>
+      <label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></label>
+      <div className="registration-password-field">
+        <PasswordField
+          name="password"
+          label={t('password')}
+          value={form.password}
+          autoComplete="new-password"
+          language={language}
+          placeholder={t('passwordPlaceholder')}
+          minLength={12}
+          maxLength={16}
+          describedBy={passwordError ? 'registration-password-error' : undefined}
+          invalid={passwordError}
+          onChange={(e) => setForm({ ...form, password: e.target.value })}
+        />
+        {passwordError && <p id="registration-password-error" className="field-error" role="alert">{t('passwordInvalid')}</p>}
+      </div>
+      <div className="registration-confirm-field">
+        <PasswordField
+          name="confirm-password"
+          label={t('confirmPassword')}
+          value={form.confirmPassword}
+          autoComplete="new-password"
+          language={language}
+          minLength={12}
+          maxLength={16}
+          describedBy={form.confirmPassword ? 'registration-confirm-feedback' : undefined}
+          invalid={confirmMismatch}
+          onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+        />
+        {form.confirmPassword && <p id="registration-confirm-feedback" className={confirmMismatch ? 'field-error' : 'field-success'} role={confirmMismatch ? 'alert' : 'status'} aria-live="polite">
+          {!confirmMismatch && <Check size={13} aria-hidden="true" />}
+          {confirmMismatch ? t('passwordMismatch') : t('passwordsMatch')}
+        </p>}
+      </div>
+      <label className="field"><span>{t('accountType')}</span><select name="role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="customer">{t('customerDashboard')}</option><option value="organizer">{t('organizerDashboard')}</option><option value="vendor">{t('vendorDashboard')}</option></select></label>
+      <button className="button login-button" disabled={busy || Boolean(success)}>{busy ? t('creatingAccount') : t('registerNow')}</button>
+    </form>
+    <div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div>
+    <div className="auth-home-footer"><AuthHomeLink /></div>
+  </div></main>;
 }
 
 function ForgotPasswordPage({ onSubmit }) {
@@ -1436,13 +2467,15 @@ function VendorLogin({ onLogin }) {
   return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('vendorPortal', language)}</p><h1>{translate('vendorSignIn', language)}</h1><p className="muted">{translate('manageYourBusiness', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openVendorDashboard', language)}</button></form><p className="login-note">{translateText('Vendor access remains restricted to the authenticated vendor’s own records and services.', language)}</p></div></main>;
 }
 
-function VendorDashboard({ user, onLogout }) {
+function VendorDashboard({ user, onLogout, onUserChange }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const vendorMenu = [
-    ['overview', 'Dashboard Overview'], ['profile', 'Business Profile'], ['verification', 'Vendor Verification'], ['services', 'My Services'], ['add-edit-services', 'Add and Edit Services'], ['categories', 'Service Categories'], ['pricing', 'Pricing and Packages'], ['availability', 'Availability Calendar'], ['requests', 'Booking Requests'], ['confirmed', 'Confirmed Bookings'], ['history', 'Booking History'], ['quotations', 'Quotations'], ['payments', 'Payments and Earnings'], ['messages', 'Customer Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['reports', 'Reports'], ['account', 'Profile'], ['logout', 'Logout']
+    ['overview', 'Dashboard Overview'], ['profile', 'Business Profile'], ['verification', 'Vendor Verification'], ['services', 'My Services'], ['add-edit-services', 'Add and Edit Services'], ['categories', 'Service Categories'], ['pricing', 'Pricing and Packages'], ['availability', 'Availability Calendar'], ['requests', 'Booking Requests'], ['confirmed', 'Confirmed Bookings'], ['history', 'Booking History'], ['quotations', 'Quotations'], ['payments', 'Payments and Earnings'], ['messages', 'Customer Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['reports', 'Reports'], ['account', 'Profile']
   ];
   const [slug, setSlug] = useState('overview');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -1493,7 +2526,7 @@ function VendorDashboard({ user, onLogout }) {
       case 'history':
         return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BOOKING HISTORY</p><h2>Historical records</h2><p className="muted">Review completed, rejected, and cancelled bookings while preserving service history.</p></div></div><div className="panel" style={{padding:'20px'}}><div className="list-stack">{(data.history || []).map((entry) => <div key={entry.id} className="list-card"><div><strong>{entry.service}</strong><small>{entry.status}</small></div><span>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits:0 }).format(entry.amount)}</span></div>)}</div></div></div>;
       case 'quotations':
-        return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">QUOTATIONS</p><h2>Service quotations</h2><p className="muted">Review, issue, revise, and track accepted offers.</p></div></div><div className="panel" style={{padding:'20px'}}><div className="list-stack">{(data.quotations || []).map((quote) => <div key={quote.id} className="list-card"><div><strong>{quote.customer}</strong><small>Valid through {quote.validUntil}</small></div><span className="pill pending">{quote.status}</span></div>)}</div></div></div>;
+        return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">QUOTATIONS</p><h2>Service quotations</h2><p className="muted">Review customer requests and respond with a quote or decline them.</p></div></div><div className="panel" style={{padding:'20px'}}><div className="list-stack">{(data.quotations || []).map((quote) => <article key={quote.id} className="list-card"><div><strong>{quote.customer} · {quote.service}</strong><small>{quote.event || 'Event not specified'} {quote.validUntil ? `· Valid through ${quote.validUntil}` : ''}</small>{quote.status === 'Draft' ? <VendorQuoteResponseForm quote={quote} onResponded={(result) => setData((current) => ({ ...current, quotations: current.quotations.map((item) => item.id === result.id ? { ...item, status: result.status === 'sent' ? 'Sent' : 'Declined', amount: result.amount ?? item.amount, validUntil: result.validUntil ?? item.validUntil } : item) }))}/> : <><small>{quote.currency} {Number(quote.amount).toLocaleString()}</small>{quote.notes && <small>{quote.notes}</small>}</>}</div><span className={`pill ${quote.status === 'Draft' ? 'pending' : 'active'}`}>{quote.status}</span></article>)}</div></div></div>;
       case 'payments':
         return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">PAYMENTS AND EARNINGS</p><h2>Financial overview</h2><p className="muted">Track payout progress, fees, and earnings by transaction.</p></div></div><div className="metric-grid"><article className="metric-card"><p>Gross earnings</p><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits:0 }).format(data.payments?.earnings ?? 0)}</strong><span>Platform accounting total</span></article><article className="metric-card"><p>Pending payouts</p><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits:0 }).format(data.payments?.pendingPayouts ?? 0)}</strong><span>Awaiting processing</span></article><article className="metric-card"><p>Platform fees</p><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits:0 }).format(data.payments?.fees ?? 0)}</strong><span>Commission and service fees</span></article></div></div>;
       case 'messages':
@@ -1514,7 +2547,12 @@ function VendorDashboard({ user, onLogout }) {
     }
   };
 
-  return <div className="app-shell"><aside className="sidebar open"><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{t('vendorArea')}</span></div></div><div className="nav-caption">{t('businessArea')}</div><nav>{vendorMenu.map(([id, label]) => <button key={id} className={`nav-item ${slug === id ? 'active' : ''}`} onClick={() => id === 'logout' ? onLogout() : setSlug(id)}><span>{translateText(label, language)}</span></button>)}</nav></aside><main className="main-area"><header className="topbar"><div className="breadcrumb">{t('vendorArea')} <span>/</span> <strong>{translateText(vendorMenu.find(([id]) => id === slug)?.[1] || 'Dashboard Overview', language)}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{t('secureSession')}</span><button className="top-user"><span className="avatar small-avatar">{user.full_name?.slice(0,1) || 'V'}</span>{user.name || user.full_name}</button></div></header><div className="content">{renderSection()}</div><footer className="footer">{t('vendorPortal')} <span>•</span> {t('ownedRecordsOnly')}</footer></main></div>;
+  function toggleSidebar() {
+    if (window.matchMedia('(max-width: 760px)').matches) setSidebarOpen((current) => !current);
+    else setSidebarCollapsed((current) => !current);
+  }
+
+  return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('vendorDashboard').toUpperCase()} groups={[{ id: 'vendor', label: t('businessArea'), items: vendorMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target) => setSlug(target === 'profile' ? 'account' : target)} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{slug === 'settings' ? <DashboardSettings user={user}/> : renderSection()}</div><footer className="footer">{t('vendorPortal')} <span>•</span> {t('ownedRecordsOnly')}</footer></main></div>;
 }
 
 function CustomerLogin({ onLogin }) {
@@ -1540,14 +2578,16 @@ function CustomerLogin({ onLogin }) {
   return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('customerPortal', language)}</p><h1>{translate('customerSignIn', language)}</h1><p className="muted">{translate('discoverManageEvents', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openCustomerDashboard', language)}</button></form></div></main>;
 }
 
-function CustomerDashboard({ user, onLogout }) {
+function CustomerDashboard({ user, onLogout, onUserChange }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const customerMenu = [
-    ['overview', 'Dashboard Overview'], ['vendors', 'Browse Vendors'], ['services', 'Search Services'], ['categories', 'Service Categories'], ['bookings', 'My Bookings'], ['history', 'Booking History'], ['events', 'My Events'], ['favorites', 'Saved Vendors'], ['quotations', 'Request Quotations'], ['payments', 'Payments and Transactions'], ['messages', 'Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['profile', 'Profile'], ['logout', 'Logout']
+    ['overview', 'Dashboard Overview'], ['vendors', 'Browse Vendors'], ['services', 'Search Services'], ['categories', 'Service Categories'], ['bookings', 'My Bookings'], ['history', 'Booking History'], ['events', 'My Events'], ['favorites', 'Saved Vendors'], ['quotations', 'Request Quotations'], ['payments', 'Payments and Transactions'], ['messages', 'Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['profile', 'Profile']
   ];
 
   const [slug, setSlug] = useState('overview');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data, setData] = useState({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -1652,7 +2692,12 @@ function CustomerDashboard({ user, onLogout }) {
     }
   };
 
-  return <div className="app-shell"><aside className="sidebar open"><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{t('customerArea')}</span></div></div><div className="nav-caption">{t('bookings')}</div><nav>{customerMenu.map(([id, label]) => <button key={id} className={`nav-item ${slug === id ? 'active' : ''}`} onClick={() => id === 'logout' ? onLogout() : setSlug(id)}><span>{translateText(label, language)}</span></button>)}</nav></aside><main className="main-area"><header className="topbar"><div className="breadcrumb">{t('customerArea')} <span>/</span> <strong>{translateText(customerMenu.find(([id]) => id === slug)?.[1] || 'Dashboard Overview', language)}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{t('secureSession')}</span><button className="top-user"><span className="avatar small-avatar">{user.full_name?.slice(0,1) || 'C'}</span>{user.name || user.full_name}</button></div></header><div className="content">{renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
+  function toggleSidebar() {
+    if (window.matchMedia('(max-width: 760px)').matches) setSidebarOpen((current) => !current);
+    else setSidebarCollapsed((current) => !current);
+  }
+
+  return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('customerDashboard').toUpperCase()} groups={[{ id: 'customer', label: t('bookings'), items: customerMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={setSlug} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{slug === 'settings' ? <DashboardSettings user={user}/> : renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
 }
 
 function OrganizerLogin({ onLogin }) {
@@ -1678,9 +2723,12 @@ function OrganizerLogin({ onLogin }) {
   return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('organizerPortal', language)}</p><h1>{translate('organizerSignIn', language)}</h1><p className="muted">{translate('secureOrganizerAccess', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openOrganizerDashboard', language)}</button></form></div></main>;
 }
 
-function OrganizerDashboard({ user, onLogout }) {
+function OrganizerDashboard({ user, onLogout, onUserChange }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
+  const [dashboardView, setDashboardView] = useState('overview');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [overview, setOverview] = useState(null);
   const [events, setEvents] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -1707,14 +2755,25 @@ function OrganizerDashboard({ user, onLogout }) {
     load();
   }, []);
 
-  if (error) return <div className="alert error">{translateText(error, language)}</div>;
-  if (!overview) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
+  function toggleSidebar() {
+    if (window.matchMedia('(max-width: 760px)').matches) setSidebarOpen((current) => !current);
+    else setSidebarCollapsed((current) => !current);
+  }
+  function renderDashboard(content) {
+    const organizerMenu = [['overview', 'Dashboard Overview'], ['events', 'My Events and Tickets'], ['profile', 'My Profile'], ['settings', 'Account Settings']];
+    return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle="ORGANIZER DASHBOARD" groups={[{ id: 'organizer', label: 'WORKSPACE', items: organizerMenu }]} activePage={dashboardView} onNavigate={setDashboardView} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={setDashboardView} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{content}</div></main></div>;
+  }
+
+  if (error) return renderDashboard(<div className="alert error">{translateText(error, language)}</div>);
+  if (!overview) return renderDashboard(<div className="loading"><span className="spinner"/>{t('loading')}</div>);
 
   const totalBudget = events.reduce((sum, event) => sum + Number(event.budget || 0), 0);
   const upcomingEvents = events.filter((event) => new Date(event.date) >= new Date()).slice(0, 3);
   const activeBookings = bookings.filter((booking) => ['pending', 'confirmed', 'accepted', 'under_review'].includes(String(booking.status).toLowerCase()));
 
-  return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('organizerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || 'Organizer'}</h2><p className="muted">{t('secureOrganizerAccess')}</p></div><div className="header-actions"><LanguageSelector/><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div></div>
+  const profileContent = dashboardView === 'profile' ? <section className="dashboard-settings"><div className="page-heading"><div><p className="eyebrow">PROFILE</p><h2>My Profile</h2><p className="muted">Your organizer account information.</p></div></div><div className="panel settings-preferences"><div><span><strong>{user.name || user.full_name || 'Organizer'}</strong><small>{user.email}</small></span><span className="pill active">Organizer</span></div></div></section> : dashboardView === 'settings' ? <DashboardSettings user={user}/> : null;
+  const eventManagerContent = dashboardView === 'events' ? <OrganizerEventsManager api={api} /> : null;
+  return renderDashboard(profileContent || eventManagerContent || <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('organizerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || 'Organizer'}</h2><p className="muted">{t('secureOrganizerAccess')}</p></div></div>
     <div className="metric-grid">
       <article className="metric-card"><p>{t('activeEvents')}</p><strong>{events.length}</strong><span>{upcomingEvents.length} {t('upcoming')}</span></article>
       <article className="metric-card"><p>{t('vendorMatches')}</p><strong>{vendors.length}</strong><span>{t('verifiedRanked')}</span></article>
@@ -1723,7 +2782,7 @@ function OrganizerDashboard({ user, onLogout }) {
     </div>
     <div className="two-column-layout">
       <article className="panel">
-        <div className="panel-header"><h3>{t('eventPipeline')}</h3><button className="button secondary small">{t('createEvent')}</button></div>
+        <div className="panel-header"><h3>{t('eventPipeline')}</h3><button className="button secondary small" onClick={() => setDashboardView('events')}>{t('createEvent')}</button></div>
         <div className="list-stack">
           {upcomingEvents.length ? upcomingEvents.map((event) => <div key={event.id} className="list-card"><div><strong>{event.title}</strong><small>{event.type} • {event.date}</small></div><span className="pill active">{t('eventPlanned')}</span></div>) : <div className="empty panel"><strong>{t('noUpcomingEvents')}</strong><span>{t('draftEventPrompt')}</span></div>}
         </div>
@@ -1751,7 +2810,7 @@ function OrganizerDashboard({ user, onLogout }) {
         </div>
       </article>
     </div>
-  </section>;
+  </section>);
 }
 
 function Login({onLogin}) {
@@ -1888,14 +2947,15 @@ function DataPage({slug,user,onUserChange}) {
     actions: [],
   };
   const [data,setData]=useState([]); const [pagination,setPagination]=useState({page:1,pageSize:20,total:0});
-  const [loading,setLoading]=useState(true); const [error,setError]=useState(''); const [notice,setNotice]=useState(''); const [query,setQuery]=useState(''); const [search,setSearch]=useState(''); const [status,setStatus]=useState(''); const [modal,setModal]=useState(null); const [busy,setBusy]=useState(false); const [form,setForm]=useState({}); const [roleRows,setRoleRows]=useState([]);
-  const statuses={users:['active','suspended','pending'],roles:['active','inactive'],categories:['active','inactive'],vendors:['pending','verified','rejected'],events:['draft','active','booked','in_progress','completed','cancelled'],bookings:['requested','quoted','accepted','rejected','cancelled','completed','under_review'],'package-requests':['new','reviewed','replied','closed'],payments:['pending','authorized','paid','failed','refunded','refund_pending'],reviews:['published','hidden','flagged'],complaints:['open','investigating','resolved','dismissed'],messages:['new','reviewed','replied','closed'],notifications:['queued','sent','failed','read']}[slug]||[];
-  const load=useCallback(async(page=1)=>{setLoading(true);setError('');try{const params=new URLSearchParams({page:String(page),pageSize:String(pagination.pageSize)});if(search)params.set('q',search);if(status)params.set('status',slug==='roles'||slug==='categories'?(status==='active'?'1':'0'):status);const result=await api(`/admin/${config.endpoint}?${params}`);setData(result.data);setPagination(result.pagination);}catch(issue){setError(issue.message);}finally{setLoading(false);}},[config.endpoint,pagination.pageSize,search,status]);
+  const [loading,setLoading]=useState(true); const [error,setError]=useState(''); const [notice,setNotice]=useState(''); const [query,setQuery]=useState(''); const [search,setSearch]=useState(''); const [status,setStatus]=useState(''); const [inquiryType,setInquiryType]=useState(''); const [modal,setModal]=useState(null); const [busy,setBusy]=useState(false); const [form,setForm]=useState({}); const [roleRows,setRoleRows]=useState([]);
+  const statuses={users:['active','suspended','pending'],roles:['active','inactive'],categories:['active','inactive'],vendors:['pending','verified','rejected'],events:['draft','active','booked','in_progress','completed','cancelled'],bookings:['requested','quoted','accepted','rejected','cancelled','completed','under_review'],'package-requests':['new','reviewed','replied','closed'],payments:['pending','authorized','paid','failed','refunded','refund_pending'],reviews:['published','hidden','flagged'],complaints:['open','investigating','resolved','dismissed'],messages:['new','reviewed','in_progress','replied','resolved','closed'],notifications:['queued','sent','failed','read']}[slug]||[];
+  const statusLabel=(value)=>slug==='messages'?({new:'New',reviewed:'Read',in_progress:'In Progress',replied:'Replied',resolved:'Resolved',closed:'Closed'}[value]||value):translateText(value,language);
+  const load=useCallback(async(page=1)=>{setLoading(true);setError('');try{const params=new URLSearchParams({page:String(page),pageSize:String(pagination.pageSize)});if(search)params.set('q',search);if(status)params.set('status',slug==='roles'||slug==='categories'?(status==='active'?'1':'0'):status);if(inquiryType)params.set('inquiry_type',inquiryType);const result=await api(`/admin/${config.endpoint}?${params}`);setData(result.data);setPagination(result.pagination);}catch(issue){setError(issue.message);}finally{setLoading(false);}},[config.endpoint,inquiryType,pagination.pageSize,search,status,slug]);
   useEffect(()=>{load(1);},[load]);
   useEffect(()=>{if(slug==='users')api('/admin/roles?pageSize=100').then((r)=>setRoleRows(r.data.filter((x)=>x.is_active&&!x.is_admin))).catch(()=>{});},[slug]);
   function startCreate(){setForm({});setModal({kind:'create'});}
   function startEdit(row){setForm(Object.fromEntries(config.fields.map(([key])=>[key,row[key] ?? ''])));setModal({kind:'edit',row});}
-  function startAction(kind,row){setForm({});setModal({kind,row});}
+  function startAction(kind,row){setForm(kind==='status'&&slug==='messages'?{status:row.status==='new'?'reviewed':row.status,admin_reply:row.admin_reply||''}:{});setModal({kind,row});}
   function changeField(name,value){setForm((old)=>({...old,[name]:value}));}
   async function submit(event){event.preventDefault();setBusy(true);setError('');setNotice('');try{
     const row=modal.row; let result;
@@ -1938,7 +2998,22 @@ function DataPage({slug,user,onUserChange}) {
     if(modal.kind==='setting'){result=await api(`/admin/settings/${encodeURIComponent(form.setting_key)}`,{method:'PUT',body:JSON.stringify({value:form.setting_value})});}
     setNotice(slug==='payments'?'Request was not processed.': 'Changes saved.');setModal(null);await load(pagination.page);
   }catch(issue){setError(issue.message);}finally{setBusy(false);}}
-  const actions=(row)=>{const names=config.actions||[];return names.map((action)=>{const label={edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',refund:'Request refund',role:'Change role',status:row.status==='suspended'?'Activate':'Suspend','package-status':'Update status',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint'}[action];return <button key={action} className={`text-action ${['deactivate','reject','refund','status'].includes(action)?'subtle-danger':''}`} onClick={()=>startAction(action==='package-status'?'package-status':action,row)}>{label}</button>;});};
+  async function deleteContactMessage(row){
+    if(!window.confirm(`Permanently delete contact message #${row.id}? This action is recorded in the audit log.`))return;
+    setBusy(true);setError('');setNotice('');
+    try{
+      await api(`/admin/contact/${row.id}`,{method:'DELETE'});
+      setNotice('Contact message deleted.');
+      const lastPage=Math.max(1,Math.ceil((pagination.total-1)/pagination.pageSize));
+      await load(Math.min(pagination.page,lastPage));
+    }catch(issue){setError(issue.message);}finally{setBusy(false);}
+  }
+  const actions=(row)=>{const names=config.actions||[];return names.map((action)=>{
+    if(action==='delete')return <button key={action} className="text-action subtle-danger" type="button" disabled={busy} onClick={()=>deleteContactMessage(row)}>Delete</button>;
+    const label=action==='status'&&slug==='messages'?(row.status==='new'?'Mark read':'Update status'):{edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',refund:'Request refund',role:'Change role',status:row.status==='suspended'?'Activate':'Suspend','package-status':'Update status',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint',view:'View message'}[action];
+    const danger=['deactivate','reject','refund'].includes(action)||(action==='status'&&slug!=='messages');
+    return <button key={action} className={`text-action ${danger?'subtle-danger':''}`} type="button" onClick={()=>startAction(action==='package-status'?'package-status':action,row)}>{label}</button>;
+  });};
   const title=translateText(config.title, language);
   const availableFields=slug==='users'?[['full_name','Full name','text'],['email','Email','email'],['phone','Phone','text'],['password','Temporary password (min. 16 characters)','password'],['role_id','Role','select',roleRows.map((r)=>`${r.id}:${r.name}`).join(',')]]:config.fields||[];
   function modalTitle() {
@@ -1950,7 +3025,7 @@ function DataPage({slug,user,onUserChange}) {
       moderate: 'Moderate booking',
       refund: 'Request refund',
       role: 'Change user role',
-      status: 'Update account status',
+      status: slug === 'messages' ? 'Update contact message' : 'Update account status',
       'package-status': 'Update package request status',
       permissions: 'Role permissions',
       review: 'Moderate review',
@@ -1991,7 +3066,7 @@ function DataPage({slug,user,onUserChange}) {
             <label className="field">
               <span>Message status</span>
               <select value={form.status || modal.row.status || 'new'} onChange={(event) => changeField('status', event.target.value)}>
-                {['new', 'reviewed', 'replied', 'closed'].map((value) => <option key={value} value={value}>{value}</option>)}
+                {['new', 'reviewed', 'in_progress', 'replied', 'resolved', 'closed'].map((value) => <option key={value} value={value}>{value === 'reviewed' ? 'Read' : value}</option>)}
               </select>
             </label>
             <label className="field">
@@ -2179,7 +3254,13 @@ function DataPage({slug,user,onUserChange}) {
             {statuses.length > 0 && (
               <select className="filter-select" value={status} onChange={(event) => setStatus(event.target.value)}>
                 <option value="">{t('allStatuses')}</option>
-                  {statuses.map((value) => <option key={value} value={value}>{translateText(value, language)}</option>)}
+                  {statuses.map((value) => <option key={value} value={value}>{statusLabel(value)}</option>)}
+              </select>
+            )}
+            {config.inquiryTypes && (
+              <select className="filter-select" aria-label="Filter by inquiry type" value={inquiryType} onChange={(event) => setInquiryType(event.target.value)}>
+                <option value="">All inquiry types</option>
+                {config.inquiryTypes.map((option) => <option key={option.value} value={option.value}>{translateText(option.label, language)}</option>)}
               </select>
             )}
             <span className="result-count">{pagination.total} records</span>
@@ -2202,7 +3283,7 @@ function DataPage({slug,user,onUserChange}) {
                     {config.columns.map((column) => (
                       <td key={column} title={display(row[column])}>
                         {column === 'status' || column === 'verification_status' ? (
-                          <span className={`pill ${String(row[column]).toLowerCase()}`}>{display(row[column])}</span>
+                          <span className={`pill ${String(row[column]).toLowerCase()}`}>{column === 'status' ? statusLabel(row[column]) : display(row[column])}</span>
                         ) : (
                           <span className="cell-value">{display(row[column])}</span>
                         )}
@@ -2226,7 +3307,7 @@ function DataPage({slug,user,onUserChange}) {
           </div>
         </>
       )}
-      {modal && <Modal title={modalTitle()} onClose={() => setModal(null)} onSubmit={submit} busy={busy} submitLabel={modal.kind === 'refund' ? 'Submit request' : modal.kind === 'deactivate' ? 'Deactivate' : 'Save'} danger={['deactivate', 'reject', 'refund', 'status'].includes(modal.kind)}>{renderModalFields()}</Modal>}
+      {modal?.kind === 'view' ? <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && setModal(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="contact-message-title"><div className="modal-head"><h2 id="contact-message-title">Contact message #{modal.row.id}</h2><button className="icon-button" type="button" onClick={() => setModal(null)} aria-label="Close"><X size={18}/></button></div><div className="modal-body"><p><strong>From:</strong> {modal.row.full_name} ({modal.row.email})</p>{modal.row.phone && <p><strong>Phone:</strong> {modal.row.phone}</p>}<p><strong>Subject:</strong> {modal.row.subject}</p><p><strong>Inquiry:</strong> {modal.row.inquiry_type}</p><p><strong>Status:</strong> {modal.row.status}</p><p><strong>Received:</strong> {modal.row.created_at}</p><div className="panel" style={{ padding: '14px', whiteSpace: 'pre-wrap' }}>{modal.row.message}</div>{modal.row.admin_reply && <div><strong>Admin reply</strong><p>{modal.row.admin_reply}</p></div>}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={() => setModal(null)}>Close</button><button className="button" type="button" onClick={() => startAction('status', modal.row)}>Update status</button></div></section></div> : modal && <Modal title={modalTitle()} onClose={() => setModal(null)} onSubmit={submit} busy={busy} submitLabel={modal.kind === 'refund' ? 'Submit request' : modal.kind === 'deactivate' ? 'Deactivate' : 'Save'} danger={['deactivate', 'reject', 'refund', 'status'].includes(modal.kind)}>{renderModalFields()}</Modal>}
     </section>
   );
 }
@@ -2290,8 +3371,7 @@ function SettingsPage({ onEdit }) {
 
 export default function App(){
   const language = useLanguage();
-  const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => window.location.pathname || '/');
-  const [expandedNavGroups,setExpandedNavGroups]=useState({overview:true,management:true,operations:true,insights:true,configuration:true});
+  const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [sidebarCollapsed,setSidebarCollapsed]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => window.location.pathname || '/');
 
   const normalizePath = useCallback((path) => {
     if (!path || path === '') return '/';
@@ -2317,17 +3397,56 @@ export default function App(){
     const found = nextPath.match(/^\/admin(?:\/([^/]+))?\/?(?:\?.*)?$/);
     if (found) {
       const next = found[1] || 'overview';
-      setSlug(['overview','users','roles','vendors','categories','events','bookings','package-requests','payments','reviews','complaints','messages','reports','notifications','audit-logs','settings','profile'].includes(next) ? next : 'overview');
+      setSlug(['overview','users','roles','vendors','categories','events','bookings','package-requests','payments','reviews','complaints','messages','reports','notifications','audit-logs','settings','profile','account-settings'].includes(next) ? next : 'overview');
     }
   }, [normalizePath]);
 
-  useEffect(()=>{const controller=new AbortController();resolve();const listener=()=>resolve();window.addEventListener('popstate',listener);api('/auth/me',{signal:controller.signal}).then((r)=>setUser(r.user)).catch((issue)=>{if(issue.name!=='AbortError')setUser(null);}).finally(()=>{if(!controller.signal.aborted)setChecking(false);});return()=>{controller.abort();window.removeEventListener('popstate',listener);};},[resolve]);
+  useEffect(()=>{
+    const controller=new AbortController();
+    resolve();
+    const listener=()=>resolve();
+    window.addEventListener('popstate',listener);
+    if (DEMO_AUTH_ENABLED) {
+      try {
+        const demoProfile = readDemoSession();
+        if (demoProfile) {
+          setUser(toDemoUser(demoProfile));
+          setPortal(demoProfile.role);
+        }
+      } catch (issue) {
+        setGlobalError(issue.message);
+      } finally {
+        setChecking(false);
+      }
+    } else {
+      api('/auth/me',{signal:controller.signal}).then((r)=>{setUser(r.user);setPortal('admin');}).catch((issue)=>{if(issue.name==='AbortError')return;return api('/platform/me',{signal:controller.signal}).then((r)=>{const profile=r?.data?.user||null;setUser(profile);if(profile?.role)setPortal(profile.role);}).catch((platformIssue)=>{if(platformIssue.name!=='AbortError')setUser(null);});}).finally(()=>{if(!controller.signal.aborted)setChecking(false);});
+    }
+    return()=>{controller.abort();window.removeEventListener('popstate',listener);};
+  },[resolve]);
 
   async function login(email,password){
+    if (DEMO_AUTH_ENABLED) {
+      const credential = findDemoLogin(email, password);
+      if (!credential) throw new Error('Demo sign-in failed. Choose one of the predefined demo accounts and enter its mock password.');
+      const profile = saveDemoSession(credential);
+      setUser(toDemoUser(profile));setPortal(profile.role);setGlobalError('');setShowLogin(false);
+      navigatePublic(dashboardPathForRole(profile.role));
+      return;
+    }
     const adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
     setUser(adminResponse.user);setPortal('admin');setGlobalError('');setShowLogin(false);navigatePublic('/admin');
   }
   async function loginPublic(email,password){
+    if (DEMO_AUTH_ENABLED) {
+      await login(email, password);
+      const continuation = sessionStorage.getItem('eventhub_after_login');
+      const demoProfile = readDemoSession();
+      if (continuation && (/^\/events\/\d+$/.test(continuation) || continuation === '/vendor-application' && ['customer', 'organizer'].includes(demoProfile?.role))) {
+        sessionStorage.removeItem('eventhub_after_login');
+        navigatePublic(continuation);
+      }
+      return;
+    }
     try {
       const adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
       setUser(adminResponse.user);setPortal('admin');setGlobalError('');setShowLogin(false);navigatePublic('/admin');
@@ -2337,10 +3456,29 @@ export default function App(){
       const role = platformResponse?.data?.user?.role || 'customer';
       setUser(platformResponse.data.user);setPortal(role);setGlobalError('');setShowLogin(false);
       const rolePath = role === 'admin' ? '/admin' : role === 'organizer' ? '/organizer/dashboard' : role === 'vendor' ? '/vendor/dashboard' : '/customer/dashboard';
-      navigatePublic(rolePath);
+      const continuation = sessionStorage.getItem('eventhub_after_login');
+      const canContinue = continuation && (
+        role === 'customer' && (/^\/events\/\d+$/.test(continuation) || continuation === '/my-bookings' || continuation === '/vendor-application')
+        || role === 'organizer' && continuation === '/vendor-application'
+      );
+      if (canContinue) sessionStorage.removeItem('eventhub_after_login');
+      navigatePublic(canContinue ? continuation : rolePath);
     }
   }
+  function completeDemoRegistration(profile, dashboardPath) {
+    setUser(toDemoUser(profile));setPortal(profile.role);setGlobalError('');setShowLogin(false);
+    navigatePublic(dashboardPath);
+  }
   async function registerPublic(name,email,password,role='customer'){
+    if (DEMO_AUTH_ENABLED) {
+      if (!name || name.trim().length < 2) throw new Error('Enter your full name (at least 2 characters).');
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) throw new Error('Enter a valid email address.');
+      if (!isValidDemoPassword(password)) throw new Error('Password must contain 12–16 characters, uppercase, lowercase, and a number.');
+      if (!['customer','organizer','vendor'].includes(role)) throw new Error('Choose a valid account type.');
+      const profile = saveDemoAccount({ name, email, role });
+      saveDemoSession(profile);
+      return { demo: true, profile, message: 'Demo registration successful', dashboardPath: dashboardPathForRole(role) };
+    }
     const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,email,password,role})});
     setUser(null);setPortal(role);setGlobalError('');setShowLogin(false);
     return response.data;
@@ -2352,27 +3490,29 @@ export default function App(){
   async function loginOrganizer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'organizer') throw new Error('Organizer access is required.');setUser(r.data.user);setPortal('organizer');setGlobalError('');setShowLogin(false);navigatePublic('/organizer/dashboard');}
   async function loginVendor(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'vendor') throw new Error('Vendor access is required.');setUser(r.data.user);setPortal('vendor');setGlobalError('');setShowLogin(false);navigatePublic('/vendor/dashboard');}
   function navigate(next){history.pushState({},'',slugPath(next));setSlug(next);setSidebarOpen(false);setGlobalError('');}
+  function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
     try {
-      if (portal === 'admin') await api('/auth/logout',{method:'POST'});
+      if (DEMO_AUTH_ENABLED) clearDemoSession();
+      else if (portal === 'admin') await api('/auth/logout',{method:'POST'});
       else if (user) await api('/platform/logout',{method:'POST'});
     } catch (issue) {
       setGlobalError(issue.message);
     } finally {
-      setUser(null);setShowLogin(false);setPortal('admin');navigatePublic('/');
+      setUser(null);setShowLogin(false);setPortal('admin');navigatePublic('/login');
     }
   }
 
   const publicRoutes = {
-    '/': <PublicOverview onOpenDashboard={(mode)=>{setPortal(mode); if (mode === 'admin') { setShowLogin(true); navigatePublic('/login'); } else if (mode === 'customer') { navigatePublic('/login'); } else if(mode === 'organizer'){ navigatePublic('/login'); } else if(mode === 'vendor'){ navigatePublic('/login'); } }} currentPath={currentPath} onNavigate={navigatePublic} />,
+    '/': <PublicOverview user={user} currentPath={currentPath} onNavigate={navigatePublic} onLogout={logout} />,
     '/events': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/vendors': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} /></PublicPageLayout>,
     '/services': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>,
-    '/about': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage /></PublicPageLayout>,
+    '/about': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/contact': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>,
-    '/login': <LoginPage onLogin={loginPublic} />,
-    '/register': <RegisterPage onRegister={registerPublic} />,
+    '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />,
+    '/register': <RegisterPage onRegister={registerPublic} onDemoRegistrationComplete={completeDemoRegistration} demoMode={DEMO_AUTH_ENABLED} />,
     '/forgot-password': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ForgotPasswordPage onSubmit={requestPasswordReset} /></PublicPageLayout>,
     '/reset-password': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ResetPasswordPage onSubmit={resetPassword} /></PublicPageLayout>,
     '/privacy': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>,
@@ -2380,35 +3520,54 @@ export default function App(){
     '/help': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>,
   };
 
+  const routePath = currentPath.split('?')[0];
+  const eventRoute = routePath.match(/^\/events\/(\d+)$/);
+  const serviceRoute = routePath.match(/^\/services\/(\d+)$/);
+  const vendorRoute = routePath.match(/^\/vendors\/(\d+)$/);
   if(checking)return <div className="loading full-screen"><span className="spinner"/>Verifying administrator session…</div>;
+  if (routePath === '/search') {
+    const query = new URLSearchParams(currentPath.split('?')[1] || '').get('q') || '';
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><SearchResultsPage initialQuery={query} onNavigate={navigatePublic}/></PublicPageLayout>;
+  }
+  if (routePath === '/vendor-application') {
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorApplicationPage user={user} onNavigate={navigatePublic}/></PublicPageLayout>;
+  }
+  if (eventRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventDetailsPage eventId={eventRoute[1]} user={user} api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/events') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/vendors' || routePath.startsWith('/vendors?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (vendorRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorDetailPage vendorId={vendorRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/services') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (serviceRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceDetailPage serviceId={serviceRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/categories' || routePath.startsWith('/categories?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath.startsWith('/categories/')) {
+    const slug = routePath.replace(/^\/categories\//, '');
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoryDetailPage slug={slug} onNavigate={navigatePublic} /></PublicPageLayout>;
+  }
+  if (routePath === '/about') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/contact') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>;
+  if (routePath === '/') return publicRoutes['/'];
+  if (routePath === '/my-bookings') {
+    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
+    if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="alert error">My Event Bookings is available to customer accounts.</div></main></PublicPageLayout>;
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><MyEventBookingsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  }
   if(!user){
-    if (currentPath.startsWith('/admin')) return <Login onLogin={login}/>;
-    if (currentPath === '/login') return <LoginPage onLogin={loginPublic}/>;
-    if (currentPath === '/register') return <RegisterPage onRegister={registerPublic}/>;
+    if (currentPath.startsWith('/admin')) return DEMO_AUTH_ENABLED ? <LoginPage onLogin={login} demoMode /> : <Login onLogin={login}/>;
+    if (routePath === '/login') return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
+    if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onDemoRegistrationComplete={completeDemoRegistration} demoMode={DEMO_AUTH_ENABLED}/>;
+    if (DEMO_AUTH_ENABLED && /^\/(customer|organizer|vendor)\/dashboard$/.test(currentPath)) return <LoginPage onLogin={loginPublic} demoMode />;
     if (currentPath === '/forgot-password') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><ForgotPasswordPage onSubmit={requestPasswordReset} /></PublicPageLayout>;
     if (currentPath === '/reset-password') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><ResetPasswordPage onSubmit={resetPassword} /></PublicPageLayout>;
     if (currentPath === '/privacy') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>;
     if (currentPath === '/terms') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><TermsPage /></PublicPageLayout>;
     if (currentPath === '/help') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>;
     if (currentPath === '/events') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} /></PublicPageLayout>;
-    if (currentPath === '/vendors' || currentPath.startsWith('/vendors?')) return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={null} onNavigate={navigatePublic} /></PublicPageLayout>;
-    if (/^\/vendors\/\d+$/.test(currentPath)) return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><VendorDetailPage vendorId={currentPath.split('/').pop()} onNavigate={navigatePublic} /></PublicPageLayout>;
-    if (currentPath === '/services') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><ServicesPage onNavigate={navigatePublic} /></PublicPageLayout>;
-    if (currentPath === '/categories' || currentPath.startsWith('/categories?')) return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>;
-    if (currentPath.startsWith('/categories/')) {
-      const slug = currentPath.replace(/^\/categories\//, '').split('?')[0];
-      return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><CategoryDetailPage slug={slug} onNavigate={navigatePublic} /></PublicPageLayout>;
-    }
-    if (currentPath === '/about') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><AboutPage /></PublicPageLayout>;
-    if (currentPath === '/contact') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>;
-    if (/^\/vendors\/\d+$/.test(currentPath)) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorDetailPage vendorId={currentPath.split('/').pop()} onNavigate={navigatePublic} /></PublicPageLayout>;
-    if (publicRoutes[currentPath]) return publicRoutes[currentPath];
+    if (publicRoutes[routePath]) return publicRoutes[routePath];
     return <NotFoundPage onNavigate={navigatePublic}/>;
   }
 
-  if (portal === 'customer') return <CustomerDashboard user={user} onLogout={logout}/>;
-  if (portal === 'organizer') return <OrganizerDashboard user={user} onLogout={logout}/>;
-  if (portal === 'vendor') return <VendorDashboard user={user} onLogout={logout}/>;
-  const activeMenu=menu.find(([id])=>id===slug);const pageTitle=translateText(activeMenu?.[1]||'Dashboard Overview',language);
-  return <div className="app-shell"><aside className={`sidebar ${sidebarOpen?'open':''}`}><div className="sidebar-brand"><div className="brand-mark small">EF</div><div><strong>EventFlow</strong><span>{translate('adminDashboard',language).toUpperCase()}</span></div><button className="mobile-close icon-button" onClick={()=>setSidebarOpen(false)} aria-label={translate('close',language)}><X size={18}/></button></div><div className="nav-caption">{translate('systemControl',language)}</div><nav>{menuGroups.map((group)=><div className="nav-group" key={group.id}><button className="nav-group-toggle" type="button" aria-expanded={Boolean(expandedNavGroups[group.id])} onClick={()=>setExpandedNavGroups((current)=>({...current,[group.id]:!current[group.id]}))}><span>{group.label}</span><span aria-hidden="true">{expandedNavGroups[group.id]?'−':'+'}</span></button>{expandedNavGroups[group.id]&&group.items.map(([id,label,Icon])=><button key={id} className={`nav-item ${slug===id?'active':''}`} aria-current={slug===id?'page':undefined} onClick={id === 'logout' ? logout : ()=>navigate(id)}><Icon size={18}/><span>{translateText(label,language)}</span>{id==='vendors'&&<span className="nav-dot"/>}</button>)}</div>)}</nav></aside><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><header className="topbar"><button className="icon-button menu-button" onClick={()=>setSidebarOpen(true)} aria-label={translate('mainNavigation',language)}><Menu size={20}/></button><div className="breadcrumb">{translate('adminDashboard',language)} <span>/</span> <strong>{pageTitle}</strong></div><div className="topbar-right"><LanguageSelector/><span className="secure-label"><span/>{translate('secureSession',language)}</span><button className="top-user" onClick={()=>navigate('profile')}><span className="avatar small-avatar">{user.full_name?.slice(0,1)||'A'}</span>{user.full_name}</button></div></header><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='overview'?<Overview onNavigate={navigate}/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<DataPage slug="settings" user={user} onUserChange={setUser}/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div>;
+  if (portal === 'customer') return <><DemoModeBanner user={user}/><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
+  if (portal === 'organizer') return <><DemoModeBanner user={user}/><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
+  if (portal === 'vendor') return <><DemoModeBanner user={user}/><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
+  return <><DemoModeBanner user={user}/><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<DataPage slug="settings" user={user} onUserChange={setUser}/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
 }

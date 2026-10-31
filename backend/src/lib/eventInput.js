@@ -21,7 +21,7 @@ function isValidLocalDateTime(value) {
     && date.getSeconds() === second;
 }
 
-const dateTimeSchema = z.string()
+export const dateTimeSchema = z.string()
   .trim()
   .min(1)
   .max(30)
@@ -38,12 +38,22 @@ export const createEventSchema = z.object({
   title: z.string().trim().min(2).max(180),
   type: z.string().trim().min(2).max(80),
   city: z.string().trim().max(120).optional().default(''),
+  venue: z.string().trim().max(180).optional().default(''),
+  description: z.string().trim().max(10000).optional().default(''),
+  coverImageUrl: z.string().trim().max(1000).url().refine((value) => /^https?:\/\//i.test(value), 'Enter a valid HTTP image URL.').or(z.literal('')).optional().default(''),
+  galleryImages: z.array(
+    z.string().trim().max(1000).url().refine((value) => /^https?:\/\//i.test(value), 'Gallery images must use HTTP or HTTPS.'),
+  ).max(12).optional().default([]),
   startDate: dateTimeSchema,
   endDate: z.preprocess(
     (value) => value === '' || value === undefined || value === null ? null : value,
     dateTimeSchema.nullish(),
   ).default(null),
   budget: optionalAmount(100000000).optional().default(null),
+  capacity: z.preprocess(
+    (value) => value === '' || value === undefined || value === null ? null : value,
+    z.union([z.coerce.number().int().positive().max(1000000), z.null()]),
+  ).optional().default(null),
   guestCount: z.preprocess(
     (value) => value === '' || value === undefined || value === null ? null : value,
     z.union([z.coerce.number().int().positive().max(100000), z.null()]),

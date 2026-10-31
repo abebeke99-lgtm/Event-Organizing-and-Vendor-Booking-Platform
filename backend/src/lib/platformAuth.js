@@ -7,7 +7,7 @@ const publicRoles = ['customer', 'organizer', 'vendor'];
 const registrationSchema = z.object({
   name: z.string().trim().min(2).max(160),
   email: z.string().trim().email().max(254).transform(normalizeEmail),
-  password: z.string().max(256).refine(isStrongPassword),
+  password: z.string().min(12).max(16).refine(isStrongPassword),
   role: z.enum(publicRoles).default('customer'),
 }).strict();
 

@@ -2,10 +2,13 @@ import { translate } from './language.js';
 
 export const INQUIRY_TYPES = [
   { value: 'general_inquiry', label: 'General Inquiry' },
-  { value: 'technical_support', label: 'Technical Support' },
+  { value: 'event_booking_support', label: 'Event Booking Support' },
   { value: 'vendor_support', label: 'Vendor Support' },
-  { value: 'booking_assistance', label: 'Booking Assistance' },
-  { value: 'partnership', label: 'Partnership' },
+  { value: 'service_request', label: 'Service Request' },
+  { value: 'payment_billing', label: 'Payment and Billing' },
+  { value: 'technical_support', label: 'Technical Support' },
+  { value: 'account_assistance', label: 'Account Assistance' },
+  { value: 'partnership_inquiry', label: 'Partnership Inquiry' },
   { value: 'feedback', label: 'Feedback' },
   { value: 'other', label: 'Other' },
 ];
@@ -16,7 +19,7 @@ export function normalizeContactForm(values = {}) {
     email: String(values.email ?? '').trim().toLowerCase(),
     phone: String(values.phone ?? '').trim(),
     subject: String(values.subject ?? '').trim(),
-    inquiry_type: String(values.inquiry_type ?? 'general_inquiry').trim() || 'general_inquiry',
+    inquiry_type: 'general_inquiry',
     message: String(values.message ?? '').trim(),
   };
 }
@@ -25,10 +28,12 @@ export function validateContactForm(values = {}, language = 'en') {
   const normalized = normalizeContactForm(values);
   const errors = {};
 
-  if (!normalized.full_name || normalized.full_name.length < 2) {
+  if (normalized.full_name.length < 2) {
     errors.full_name = translate('fullNameRequired', language);
+  } else if (normalized.full_name.length > 160) {
+    errors.full_name = translate('contactNameTooLong', language);
   }
-  if (!normalized.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized.email)) {
+  if (normalized.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized.email)) {
     errors.email = translate('validEmailRequired', language);
   }
   if (!normalized.subject || normalized.subject.length < 4 || normalized.subject.length > 200) {
@@ -45,11 +50,22 @@ export function validateContactForm(values = {}, language = 'en') {
 }
 
 export function buildContactInfo(settings = {}) {
+  const socials = Array.isArray(settings.socials)
+    ? settings.socials.filter((entry) => {
+      if (!entry || typeof entry !== 'object' || !entry.label || !entry.url) return false;
+      try {
+        return ['http:', 'https:'].includes(new URL(entry.url).protocol);
+      } catch {
+        return false;
+      }
+    })
+    : [];
+
   return {
-    email: settings.email || '',
-    phone: settings.phone || '',
-    address: settings.address || '',
-    hours: settings.hours || '',
-    socials: Array.isArray(settings.socials) ? settings.socials : [],
+    email: String(settings.email ?? '').trim(),
+    phone: String(settings.phone ?? '').trim(),
+    address: String(settings.address ?? '').trim(),
+    hours: String(settings.hours ?? '').trim(),
+    socials,
   };
 }

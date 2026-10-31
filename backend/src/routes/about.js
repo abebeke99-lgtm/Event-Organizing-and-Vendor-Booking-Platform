@@ -66,6 +66,43 @@ publicRouter.get('/statistics', async (req, res) => {
   return res.json({ success: true, data: payload.statistics });
 });
 
+publicRouter.get('/homepage-statistics', async (req, res) => {
+  const [rows] = await pool.query(`
+    SELECT
+      (
+        SELECT ROUND(AVG(r.rating), 1)
+        FROM reviews r
+        JOIN bookings b ON b.id = r.booking_id
+        JOIN vendor_profiles vp ON vp.id = b.vendor_id AND vp.verification_status = 'verified'
+        JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+        WHERE r.status = 'published'
+      ) AS averageVendorRating,
+      (
+        SELECT COUNT(*)
+        FROM vendor_profiles vp
+        JOIN users u ON u.id = vp.user_id
+        WHERE vp.verification_status = 'verified' AND u.status = 'active'
+      ) AS activeVendorCount,
+      (
+        SELECT COUNT(*)
+        FROM events e
+        WHERE e.status IN ('active', 'completed')
+      ) AS publishedEventCount,
+      (
+        SELECT COUNT(*)
+        FROM bookings b
+        WHERE b.status IN ('accepted', 'completed')
+      ) AS confirmedOrCompletedBookingCount,
+      (
+        SELECT COUNT(*)
+        FROM bookings b
+        WHERE b.status = 'completed'
+      ) AS completedBookingCount
+  `);
+  res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
+  return res.json({ success: true, data: rows[0] });
+});
+
 adminRouter.get('/', async (req, res) => {
   const [rows] = await pool.execute(
     'SELECT * FROM site_content WHERE page_key = ? ORDER BY updated_at DESC LIMIT 1',

@@ -20,6 +20,22 @@ test('registration validates name, normalized email, and strong password', () =>
   assert.equal(parsePublicRegistration({ name: 'H', email: 'bad', password: 'weak' }).success, false);
 });
 
+test('registration passwords must be 12 to 16 characters and meet complexity rules', () => {
+  const registration = (password) => parsePublicRegistration({
+    name: 'Hana Bekele',
+    email: 'hana@example.com',
+    password,
+  }).success;
+
+  assert.equal(registration('StrongPass12'), true);
+  assert.equal(registration('StrongPassword12'), true);
+  assert.equal(registration('ShortPass1'), false);
+  assert.equal(registration('StrongPassword123'), false);
+  assert.equal(registration('alllowercase12'), false);
+  assert.equal(registration('ALLUPPERCASE12'), false);
+  assert.equal(registration('NoNumbersHere'), false);
+});
+
 test('login input is validated and email is normalized', () => {
   const result = parsePublicLogin({ email: ' USER@example.com ', password: 'any-password' });
   assert.equal(result.success, true);

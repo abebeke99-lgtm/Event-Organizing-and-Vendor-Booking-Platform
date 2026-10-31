@@ -1,10 +1,25 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { rateLimit } from 'express-rate-limit';
-import { pool } from '../db.js';
+import { inTransaction, pool } from '../db.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
+import { writeAudit } from '../lib/security.js';
 
 const publicRouter = Router();
 const adminRouter = Router();
+const inquiryTypes = [
+  'general_inquiry',
+  'event_booking_support',
+  'vendor_support',
+  'service_request',
+  'payment_billing',
+  'technical_support',
+  'account_assistance',
+  'partnership_inquiry',
+  'feedback',
+  'other',
+];
+const contactStatuses = ['new', 'reviewed', 'in_progress', 'replied', 'resolved', 'closed'];
 
 const contactLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -14,33 +29,26 @@ const contactLimiter = rateLimit({
   message: { success: false, error: 'Too many contact submissions. Please try again in a few minutes.' },
 });
 
-const publicContactSchema = z.object({
+export const publicContactSchema = z.object({
   full_name: z.string().trim().min(2).max(160),
   email: z.string().trim().email().max(254),
   phone: z.string().trim().max(40).optional().or(z.literal('')),
   subject: z.string().trim().min(4).max(200),
   message: z.string().trim().min(20).max(2500),
-  inquiry_type: z.enum(['general_inquiry', 'technical_support', 'vendor_support', 'booking_assistance', 'partnership', 'feedback', 'other']).default('general_inquiry'),
+  inquiry_type: z.enum(inquiryTypes).optional().default('general_inquiry'),
 }).strict();
 
 function buildContactSettings(rows = []) {
   const values = Object.fromEntries(rows.map((row) => [row.setting_key, row.setting_value]));
-  const social = (() => {
-    try {
-      if (!values.social_links) return [];
-      const parsed = JSON.parse(values.social_links);
-      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
-    } catch {
-      return [];
-    }
-  })();
+  const parsedSocials = values.social_links ? JSON.parse(values.social_links) : [];
+  if (!Array.isArray(parsedSocials)) throw new TypeError('The social links setting must be a JSON array.');
 
   return {
     email: values.support_email?.trim() || '',
     phone: values.support_phone?.trim() || '',
     address: values.support_address?.trim() || '',
     hours: values.support_hours?.trim() || '',
-    socials: social,
+    socials: parsedSocials.filter(Boolean),
   };
 }
 
@@ -52,7 +60,7 @@ async function getContactSettings() {
   return buildContactSettings(rows);
 }
 
-publicRouter.get('/', async (req, res) => {
+publicRouter.get('/', asyncHandler(async (req, res) => {
   const settings = await getContactSettings();
   res.json({
     success: true,
@@ -60,23 +68,51 @@ publicRouter.get('/', async (req, res) => {
       contact: settings,
       faq: [
         {
-          question: 'How quickly will I receive a response?',
-          answer: 'Most messages are reviewed within one business day, and urgent support requests are prioritized by the team.',
+          question: 'How do I create an EventFlow account?',
+          answer: 'Choose Register in the site header and create a customer, organizer, or vendor account.',
         },
         {
-          question: 'Can I ask for vendor assistance?',
-          answer: 'Yes. Please use the vendor support inquiry type and include the relevant booking or service details.',
+          question: 'How can I find and book an event?',
+          answer: 'Browse Events, open an event to review its details, and follow the booking or ticket options shown for that event.',
         },
         {
-          question: 'Do I need an account to contact EventHub?',
-          answer: 'No. You can send a message as a guest.',
+          question: 'How do I find trusted event vendors?',
+          answer: 'Browse Find Vendors or Services, use the available categories and filters, and review vendor profile and verification information.',
+        },
+        {
+          question: 'How can I request event services?',
+          answer: 'Open a vendor service and submit a quote request. Sign in as a customer or organizer to submit and track service requests.',
+        },
+        {
+          question: 'How can I contact an event organizer?',
+          answer: 'Open the event details and use Contact Organizer to send your question about that event.',
+        },
+        {
+          question: 'How can I check my booking status?',
+          answer: 'Sign in and open the dashboard for your account to review your booking or request status.',
+        },
+        {
+          question: 'Can I cancel or modify my booking?',
+          answer: 'Options depend on the booking and its current status. Contact the event organizer or vendor before assuming a change or cancellation has been confirmed.',
+        },
+        {
+          question: 'How do I become an EventFlow vendor?',
+          answer: 'Register with a vendor account and complete your business profile. Vendor profiles are subject to platform verification.',
+        },
+        {
+          question: 'How can I reset my password?',
+          answer: 'Choose Forgot Password on the Login page and follow the instructions provided.',
+        },
+        {
+          question: 'How can I contact support?',
+          answer: 'Send a message using the form on this page. You can contact support without signing in.',
         },
       ],
     },
   });
-});
+}));
 
-publicRouter.post('/', contactLimiter, async (req, res) => {
+publicRouter.post('/', contactLimiter, asyncHandler(async (req, res) => {
   const parsed = publicContactSchema.safeParse(req.body || {});
   if (!parsed.success) {
     return res.status(400).json({
@@ -93,7 +129,7 @@ publicRouter.post('/', contactLimiter, async (req, res) => {
       parsed.data.email.toLowerCase(),
       parsed.data.phone?.trim() || null,
       parsed.data.subject,
-      parsed.data.inquiry_type || 'general_inquiry',
+      parsed.data.inquiry_type,
       parsed.data.message,
       'new',
     ]
@@ -104,13 +140,20 @@ publicRouter.post('/', contactLimiter, async (req, res) => {
     success: true,
     data: { id: result.insertId, reference, status: 'new' },
   });
-});
+}));
 
-adminRouter.get('/', async (req, res) => {
-  const page = Math.max(1, Number(req.query.page) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20));
-  const q = String(req.query.q || '').trim();
-  const status = String(req.query.status || '').trim();
+adminRouter.get('/', asyncHandler(async (req, res) => {
+  const parsedFilters = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    q: z.string().trim().max(120).optional(),
+    status: z.enum(contactStatuses).optional(),
+    inquiry_type: z.enum(inquiryTypes).optional(),
+  }).safeParse(req.query);
+  if (!parsedFilters.success) {
+    return res.status(400).json({ success: false, error: 'Invalid contact message filters.' });
+  }
+  const { page, pageSize, q, status, inquiry_type: inquiryType } = parsedFilters.data;
   const offset = (page - 1) * pageSize;
   const values = [];
   const clauses = [];
@@ -122,6 +165,10 @@ adminRouter.get('/', async (req, res) => {
   if (status) {
     clauses.push('m.status = ?');
     values.push(status);
+  }
+  if (inquiryType) {
+    clauses.push('m.inquiry_type = ?');
+    values.push(inquiryType);
   }
 
   const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
@@ -141,12 +188,12 @@ adminRouter.get('/', async (req, res) => {
     data: rows,
     pagination: { page, pageSize, total: Number(countRow.total) },
   });
-});
+}));
 
-adminRouter.patch('/:id/status', async (req, res) => {
+adminRouter.patch('/:id/status', asyncHandler(async (req, res) => {
   const id = Number(req.params.id);
   const parsed = z.object({
-    status: z.enum(['new', 'reviewed', 'replied', 'closed']),
+    status: z.enum(contactStatuses),
     admin_reply: z.string().trim().max(2000).optional().or(z.literal('')),
   }).strict().safeParse(req.body || {});
 
@@ -164,7 +211,32 @@ adminRouter.patch('/:id/status', async (req, res) => {
   }
 
   return res.json({ success: true, data: { id, status: parsed.data.status } });
-});
+}));
+
+adminRouter.delete('/:id', asyncHandler(async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) {
+    return res.status(400).json({ success: false, error: 'A valid message ID is required.' });
+  }
+
+  const deleted = await inTransaction(async (connection) => {
+    const [result] = await connection.execute('DELETE FROM contact_messages WHERE id = ?', [id.data]);
+    if (!result.affectedRows) return false;
+    await writeAudit(connection, {
+      actorId: req.admin.id,
+      action: 'contact_message.deleted',
+      entityType: 'contact_message',
+      entityId: id.data,
+      ip: req.ip,
+    });
+    return true;
+  });
+
+  if (!deleted) {
+    return res.status(404).json({ success: false, error: 'Contact message not found.' });
+  }
+  return res.status(204).end();
+}));
 
 export { adminRouter };
 export default publicRouter;

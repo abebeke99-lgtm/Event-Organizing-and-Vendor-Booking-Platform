@@ -247,7 +247,7 @@ router.get('/history', async (req, res) => {
 router.get('/quotations', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT q.id, q.service_description, q.amount, q.currency, q.status, q.valid_until,
-            q.created_at, u.full_name AS customer_name, e.title AS event_title
+            q.notes, q.created_at, u.full_name AS customer_name, e.title AS event_title
      FROM quotations q
      LEFT JOIN users u ON u.id = q.customer_id
      LEFT JOIN events e ON e.id = q.event_id
@@ -264,6 +264,7 @@ router.get('/quotations', async (req, res) => {
     validUntil: row.valid_until,
     amount: Number(row.amount || 0),
     currency: row.currency,
+    notes: row.notes || '',
   })));
 });
 

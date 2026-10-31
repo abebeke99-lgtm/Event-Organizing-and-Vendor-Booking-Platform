@@ -6,7 +6,11 @@ export function normalizeEmail(value = '') {
 
 export function isStrongPassword(password = '') {
   const value = String(password ?? '');
-  return value.length >= 12 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /\d/.test(value);
+  return value.length >= 12
+    && value.length <= 16
+    && /[A-Z]/.test(value)
+    && /[a-z]/.test(value)
+    && /\d/.test(value);
 }
 
 export function buildRoleRedirect(role = 'customer') {

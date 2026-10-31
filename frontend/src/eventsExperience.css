@@ -1,0 +1,91 @@
+.event-details-page,.my-event-bookings{display:grid;gap:18px}
+.event-back-link{justify-self:start;display:inline-flex;align-items:center;gap:7px;border:0;background:transparent;color:#52647a;padding:4px 0;font-size:13px;font-weight:600}
+.event-hero{position:relative;min-height:320px;display:flex;align-items:end;overflow:hidden;border-radius:20px;background-size:cover;background-position:center;color:#fff}
+.event-hero-content{display:grid;grid-template-columns:max-content max-content;align-items:center;gap:10px;padding:34px;width:min(100%,900px)}
+.event-hero-content h1,.event-hero-content p{grid-column:1/-1;margin:0}
+.event-hero-content h1{font:800 clamp(30px,5vw,48px) Manrope,sans-serif;line-height:1.12;max-width:780px}
+.event-hero-content p{display:flex;align-items:center;gap:8px;font-size:14px}
+.event-category,.event-status{width:max-content;max-width:100%;padding:5px 10px;border-radius:20px;background:#e8f1fb;color:#235a87;font-size:11px;font-weight:700}
+.event-status{background:#e8f7f1;color:#148566}
+.event-status-sold-out,.event-status-cancelled{background:#fff0f0;color:#b64b55}
+.event-status-completed{background:#f0f2f6;color:#67738a}
+.event-details-layout{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(280px,.8fr);gap:20px;align-items:start}
+.event-detail-main{display:grid;gap:18px;min-width:0}
+.event-description-panel,.ticket-panel{padding:24px}
+.event-content-heading{display:flex;justify-content:space-between;align-items:center;gap:14px}
+.event-content-heading h2,.ticket-panel h2,.related-events h2{margin:0;color:#1b2942;font:700 20px Manrope,sans-serif}
+.event-content-heading .button{display:flex;align-items:center;gap:7px}
+.event-description-panel>p{color:#59677c;font-size:14px;line-height:1.8;white-space:pre-line}
+.event-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding:20px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.event-facts>div{display:grid;grid-template-columns:22px minmax(0,1fr);column-gap:9px;align-items:center}
+.event-facts svg{grid-row:span 2;color:#3074b3}
+.event-facts span{color:#758198;font-size:11px}
+.event-facts strong{color:#26344c;font-size:13px;overflow-wrap:anywhere}
+.event-organizer{color:#65758a;font-size:12px}
+.event-organizer strong{color:#26344c}
+.event-map-link{display:block;color:#2d6eaa;font-size:12px;font-weight:600}
+.organizer-contact-form{display:grid;gap:12px;margin-top:8px;padding:14px;border:1px solid var(--line);border-radius:10px;background:#fafbfd}
+.organizer-contact-form .field{display:grid;gap:6px;color:#758198;font-size:12px}
+.organizer-contact-form textarea{width:100%;min-height:96px;resize:vertical;border:1px solid #e2e6ee;border-radius:8px;padding:10px;color:#344258;background:#fff}
+.organizer-contact-form .button{justify-self:start}
+.event-inline-message{color:#15803d;font-size:12px}
+.event-error{display:flex;align-items:center;gap:12px;padding:20px}
+.event-error p{margin:0 auto 0 0;color:#b64b55}
+.event-error button{margin:0}
+.ticket-panel{position:sticky;top:24px}
+.ticket-booking-form{display:grid;gap:14px;margin-top:18px}
+.ticket-booking-form .field{display:grid;gap:6px;color:#758198;font-size:12px}
+.ticket-booking-form input,.ticket-booking-form select{min-width:0;width:100%;height:40px;border:1px solid #e2e6ee;border-radius:8px;padding:0 10px;background:#fff;color:#344258}
+.ticket-availability{margin:0;color:#148566;font-size:12px}
+.ticket-total{display:flex;justify-content:space-between;gap:12px;padding:14px 0;border-top:1px solid var(--line);color:#58667b;font-size:13px}
+.ticket-total strong{color:#1b2942}
+.ticket-payment-note{display:flex;align-items:flex-start;gap:7px;padding:10px;border-radius:8px;background:#fff8e9;color:#926614;font-size:11px}
+.ticket-submit{width:100%;min-height:42px}
+.event-inline-error{margin:0;color:#b64b55;font-size:12px}
+.booking-confirmation{display:grid;gap:8px;margin-top:18px;color:#58667b;font-size:13px}
+.booking-confirmation>svg{color:#15803d}
+.booking-confirmation h3,.booking-confirmation p{margin:0}
+.booking-confirmation h3{color:#1b2942}
+.booking-confirmation small{line-height:1.6}
+.booking-confirmation .button{margin-top:8px}
+.event-gallery{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.event-gallery img{width:100%;height:150px;object-fit:cover;border-radius:10px}
+.related-events{display:grid;gap:12px}
+.related-event-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.related-event-card{display:grid;gap:8px;text-align:left;padding:16px;border:1px solid var(--line);border-radius:11px;background:#fff;color:#26344c;transition:box-shadow .16s,transform .16s}
+.related-event-card:hover{transform:translateY(-2px);box-shadow:0 8px 22px #17233a12}
+.related-event-card span{color:#3074b3;font-size:10px;font-weight:700;text-transform:uppercase}
+.related-event-card strong{font:700 15px Manrope,sans-serif;overflow-wrap:anywhere}
+.related-event-card small{color:#758198}
+.my-event-bookings .section-header{margin:0}
+.ticket-booking-list{display:grid;gap:14px}
+.ticket-booking-item{display:grid;grid-template-columns:minmax(180px,1fr) 2fr auto;gap:18px;align-items:center;padding:20px}
+.ticket-booking-item h2{margin:8px 0 4px;color:#1b2942;font:700 18px Manrope,sans-serif}
+.ticket-booking-item p{margin:0;color:#758198;font-size:12px}
+.ticket-booking-item dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0}
+.ticket-booking-item dl div{display:grid;gap:3px}
+.ticket-booking-item dt{color:#758198;font-size:10px;text-transform:capitalize}
+.ticket-booking-item dd{margin:0;color:#26344c;font-size:12px;font-weight:600;overflow-wrap:anywhere}
+.ticket-booking-actions{display:flex;gap:8px;flex-wrap:wrap}
+.organizer-events-manager{display:grid;gap:16px}
+.organizer-event-form{display:grid;gap:15px;padding:20px}
+.organizer-event-form h3{margin:0;color:#1b2942;font:700 17px Manrope,sans-serif}
+.organizer-event-form .field,.organizer-ticket-form .field,.organizer-ticket-row .field{display:grid;gap:5px;color:#758198;font-size:11px}
+.organizer-event-form input,.organizer-event-form textarea,.organizer-ticket-form input,.organizer-ticket-row input,.organizer-ticket-row select{min-width:0;width:100%;border:1px solid #e2e6ee;border-radius:7px;padding:8px 10px;background:#fff;color:#344258}
+.organizer-event-form input,.organizer-ticket-form input,.organizer-ticket-row input,.organizer-ticket-row select{height:36px}
+.organizer-event-form textarea{resize:vertical}
+.organizer-event-description{grid-column:1/-1}
+.organizer-form-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.organizer-event-list{display:grid;gap:14px}
+.organizer-event-card{display:grid;gap:16px;padding:18px}
+.organizer-event-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+.organizer-event-heading h3{margin:7px 0 3px;color:#1b2942;font:700 18px Manrope,sans-serif}
+.organizer-event-heading p{margin:0;color:#758198;font-size:12px}
+.organizer-ticket-manager{display:grid;gap:12px;padding-top:15px;border-top:1px solid var(--line)}
+.organizer-ticket-manager h4{margin:0;color:#26344c;font-size:14px}
+.organizer-ticket-form{display:grid;grid-template-columns:1.2fr 1fr 1fr auto;align-items:end;gap:10px;padding:12px;border-radius:9px;background:#f8fafc}
+.organizer-ticket-list{display:grid;gap:9px}
+.organizer-ticket-row{display:grid;grid-template-columns:1.2fr 1fr 1fr 1fr auto;gap:10px;align-items:end;padding:12px;border:1px solid var(--line);border-radius:9px}
+.organizer-ticket-row small{color:#758198}
+@media(max-width:900px){.event-details-layout{grid-template-columns:minmax(0,1fr) 300px}.ticket-booking-item{grid-template-columns:minmax(0,1fr) 1.5fr}.ticket-booking-actions{grid-column:1/-1}}
+@media(max-width:680px){.event-hero{min-height:270px;border-radius:13px}.event-hero-content{padding:22px}.event-details-layout{grid-template-columns:1fr}.ticket-panel{position:static}.event-description-panel,.ticket-panel{padding:18px}.event-facts{gap:14px}.related-event-grid{grid-template-columns:1fr}.event-gallery{grid-template-columns:repeat(2,minmax(0,1fr))}.event-gallery img{height:125px}.ticket-booking-item{grid-template-columns:1fr}.ticket-booking-item dl{grid-template-columns:repeat(2,minmax(0,1fr))}.ticket-booking-actions{grid-column:auto}.event-error{align-items:flex-start;flex-wrap:wrap}.event-error p{flex-basis:100%}.organizer-event-heading{flex-direction:column}.organizer-ticket-form,.organizer-ticket-row{grid-template-columns:repeat(2,minmax(0,1fr))}.organizer-ticket-row .button{justify-self:start}}

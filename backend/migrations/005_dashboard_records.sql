@@ -84,11 +84,3 @@ SELECT r.id, p.id
 FROM roles r
 JOIN permissions p ON p.permission_key = 'reviews.view_own'
 WHERE r.name IN ('Vendor', 'Organizer', 'Customer');
-
-INSERT IGNORE INTO system_settings (setting_key, setting_value, updated_by)
-VALUES
-  ('support_email', 'support@eventhub.example', NULL),
-  ('support_phone', '+251 911 000 000', NULL),
-  ('support_address', 'Addis Ababa, Ethiopia', NULL),
-  ('support_hours', 'Monday to Friday, 8:00 AM - 6:00 PM', NULL),
-  ('social_links', '[]', NULL);
