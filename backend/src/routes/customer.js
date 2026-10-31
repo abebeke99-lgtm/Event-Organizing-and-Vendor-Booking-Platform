@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { pool } from '../db.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { loadPublicMarketplace, mapBookingRecord } from '../lib/marketplace.js';
 import { listPublicServices } from '../lib/serviceCatalog.js';
@@ -9,6 +11,40 @@ const router = Router();
 
 function ok(res, data) {
   return res.json({ success: true, data });
+}
+
+const databaseFor = (req) => req.app?.locals?.database || pool;
+const getRoute = (path, handler) => router.get(path, asyncHandler(handler));
+const postRoute = (path, handler) => router.post(path, asyncHandler(handler));
+const deleteRoute = (path, handler) => router.delete(path, asyncHandler(handler));
+const catalogQuerySchema = z.object({
+  search: z.string().trim().max(120).optional(),
+  category: z.string().trim().max(80).optional(),
+  location: z.string().trim().max(120).optional(),
+  verified: z.enum(['true', 'false', '1', '0']).optional(),
+  minPrice: z.coerce.number().finite().min(0).optional(),
+  maxPrice: z.coerce.number().finite().min(0).optional(),
+  minRating: z.coerce.number().finite().min(0).max(5).optional(),
+  sort: z.enum(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'price_asc', 'price_desc', 'alphabetical', 'upcoming', 'earliest', 'latest', 'recent']).optional(),
+  page: z.coerce.number().int().min(1).max(100000).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+}).strict().superRefine((query, context) => {
+  if (query.minPrice !== undefined && query.maxPrice !== undefined && query.maxPrice < query.minPrice) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxPrice'], message: 'Maximum price must be greater than or equal to minimum price.' });
+  }
+});
+const favoriteSchema = z.object({ vendorId: z.coerce.number().int().positive() }).strict();
+
+function parseCatalogQuery(req, res) {
+  const parsed = catalogQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: 'Invalid catalog filters.',
+      details: parsed.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+    });
+    return null;
+  }
+  return parsed.data;
 }
 
 router.use(requirePlatformUser);
@@ -30,26 +66,27 @@ const customerBookingSelect = `
   JOIN vendor_profiles vp ON vp.id = b.vendor_id
   WHERE e.organizer_id = ?`;
 
-router.get('/overview', async (req, res) => {
+getRoute('/overview', async (req, res) => {
+  const database = databaseFor(req);
   const userId = req.platformUser.id;
   const [bookingRows, eventRows, quotationRows, paymentRows, messageRows, notificationRows] = await Promise.all([
-    pool.execute('SELECT status FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?', [userId]),
-    pool.execute("SELECT id FROM events WHERE organizer_id = ? AND start_date >= NOW() AND status <> 'cancelled'", [userId]),
-    pool.execute(
+    database.execute('SELECT status FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?', [userId]),
+    database.execute("SELECT id FROM events WHERE organizer_id = ? AND start_date >= NOW() AND status <> 'cancelled'", [userId]),
+    database.execute(
       `SELECT q.status FROM quotations q
        LEFT JOIN events e ON e.id = q.event_id
        WHERE q.customer_id = ? OR e.organizer_id = ?`,
       [userId, userId]
     ),
-    pool.execute(
+    database.execute(
       `SELECT p.status, p.amount FROM payments p
        JOIN bookings b ON b.id = p.booking_id
        JOIN events e ON e.id = b.event_id
        WHERE e.organizer_id = ?`,
       [userId]
     ),
-    pool.execute('SELECT id FROM messages WHERE recipient_id = ? AND read_at IS NULL', [userId]),
-    pool.execute("SELECT id FROM notifications WHERE user_id = ? AND status <> 'read'", [userId]),
+    database.execute('SELECT id FROM messages WHERE recipient_id = ? AND read_at IS NULL', [userId]),
+    database.execute("SELECT id FROM notifications WHERE user_id = ? AND status <> 'read'", [userId]),
   ]);
 
   const bookings = bookingRows[0];
@@ -68,41 +105,53 @@ router.get('/overview', async (req, res) => {
   });
 });
 
-router.get('/vendors', async (req, res) => {
-  const marketplace = await loadPublicMarketplace();
-  const result = listPublicVendors(marketplace.vendors, req.query);
-  return ok(res, result.vendors);
+getRoute('/vendors', async (req, res) => {
+  const filters = parseCatalogQuery(req, res);
+  if (!filters) return;
+  const marketplace = await loadPublicMarketplace(databaseFor(req));
+  const result = listPublicVendors(marketplace.vendors, filters);
+  return res.json({
+    success: true,
+    data: result.vendors,
+    pagination: { page: result.page, limit: result.limit, total: result.total, totalPages: result.totalPages },
+  });
 });
 
-router.get('/services', async (req, res) => {
-  const marketplace = await loadPublicMarketplace();
-  const result = listPublicServices(marketplace.services, req.query);
-  return ok(res, result.services);
+getRoute('/services', async (req, res) => {
+  const filters = parseCatalogQuery(req, res);
+  if (!filters) return;
+  const marketplace = await loadPublicMarketplace(databaseFor(req));
+  const result = listPublicServices(marketplace.services, filters);
+  return res.json({
+    success: true,
+    data: result.services,
+    pagination: { page: result.page, limit: result.limit, total: result.total, totalPages: result.totalPages },
+  });
 });
 
-router.get('/categories', async (req, res) => {
-  const marketplace = await loadPublicMarketplace();
+getRoute('/categories', async (req, res) => {
+  const marketplace = await loadPublicMarketplace(databaseFor(req));
   return ok(res, marketplace.categories.map((category) => ({
     ...category,
     active: category.isActive,
   })));
 });
 
-router.get('/bookings', async (req, res) => {
-  const [rows] = await pool.execute(`${customerBookingSelect} ORDER BY b.created_at DESC`, [req.platformUser.id]);
+getRoute('/bookings', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(`${customerBookingSelect} ORDER BY b.created_at DESC`, [req.platformUser.id]);
   return ok(res, rows.map(mapBookingRecord));
 });
 
-router.get('/history', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/history', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `${customerBookingSelect} AND b.status IN ('completed', 'cancelled', 'rejected') ORDER BY b.created_at DESC`,
     [req.platformUser.id]
   );
   return ok(res, rows.map(mapBookingRecord));
 });
 
-router.get('/events', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/events', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT id, title, event_type, city, start_date, end_date, budget, guest_count, status
      FROM events WHERE organizer_id = ? ORDER BY start_date DESC`,
     [req.platformUser.id]
@@ -121,8 +170,8 @@ router.get('/events', async (req, res) => {
   })));
 });
 
-router.get('/favorites', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/favorites', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT vp.id, vp.business_name, vp.city, vp.description, vp.verification_status,
             sc.name AS category
      FROM favorites f
@@ -143,8 +192,42 @@ router.get('/favorites', async (req, res) => {
   })));
 });
 
-router.get('/quotations', async (req, res) => {
-  const [rows] = await pool.execute(
+postRoute('/favorites', async (req, res) => {
+  const parsed = favoriteSchema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: 'A valid vendor ID is required.' });
+
+  const database = databaseFor(req);
+  const [[vendor]] = await database.execute(
+    "SELECT id FROM vendor_profiles WHERE id = ? AND verification_status = 'verified'",
+    [parsed.data.vendorId]
+  );
+  if (!vendor) return res.status(404).json({ error: 'Verified vendor not found.' });
+
+  try {
+    const [result] = await database.execute(
+      'INSERT INTO favorites (user_id, vendor_id) VALUES (?, ?)',
+      [req.platformUser.id, vendor.id]
+    );
+    return res.status(201).json({ success: true, data: { id: Number(result.insertId), vendorId: Number(vendor.id) } });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Vendor is already saved.' });
+    throw error;
+  }
+});
+
+deleteRoute('/favorites/:vendorId', async (req, res) => {
+  const vendorId = z.coerce.number().int().positive().safeParse(req.params.vendorId);
+  if (!vendorId.success) return res.status(400).json({ error: 'Vendor ID is invalid.' });
+  const [result] = await databaseFor(req).execute(
+    'DELETE FROM favorites WHERE user_id = ? AND vendor_id = ?',
+    [req.platformUser.id, vendorId.data]
+  );
+  if (!result.affectedRows) return res.status(404).json({ error: 'Saved vendor not found.' });
+  return res.status(204).end();
+});
+
+getRoute('/quotations', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT q.id, q.vendor_id, q.event_id, q.service_description, q.amount, q.currency,
             q.status, q.valid_until, q.notes, q.created_at, vp.business_name AS vendor_name,
             e.title AS event_title
@@ -171,8 +254,8 @@ router.get('/quotations', async (req, res) => {
   })));
 });
 
-router.get('/payments', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/payments', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT p.id, p.booking_id, p.amount, p.currency, p.provider, p.provider_reference,
             p.status, p.created_at, b.service_description, e.title AS event_title
      FROM payments p
@@ -196,8 +279,8 @@ router.get('/payments', async (req, res) => {
   })));
 });
 
-router.get('/messages', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/messages', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT m.id, m.subject, m.body, m.read_at, m.created_at, u.full_name AS sender
      FROM messages m
      JOIN users u ON u.id = m.sender_id
@@ -215,8 +298,8 @@ router.get('/messages', async (req, res) => {
   })));
 });
 
-router.get('/reviews', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/reviews', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT r.id, r.booking_id, r.rating, r.comment, r.status, r.created_at,
             b.vendor_id, vp.business_name AS vendor_name
      FROM reviews r
@@ -239,8 +322,8 @@ router.get('/reviews', async (req, res) => {
   })));
 });
 
-router.get('/notifications', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/notifications', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT id, title, message, status, created_at
      FROM notifications
      WHERE user_id = ?
@@ -257,7 +340,7 @@ router.get('/notifications', async (req, res) => {
   })));
 });
 
-router.get('/profile', async (req, res) => {
+getRoute('/profile', async (req, res) => {
   return ok(res, {
     fullName: req.platformUser.full_name,
     email: req.platformUser.email,

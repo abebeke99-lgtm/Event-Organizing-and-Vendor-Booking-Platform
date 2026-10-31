@@ -6,7 +6,8 @@ export async function requirePlatformUser(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Authentication required.' });
 
   try {
-    const [rows] = await pool.execute(
+    const database = req.app?.locals?.database || pool;
+    const [rows] = await database.execute(
       `SELECT u.id, u.full_name, u.email, u.phone, u.status, LOWER(r.name) AS role
        FROM user_sessions s
        JOIN users u ON u.id = s.user_id

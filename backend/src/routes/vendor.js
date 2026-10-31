@@ -1,7 +1,9 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { pool } from '../db.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
-import { ensureVendorProfile } from '../lib/marketplace.js';
+import { ensureVendorProfile, loadVendorProfileForUser } from '../lib/marketplace.js';
 
 const router = Router();
 
@@ -22,18 +24,101 @@ function ok(res, data) {
   return res.json({ success: true, data });
 }
 
+const databaseFor = (req) => req.app?.locals?.database || pool;
+const getRoute = (path, handler) => router.get(path, asyncHandler(handler));
+const postRoute = (path, handler) => router.post(path, asyncHandler(handler));
+const patchRoute = (path, handler) => router.patch(path, asyncHandler(handler));
+const deleteRoute = (path, handler) => router.delete(path, asyncHandler(handler));
+const categoryIdSchema = z.preprocess(
+  (value) => value === '' || value === null ? null : value,
+  z.coerce.number().int().positive().nullable()
+).optional();
+const priceSchema = z.preprocess(
+  (value) => value === '' || value === null ? null : value,
+  z.coerce.number().finite().min(0).max(100000000).nullable()
+).optional();
+const profilePatchSchema = z.object({
+  businessName: z.string().trim().min(2).max(160).optional(),
+  categoryId: categoryIdSchema,
+  city: z.string().trim().max(120).optional(),
+  description: z.string().trim().max(10000).optional(),
+  phone: z.string().trim().max(40).nullable().optional(),
+}).strict();
+const serviceFieldsSchema = z.object({
+  title: z.string().trim().min(2).max(180),
+  description: z.string().trim().max(10000).optional().default(''),
+  categoryId: categoryIdSchema,
+  price: priceSchema,
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase()).optional().default('ETB'),
+  status: z.enum(['draft', 'active']).optional().default('draft'),
+}).strict();
+const servicePatchSchema = serviceFieldsSchema.partial();
+
+function sendValidationError(res, error) {
+  return res.status(400).json({
+    error: 'Invalid request data.',
+    details: error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+  });
+}
+
+async function validateCategory(database, categoryId) {
+  if (categoryId === undefined || categoryId === null) return true;
+  const [rows] = await database.execute(
+    'SELECT id FROM service_categories WHERE id = ? AND is_active = TRUE',
+    [categoryId]
+  );
+  return rows.length > 0;
+}
+
+async function runTransaction(database, work) {
+  const connection = await database.getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await work(connection);
+    await connection.commit();
+    return result;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+function mapVendorProfile(vendor) {
+  return {
+    businessName: vendor.business_name,
+    logo: null,
+    businessType: vendor.category_name || 'Event services',
+    serviceLocation: vendor.city || 'Not set',
+    phone: vendor.phone || null,
+    email: vendor.email,
+    address: null,
+    serviceAreas: vendor.city ? [vendor.city] : [],
+    yearsOfExperience: null,
+    hours: null,
+    website: null,
+    verificationStatus: vendor.verification_status,
+    description: vendor.description || '',
+  };
+}
+
 router.use(requirePlatformUser);
-router.use(async (req, res, next) => {
+router.use(asyncHandler(async (req, res, next) => {
   if (req.platformUser.role !== 'vendor') {
     return res.status(403).json({ error: 'Vendor access is required.' });
   }
-  const vendor = await ensureVendorProfile(req.platformUser.id, req.platformUser.full_name);
+  const vendor = await ensureVendorProfile(
+    req.platformUser.id,
+    req.platformUser.full_name,
+    databaseFor(req)
+  );
   if (!vendor) return res.status(404).json({ error: 'Vendor profile not found.' });
   req.vendor = vendor;
   next();
-});
+}));
 
-router.get('/overview', async (req, res) => {
+getRoute('/overview', async (req, res) => {
   const userId = req.platformUser.id;
   const vendorId = req.vendor.id;
   const [serviceRows, bookingRows, quotationRows, paymentRows, messageRows, availabilityRows, ratingRows, notificationRows] = await Promise.all([
@@ -82,26 +167,48 @@ router.get('/overview', async (req, res) => {
   });
 });
 
-router.get('/profile', async (req, res) => {
-  const vendor = req.vendor;
-  return ok(res, {
-    businessName: vendor.business_name,
-    logo: null,
-    businessType: vendor.category_name || 'Event services',
-    serviceLocation: vendor.city || 'Not set',
-    phone: vendor.phone || null,
-    email: vendor.email,
-    address: null,
-    serviceAreas: vendor.city ? [vendor.city] : [],
-    yearsOfExperience: null,
-    hours: null,
-    website: null,
-    verificationStatus: vendor.verification_status,
-    description: vendor.description || '',
-  });
+getRoute('/profile', async (req, res) => {
+  return ok(res, mapVendorProfile(req.vendor));
 });
 
-router.get('/verification', async (req, res) => {
+patchRoute('/profile', async (req, res) => {
+  const parsed = profilePatchSchema.safeParse(req.body || {});
+  if (!parsed.success) return sendValidationError(res, parsed.error);
+  if (!Object.keys(parsed.data).length) {
+    return res.status(400).json({ error: 'Provide at least one profile field to update.' });
+  }
+
+  const database = databaseFor(req);
+  if (!await validateCategory(database, parsed.data.categoryId)) {
+    return res.status(400).json({ error: 'Select an active service category.' });
+  }
+
+  const profileFields = {
+    businessName: 'business_name',
+    categoryId: 'category_id',
+    city: 'city',
+    description: 'description',
+  };
+  const fields = Object.keys(profileFields).filter((field) => parsed.data[field] !== undefined);
+
+  await runTransaction(database, async (connection) => {
+    if (fields.length) {
+      await connection.execute(
+        `UPDATE vendor_profiles SET ${fields.map((field) => `${profileFields[field]} = ?`).join(', ')} WHERE user_id = ?`,
+        [...fields.map((field) => parsed.data[field]), req.platformUser.id]
+      );
+    }
+    if (parsed.data.phone !== undefined) {
+      await connection.execute('UPDATE users SET phone = ? WHERE id = ?', [parsed.data.phone, req.platformUser.id]);
+    }
+  });
+
+  const updatedVendor = await loadVendorProfileForUser(req.platformUser.id, database);
+  req.vendor = updatedVendor;
+  return ok(res, mapVendorProfile(updatedVendor));
+});
+
+getRoute('/verification', async (req, res) => {
   const vendor = req.vendor;
   return ok(res, {
     status: vendor.verification_status,
@@ -112,8 +219,8 @@ router.get('/verification', async (req, res) => {
   });
 });
 
-router.get('/services', async (req, res) => {
-  const [rows] = await pool.execute(
+getRoute('/services', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
     `SELECT s.id, s.title, s.description, s.price, s.currency, s.status, s.created_at,
             COALESCE(sc.name, 'General') AS category,
             (SELECT COUNT(*) FROM bookings b WHERE b.service_id = s.id) AS booking_count
@@ -136,12 +243,99 @@ router.get('/services', async (req, res) => {
   })));
 });
 
-router.get('/categories', async (req, res) => {
+postRoute('/services', async (req, res) => {
+  const parsed = serviceFieldsSchema.safeParse(req.body || {});
+  if (!parsed.success) return sendValidationError(res, parsed.error);
+  if (!await validateCategory(databaseFor(req), parsed.data.categoryId)) {
+    return res.status(400).json({ error: 'Select an active service category.' });
+  }
+  if (parsed.data.status === 'active' && req.vendor.verification_status !== 'verified') {
+    return res.status(409).json({ error: 'Vendor verification is required before publishing a service.' });
+  }
+
+  const [result] = await databaseFor(req).execute(
+    `INSERT INTO services (vendor_id, category_id, title, description, price, currency, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [req.vendor.id, parsed.data.categoryId ?? null, parsed.data.title, parsed.data.description, parsed.data.price ?? null, parsed.data.currency, parsed.data.status]
+  );
+  return res.status(201).json({
+    success: true,
+    data: {
+      id: Number(result.insertId),
+      vendorId: Number(req.vendor.id),
+      title: parsed.data.title,
+      description: parsed.data.description,
+      categoryId: parsed.data.categoryId ?? null,
+      price: parsed.data.price ?? null,
+      currency: parsed.data.currency,
+      status: statusLabel(parsed.data.status),
+    },
+  });
+});
+
+patchRoute('/services/:id', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  const parsed = servicePatchSchema.safeParse(req.body || {});
+  if (!id.success || !parsed.success) {
+    return parsed.success
+      ? res.status(400).json({ error: 'Service ID is invalid.' })
+      : sendValidationError(res, parsed.error);
+  }
+  const fields = Object.keys(parsed.data);
+  if (!fields.length) return res.status(400).json({ error: 'Provide at least one service field to update.' });
+
+  const database = databaseFor(req);
+  const [[service]] = await database.execute(
+    'SELECT id, status FROM services WHERE id = ? AND vendor_id = ? LIMIT 1',
+    [id.data, req.vendor.id]
+  );
+  if (!service) return res.status(404).json({ error: 'Service not found.' });
+  if (!await validateCategory(database, parsed.data.categoryId)) {
+    return res.status(400).json({ error: 'Select an active service category.' });
+  }
+  if (parsed.data.status === 'active' && req.vendor.verification_status !== 'verified') {
+    return res.status(409).json({ error: 'Vendor verification is required before publishing a service.' });
+  }
+
+  const columns = {
+    title: 'title',
+    description: 'description',
+    categoryId: 'category_id',
+    price: 'price',
+    currency: 'currency',
+    status: 'status',
+  };
+  await database.execute(
+    `UPDATE services SET ${fields.map((field) => `${columns[field]} = ?`).join(', ')} WHERE id = ? AND vendor_id = ?`,
+    [...fields.map((field) => parsed.data[field] === undefined ? null : parsed.data[field]), id.data, req.vendor.id]
+  );
+  return ok(res, { id: id.data, status: statusLabel(parsed.data.status || service.status) });
+});
+
+deleteRoute('/services/:id', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Service ID is invalid.' });
+  const database = databaseFor(req);
+  const [[service]] = await database.execute(
+    'SELECT id, status FROM services WHERE id = ? AND vendor_id = ? LIMIT 1',
+    [id.data, req.vendor.id]
+  );
+  if (!service) return res.status(404).json({ error: 'Service not found.' });
+  if (service.status !== 'archived') {
+    await database.execute(
+      "UPDATE services SET status = 'archived' WHERE id = ? AND vendor_id = ?",
+      [id.data, req.vendor.id]
+    );
+  }
+  return res.status(204).end();
+});
+
+getRoute('/categories', async (req, res) => {
   const [rows] = await pool.query('SELECT id, name, description, is_active FROM service_categories ORDER BY name ASC');
   return ok(res, rows.map((row) => ({ id: Number(row.id), name: row.name, description: row.description || '', active: Boolean(row.is_active) })));
 });
 
-router.get('/pricing', async (req, res) => {
+getRoute('/pricing', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT id, title, description, price, currency
      FROM services
@@ -162,7 +356,7 @@ router.get('/pricing', async (req, res) => {
   });
 });
 
-router.get('/availability', async (req, res) => {
+getRoute('/availability', async (req, res) => {
   const [rows] = await pool.execute(
     'SELECT available_date, status, note FROM vendor_availability WHERE vendor_id = ? ORDER BY available_date ASC',
     [req.vendor.id]
@@ -177,7 +371,7 @@ router.get('/availability', async (req, res) => {
   });
 });
 
-router.get('/booking-requests', async (req, res) => {
+getRoute('/booking-requests', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT b.id, b.service_description, b.quoted_amount, b.currency, b.status, b.created_at,
             e.title AS event_title, DATE_FORMAT(e.start_date, '%Y-%m-%d') AS event_start_date,
@@ -200,7 +394,7 @@ router.get('/booking-requests', async (req, res) => {
   })));
 });
 
-router.get('/bookings', async (req, res) => {
+getRoute('/bookings', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT b.id, b.service_description, b.quoted_amount, b.currency, b.status, b.created_at,
             DATE_FORMAT(e.start_date, '%Y-%m-%d') AS event_start_date, u.full_name AS customer_name
@@ -222,7 +416,7 @@ router.get('/bookings', async (req, res) => {
   })));
 });
 
-router.get('/history', async (req, res) => {
+getRoute('/history', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT b.id, b.service_description, b.quoted_amount, b.currency, b.status, b.created_at,
             DATE_FORMAT(e.start_date, '%Y-%m-%d') AS event_start_date, u.full_name AS customer_name
@@ -244,7 +438,7 @@ router.get('/history', async (req, res) => {
   })));
 });
 
-router.get('/quotations', async (req, res) => {
+getRoute('/quotations', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT q.id, q.service_description, q.amount, q.currency, q.status, q.valid_until,
             q.notes, q.created_at, u.full_name AS customer_name, e.title AS event_title
@@ -268,7 +462,7 @@ router.get('/quotations', async (req, res) => {
   })));
 });
 
-router.get('/payments', async (req, res) => {
+getRoute('/payments', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT p.id, p.booking_id, p.amount, p.currency, p.provider, p.provider_reference,
             p.status, p.created_at
@@ -298,7 +492,7 @@ router.get('/payments', async (req, res) => {
   });
 });
 
-router.get('/messages', async (req, res) => {
+getRoute('/messages', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT m.id, m.body, m.read_at, m.created_at, u.full_name AS sender
      FROM messages m
@@ -316,7 +510,7 @@ router.get('/messages', async (req, res) => {
   })));
 });
 
-router.get('/reviews', async (req, res) => {
+getRoute('/reviews', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT r.id, r.rating, r.comment, r.status, r.created_at, u.full_name AS customer_name
      FROM reviews r
@@ -338,7 +532,7 @@ router.get('/reviews', async (req, res) => {
   })));
 });
 
-router.get('/notifications', async (req, res) => {
+getRoute('/notifications', async (req, res) => {
   const [rows] = await pool.execute(
     `SELECT id, title, message, status, created_at
      FROM notifications
@@ -356,7 +550,7 @@ router.get('/notifications', async (req, res) => {
   })));
 });
 
-router.get('/reports', async (req, res) => {
+getRoute('/reports', async (req, res) => {
   const [serviceRows, bookingRows, paymentRows] = await Promise.all([
     pool.execute('SELECT title FROM services WHERE vendor_id = ?', [req.vendor.id]),
     pool.execute(
@@ -390,7 +584,7 @@ router.get('/reports', async (req, res) => {
   });
 });
 
-router.get('/account', async (req, res) => {
+getRoute('/account', async (req, res) => {
   return ok(res, {
     fullName: req.platformUser.full_name,
     email: req.platformUser.email,
