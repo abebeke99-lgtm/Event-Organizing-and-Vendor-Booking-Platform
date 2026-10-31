@@ -4,10 +4,13 @@ import {
   clearDemoSession,
   DEMO_ACCOUNT_STORAGE_KEY,
   DEMO_LOGIN_CREDENTIALS,
+  DEMO_PROFILE_STORAGE_KEY,
   DEMO_SESSION_STORAGE_KEY,
   findDemoLogin,
   isValidDemoPassword,
   readDemoSession,
+  readDemoProfile,
+  saveDemoProfile,
   saveDemoAccount,
   saveDemoSession,
 } from '../src/utils/demoAuth.js';
@@ -71,4 +74,22 @@ test('demo storage persists only non-sensitive account and session profile field
   assert.throws(() => saveDemoAccount(profile, storage), /already exists/);
   clearDemoSession(storage);
   assert.equal(readDemoSession(storage), null);
+});
+
+test('demo profile changes persist by account without altering account role or credentials', () => {
+  const storage = createStorage();
+  const profile = { name: 'Demo Administrator', email: 'admin@demo.eventhub', role: 'admin' };
+  saveDemoSession(profile, storage);
+
+  assert.deepEqual(saveDemoProfile(profile.email, { full_name: 'Ada Admin', phone: '+251900000000' }, storage), {
+    name: 'Ada Admin',
+    phone: '+251900000000',
+  });
+  assert.deepEqual(readDemoProfile('ADMIN@DEMO.EVENTHUB', storage), {
+    name: 'Ada Admin',
+    phone: '+251900000000',
+  });
+  assert.deepEqual(readDemoSession(storage), profile);
+  assert.deepEqual(Object.keys(JSON.parse(storage.getItem(DEMO_PROFILE_STORAGE_KEY))), ['admin@demo.eventhub']);
+  assert.throws(() => saveDemoProfile(profile.email, { full_name: '', phone: '' }, storage), /valid name/);
 });

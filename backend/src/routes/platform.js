@@ -1,10 +1,13 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { inTransaction, pool } from '../db.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
+import { getProfilePhoto, profilePhotoUploadParser, removeProfilePhoto, saveProfilePhoto } from '../lib/profilePhoto.js';
 import { createUserSession, hashToken, writeAudit } from '../lib/security.js';
+import { loadSystemSettings } from '../lib/systemSettings.js';
 import { calculateDashboardSummary, createBookingSnapshot } from '../lib/bookingRules.js';
 import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } from '../lib/eventCatalog.js';
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
@@ -17,6 +20,7 @@ import {
 } from '../lib/marketplace.js';
 
 const router = Router();
+const profilePhotoParser = profilePhotoUploadParser(express);
 const emailSchema = z.string().trim().email().max(190);
 
 function setPlatformCookie(res, token) {
@@ -1409,18 +1413,23 @@ router.post('/register', async (req, res) => {
     name: z.string().trim().min(2).max(120),
     email: emailSchema,
     password: z.string().min(8).max(128),
-    role: z.enum(['customer', 'organizer', 'vendor']).default('customer'),
+    role: z.enum(['customer', 'organizer', 'vendor']).optional(),
     phone: z.string().trim().max(30).optional().default(''),
     city: z.string().trim().max(120).optional().default(''),
   });
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration.' });
 
+  const systemSettings = await loadSystemSettings(pool, ['public_registration_enabled', 'default_registration_role']);
+  if (!systemSettings.public_registration_enabled) {
+    return res.status(403).json({ error: 'Public registration is currently disabled.' });
+  }
+  const registrationRole = parsed.data.role || systemSettings.default_registration_role;
   const normalizedEmail = parsed.data.email.toLowerCase();
   const [existing] = await pool.execute('SELECT id FROM users WHERE email = ? LIMIT 1', [normalizedEmail]);
   if (existing.length) return res.status(409).json({ error: 'An account with this email already exists.' });
 
-  const roleName = parsed.data.role === 'vendor' ? 'Vendor' : parsed.data.role === 'organizer' ? 'Organizer' : 'Customer';
+  const roleName = registrationRole === 'vendor' ? 'Vendor' : registrationRole === 'organizer' ? 'Organizer' : 'Customer';
   const [roleRows] = await pool.execute('SELECT id FROM roles WHERE name = ? AND is_active = TRUE LIMIT 1', [roleName]);
   if (!roleRows.length) return res.status(500).json({ error: 'Registration role is unavailable.' });
 
@@ -1433,7 +1442,7 @@ router.post('/register', async (req, res) => {
     );
     await connection.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [result.insertId, roleRows[0].id]);
     const { token } = await createUserSession(connection, result.insertId);
-    if (parsed.data.role === 'vendor') {
+    if (registrationRole === 'vendor') {
       await ensureVendorProfileRecord(result.insertId, parsed.data.name, connection);
     }
     await writeAudit(connection, {
@@ -1450,7 +1459,7 @@ router.post('/register', async (req, res) => {
   setPlatformCookie(res, created.token);
   return res.status(201).json({
     data: {
-      user: { id: created.id, name: parsed.data.name, email: normalizedEmail, role: parsed.data.role },
+      user: { id: created.id, name: parsed.data.name, email: normalizedEmail, role: registrationRole },
     },
   });
 });
@@ -1540,6 +1549,10 @@ router.get('/me', requirePlatformUser, async (req, res) => {
     },
   });
 });
+
+router.get('/profile/photo', requirePlatformUser, asyncHandler(async (req, res) => getProfilePhoto(pool, req.platformUser.id, res)));
+router.put('/profile/photo', requirePlatformUser, profilePhotoParser, asyncHandler(async (req, res) => saveProfilePhoto(pool, req.platformUser.id, req, res)));
+router.delete('/profile/photo', requirePlatformUser, asyncHandler(async (req, res) => removeProfilePhoto(pool, req.platformUser.id, res)));
 
 router.post('/password-recovery', async (req, res) => {
   const parsed = emailSchema.safeParse(req.body?.email);

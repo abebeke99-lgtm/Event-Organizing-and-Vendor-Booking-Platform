@@ -1,12 +1,24 @@
-﻿import { Router } from 'express';
+import express, { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { pool, inTransaction } from '../db.js';
 import { getModuleLockState, getSystemLockState, ROLE_PERMISSION_MATRIX } from '../lib/rbac.js';
 import { writeAudit } from '../lib/security.js';
 import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
+import { getProfilePhoto, profilePhotoUploadParser, removeProfilePhoto, saveProfilePhoto } from '../lib/profilePhoto.js';
+import {
+  DEFAULT_SYSTEM_SETTINGS,
+  SYSTEM_SETTING_SCHEMAS,
+  loadSystemSettings,
+  mergeSystemSettings,
+  serializeSystemSettingValue,
+  systemSettingsPatchSchema,
+  updateSystemSettingsCache,
+} from '../lib/systemSettings.js';
 
 const router = Router();
+const profilePhotoParser = profilePhotoUploadParser(express);
 const idSchema = z.coerce.number().int().positive();
 const pageSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -301,6 +313,11 @@ router.patch('/security/lock', async (req, res, next) => {
       }
     });
 
+    const updatedSystemSettings = {};
+    if (parsed.data.platform_status !== undefined) updatedSystemSettings.platform_status = parsed.data.platform_status;
+    if (parsed.data.maintenance_mode !== undefined) updatedSystemSettings.maintenance_mode = parsed.data.maintenance_mode;
+    if (Object.keys(updatedSystemSettings).length) updateSystemSettingsCache(req.app, updatedSystemSettings);
+
     const state = getSystemLockState({
       platform_status: parsed.data.platform_status,
       maintenance_mode: parsed.data.maintenance_mode,
@@ -360,8 +377,81 @@ router.get('/audit-logs', async (req, res, next) => {
 
 router.get('/settings', async (req, res, next) => {
   try {
-    const [rows] = await pool.execute('SELECT setting_key, setting_value, updated_by, updated_at FROM system_settings ORDER BY setting_key');
-    res.json({ data: rows });
+    const supportedKeys = Object.keys(SYSTEM_SETTING_SCHEMAS);
+    const placeholders = supportedKeys.map(() => '?').join(', ');
+    const [rows] = await pool.execute(
+      `SELECT setting_key, setting_value, updated_at FROM system_settings WHERE setting_key IN (${placeholders}) ORDER BY setting_key`,
+      supportedKeys,
+    );
+    const settings = mergeSystemSettings(rows);
+    const savedRows = new Map(rows.map((row) => [row.setting_key, row]));
+    const data = Object.entries(settings).map(([setting_key, setting_value]) => ({
+      setting_key,
+      setting_value,
+      updated_at: savedRows.get(setting_key)?.updated_at ?? null,
+    }));
+    res.json({ data, settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/settings', async (req, res, next) => {
+  const parsed = systemSettingsPatchSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'One or more settings are invalid or unsupported.',
+      details: parsed.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+    });
+  }
+
+  try {
+    const currentSettings = await loadSystemSettings(pool);
+    const entries = Object.entries(parsed.data);
+    await inTransaction(async (db) => {
+      for (const [key, value] of entries) {
+        await db.execute(
+          'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
+          [key, serializeSystemSettingValue(value), req.admin.id],
+        );
+      }
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'settings.updated',
+        entityType: 'system_settings',
+        details: { keys: entries.map(([key]) => key) },
+        ip: req.ip,
+      });
+    });
+
+    const settings = { ...currentSettings, ...parsed.data };
+    updateSystemSettingsCache(req.app, settings);
+    res.json({ data: settings });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/settings/reset', async (req, res, next) => {
+  try {
+    await inTransaction(async (db) => {
+      for (const [key, value] of Object.entries(DEFAULT_SYSTEM_SETTINGS)) {
+        await db.execute(
+          'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
+          [key, serializeSystemSettingValue(value), req.admin.id],
+        );
+      }
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'settings.reset',
+        entityType: 'system_settings',
+        details: { keys: Object.keys(DEFAULT_SYSTEM_SETTINGS) },
+        ip: req.ip,
+      });
+    });
+
+    updateSystemSettingsCache(req.app, DEFAULT_SYSTEM_SETTINGS);
+    res.json({ data: DEFAULT_SYSTEM_SETTINGS });
   } catch (error) {
     next(error);
   }
@@ -369,8 +459,12 @@ router.get('/settings', async (req, res, next) => {
 
 router.put('/settings/:key', async (req, res, next) => {
   const key = String(req.params.key);
-  const value = req.body?.value;
-  if (!/^[a-z][a-z0-9_.-]{1,119}$/.test(key) || typeof value !== 'string' || value.length > 4000) {
+  const rawValue = req.body?.value;
+  const value = ['maintenance_mode', 'public_registration_enabled'].includes(key) && ['true', 'false'].includes(rawValue)
+    ? rawValue === 'true'
+    : rawValue;
+  const parsed = systemSettingsPatchSchema.safeParse({ [key]: value });
+  if (!parsed.success) {
     return res.status(400).json({ error: 'Setting key or value is invalid.' });
   }
 
@@ -378,11 +472,12 @@ router.put('/settings/:key', async (req, res, next) => {
     await inTransaction(async (db) => {
       await db.execute(
         'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
-        [key, value, req.admin.id]
+        [key, serializeSystemSettingValue(parsed.data[key]), req.admin.id]
       );
       await writeAudit(db, { actorId: req.admin.id, action: 'settings.updated', entityType: 'system_setting', entityId: key, details: { key }, ip: req.ip });
     });
-    res.json({ data: { setting_key: key, setting_value: value } });
+    updateSystemSettingsCache(req.app, parsed.data);
+    res.json({ data: { setting_key: key, setting_value: parsed.data[key] } });
   } catch (error) {
     next(error);
   }
@@ -407,6 +502,10 @@ router.patch('/profile', async (req, res, next) => {
     next(error);
   }
 });
+
+router.get('/profile/photo', asyncHandler(async (req, res) => getProfilePhoto(pool, req.admin.id, res)));
+router.put('/profile/photo', profilePhotoParser, asyncHandler(async (req, res) => saveProfilePhoto(pool, req.admin.id, req, res)));
+router.delete('/profile/photo', asyncHandler(async (req, res) => removeProfilePhoto(pool, req.admin.id, res)));
 
 router.post('/users', async (req, res, next) => {
   const parsed = z.object({

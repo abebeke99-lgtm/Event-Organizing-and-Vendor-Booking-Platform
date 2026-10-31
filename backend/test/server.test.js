@@ -190,6 +190,9 @@ let healthQueryCount = 0;
 const app = createApp({
   expectedDatabase: 'defaultdb',
   database: {
+    async execute() {
+      return [[], []];
+    },
     async query(sql) {
       healthQueryCount += 1;
       if (sql === 'SELECT DATABASE() AS database_name') {
@@ -404,6 +407,21 @@ test('mounted protected API routes reach authorization instead of the 404 handle
 
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+});
+
+test('profile photo endpoints require the authenticated account for platform and administrator roles', async () => {
+  for (const prefix of ['/api/platform', '/api/admin']) {
+    for (const method of ['GET', 'PUT', 'DELETE']) {
+      const response = await fetch(`${baseUrl}${prefix}/profile/photo`, {
+        method,
+        headers: method === 'PUT' ? { 'Content-Type': 'image/png' } : {},
+        body: method === 'PUT' ? Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) : undefined,
+      });
+
+      assert.equal(response.status, 401, `${method} ${prefix}/profile/photo`);
+      assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+    }
+  }
 });
 
 test('administrator dashboard API rejects unauthenticated requests', async () => {

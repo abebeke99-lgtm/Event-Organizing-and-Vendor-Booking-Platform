@@ -1,5 +1,6 @@
 import { pool } from '../db.js';
 import { getModuleLockState, getSystemLockState, hasPermission, normalizePermissionKeys } from '../lib/rbac.js';
+import { loadSystemSettings, updateSystemSettingsCache } from '../lib/systemSettings.js';
 
 export async function getEffectiveUserPermissions(userId) {
   if (!userId) return [];
@@ -37,10 +38,24 @@ export function requireModuleUnlocked(moduleKey) {
 }
 
 export async function requirePlatformAvailable(req, res, next) {
-  const settings = req.app.locals?.systemSettings || {};
-  const state = getSystemLockState(settings);
-  if (state.locked) {
-    return res.status(423).json({ error: state.reason || 'The platform is temporarily unavailable.' });
+  if (req.path === '/logout') return next();
+  try {
+    const now = Date.now();
+    let settings = req.app.locals?.platformSettingsCache;
+    if (!settings || settings.expiresAt <= now) {
+      const database = req.app.locals?.database || pool;
+      const values = await loadSystemSettings(database, ['platform_status', 'maintenance_mode', 'maintenance_message']);
+      updateSystemSettingsCache(req.app, values);
+      settings = req.app.locals.platformSettingsCache;
+    }
+
+    const state = getSystemLockState(settings.values);
+    if (state.locked) {
+      const message = settings.values.maintenance_message || 'The platform is temporarily unavailable.';
+      return res.status(503).json({ error: state.reason || 'Platform unavailable', message });
+    }
+    next();
+  } catch (error) {
+    next(error);
   }
-  next();
 }

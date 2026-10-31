@@ -11,10 +11,10 @@ export async function writeAudit(executor, { actorId, action, entityType, entity
   );
 }
 
-export async function createSession(userId) {
+export async function createSession(userId, executor = pool) {
   const token = newSessionToken();
   const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
-  await pool.execute('INSERT INTO admin_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', [hashToken(token), userId, expiresAt]);
+  await executor.execute('INSERT INTO admin_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)', [hashToken(token), userId, expiresAt]);
   return { token, expiresAt };
 }
 

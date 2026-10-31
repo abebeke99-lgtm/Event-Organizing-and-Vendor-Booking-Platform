@@ -132,6 +132,33 @@ The platform includes the requested features for:
 3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173`. To use real authentication, set `VITE_DEMO_AUTH=false`, configure `VITE_API_URL`, and start the backend with `backend/.env` configured for a provisioned MySQL database.
 4. For a real backend, apply migrations with `npm run migrate` after configuring the database. Never enable demo authentication in production.
 
+### Password reset email
+
+Password reset uses a six-digit email OTP, a five-minute expiry, up to five verification attempts, a 60-second resend cooldown, and a short-lived HttpOnly reset authorization cookie. Configure these variables only in the backend environment (never in the frontend):
+
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`
+
+Use SMTP credentials and a verified sender address issued by your email provider. Port 465 uses implicit TLS; other ports use STARTTLS. When SMTP is missing, every valid request receives the same generic service-unavailable response and the backend logs a configuration warning without looking up accounts. Delivery failures are logged without email addresses or OTP values, and the undelivered code is invalidated. Apply migrations with `npm run migrate --prefix backend`; this includes `011_password_reset_otps.sql`. Successful resets revoke existing admin and platform sessions and do not sign users in automatically.
+
+For a real local reset flow, provision and start MySQL, configure `backend/.env` with valid database and SMTP settings, then run:
+
+```powershell
+npm run migrate --prefix backend
+$env:VITE_DEMO_AUTH = 'false'
+$env:VITE_API_URL = 'http://127.0.0.1:4000'
+npm run dev --prefix backend
+```
+
+In a second PowerShell terminal from the repository root, start the frontend:
+
+```powershell
+$env:VITE_DEMO_AUTH = 'false'
+$env:VITE_API_URL = 'http://127.0.0.1:4000'
+npm run dev --prefix frontend
+```
+
+The browser-only demo mode intentionally cannot send email or change real account passwords.
+
 ## 10. Test Access
 
 The predefined demo credentials are mock-only and are not valid for production or backend access:

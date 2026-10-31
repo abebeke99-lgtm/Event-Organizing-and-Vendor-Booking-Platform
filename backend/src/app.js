@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import authRoutes from './routes/auth.js';
+import { createAuthRouter } from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import platformRoutes from './routes/platform.js';
 import aboutRoutes, { adminRouter as adminAboutRoutes } from './routes/about.js';
@@ -12,11 +12,24 @@ import vendorRoutes from './routes/vendor.js';
 import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { requirePlatformRole } from './middleware/requirePlatformUser.js';
+import { getSystemLockState } from './lib/rbac.js';
 import { formatDatabaseError, getDatabaseFailureCode, pool, verifyDatabaseConnection } from './db.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
+import { requirePlatformAvailable } from './middleware/rbac.js';
+import { loadSystemSettings, updateSystemSettingsCache } from './lib/systemSettings.js';
 
-export function createApp({ database = pool, expectedDatabase = process.env.DB_NAME } = {}) {
+export function createApp({
+  database = pool,
+  expectedDatabase = process.env.DB_NAME,
+  emailConfigured,
+  emailSender,
+  passwordHasher,
+  otpGenerator,
+  otpHasher,
+  otpVerifier,
+} = {}) {
   const app = express();
+  app.locals.database = database;
   const localOrigins = process.env.NODE_ENV === 'production'
     ? []
     : ['http://127.0.0.1:5173', 'http://localhost:5173'];
@@ -69,12 +82,37 @@ export function createApp({ database = pool, expectedDatabase = process.env.DB_N
     }
     res.json({ status: 'ok' });
   }));
-  app.use('/api/platform', platformRoutes);
-  app.use('/api/about', aboutRoutes);
-  app.use('/api/contact', contactRoutes);
-  app.use('/api/vendor', requirePlatformRole('vendor'), vendorRoutes);
-  app.use('/api/customer', requirePlatformRole('customer'), customerRoutes);
-  app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false }), authRoutes);
+  app.get('/api/platform/availability', asyncHandler(async (req, res) => {
+    const settings = await loadSystemSettings(database);
+    updateSystemSettingsCache(app, settings);
+    const platformState = getSystemLockState(settings);
+    res.json({
+      data: {
+        platformName: settings.platform_name,
+        platformDescription: settings.platform_description,
+        maintenanceMode: platformState.locked,
+        maintenanceMessage: settings.maintenance_message,
+        publicRegistrationEnabled: settings.public_registration_enabled,
+        defaultRegistrationRole: settings.default_registration_role,
+        supportEmail: settings.support_email,
+        supportPhone: settings.support_phone,
+      },
+    });
+  }));
+  app.use('/api/platform', requirePlatformAvailable, platformRoutes);
+  app.use('/api/about', requirePlatformAvailable, aboutRoutes);
+  app.use('/api/contact', requirePlatformAvailable, contactRoutes);
+  app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), vendorRoutes);
+  app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer'), customerRoutes);
+  app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false }), createAuthRouter({
+    database,
+    emailConfigured,
+    emailSender,
+    passwordHasher,
+    otpGenerator,
+    otpHasher,
+    otpVerifier,
+  }));
   app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
   app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
   app.use('/api/admin', requireAdmin, adminRoutes);

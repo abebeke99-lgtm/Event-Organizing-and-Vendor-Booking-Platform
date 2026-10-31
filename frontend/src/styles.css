@@ -59,11 +59,26 @@
 .login-card .field{gap:6px}
 .login-card .field input,.login-card .field select{width:100%;min-height:42px}
 .login-card .login-button{width:100%;min-height:42px;margin-top:2px}
+.login-account-links{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px}
+.login-account-links.single-link{justify-content:flex-end}
+.login-account-links .text-link{color:#1769aa;font-size:12px;font-weight:600;text-align:left;text-decoration:none}
+.login-account-links .text-link:hover{color:#10598f;text-decoration:underline}
+.login-account-links .text-link:focus-visible{outline:3px solid rgba(23,105,170,.28);outline-offset:3px;border-radius:3px}
+.login-card .auth-language-row.auth-language-visible{display:flex;justify-content:flex-end;margin-bottom:16px}
+.otp-code-input{text-align:center;letter-spacing:.55em;font-size:20px!important;font-weight:700}
+.otp-resend-button{display:block;margin:14px auto 0;color:#1769aa;font-weight:600}
+.otp-resend-button:disabled{cursor:not-allowed;opacity:.55}
+.reset-card .brand-mark{margin-bottom:14px}
+.reset-card h1{font-size:25px}
+.reset-card .muted{line-height:1.6}
+.reset-card .auth-home-footer{margin-top:20px}
+.reset-card .alert{margin:14px 0}
 .password-input-wrap{position:relative;width:100%}
 .password-input-wrap input{padding-right:48px !important}
 .password-visibility{position:absolute;right:12px;top:50%;transform:translateY(-50%);display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;background:transparent;color:#718097;box-shadow:none}
 .password-visibility:hover{background:transparent;color:#4551d1;transform:translateY(-50%)}
 @media(max-width:480px){.login-wrap{padding:16px}.login-card{padding:20px}}
+@media(max-width:380px){.login-account-links{gap:8px}.login-account-links .text-link{font-size:11px}}
 
 .auth-language-row{display:none}
 .event-filter-panel{padding:16px}
@@ -223,7 +238,6 @@
 .nav-link.active{background:#eaf4fc;border-color:#d5e9f8;color:#1769aa}
 .avatar{background:#e5f1fb;color:#1769aa}
 .text-action{color:#1769aa}
-.login-card .auth-language-row{display:none}
 .auth-home-footer{display:flex;justify-content:center;margin-top:18px;padding-top:16px;border-top:1px solid #e8eef4}
 .auth-home-link{display:inline-flex;align-items:center;gap:7px;min-height:36px;padding:0 10px;border:1px solid #dceaf5;border-radius:8px;color:#1769aa;font-size:12px;font-weight:600;transition:background .18s ease,border-color .18s ease,color .18s ease,transform .18s ease}
 .auth-home-link:hover{background:#edf6fc;border-color:#b9d8ee;color:#10598f;transform:translateX(-2px)}
@@ -282,7 +296,7 @@
 .dashboard-logout{color:#53617a;background:#fff;border:1px solid #e8ebf2}
 .dashboard-logout:hover{background:#fef2f2;color:#b34852}
 .profile-photo-overlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(13,27,46,.58);backdrop-filter:blur(4px);animation:profile-photo-fade .18s ease-out}
-.profile-photo-modal{position:relative;width:min(100%,420px);display:flex;flex-direction:column;align-items:center;gap:8px;padding:34px 28px 30px;border:1px solid #e6eaf1;border-radius:20px;background:#fff;box-shadow:0 24px 70px #08182c45;color:#112b45;animation:profile-photo-enter .22s ease-out}
+.profile-photo-modal{position:relative;width:min(100%,420px);max-height:calc(100vh - 32px);overflow-y:auto;display:flex;flex-direction:column;align-items:center;gap:8px;padding:34px 28px 30px;border:1px solid #e6eaf1;border-radius:20px;background:#fff;box-shadow:0 24px 70px #08182c45;color:#112b45;animation:profile-photo-enter .22s ease-out}
 .profile-photo-modal h2{margin:0 32px 14px;color:#112b45;font-size:18px;font-weight:700}
 .profile-photo-close{position:absolute;top:12px;right:12px;color:#53617a;background:#fff}
 .profile-photo-preview{width:min(68vw,260px);aspect-ratio:1;border:5px solid #fff;border-radius:50%;display:grid;place-items:center;overflow:hidden;background:#e9effb;color:#416da4;box-shadow:0 8px 26px #112b451f}
@@ -290,6 +304,17 @@
 .profile-photo-name{max-width:100%;overflow:hidden;margin-top:8px;color:#28364d;font-size:15px;text-overflow:ellipsis;white-space:nowrap}
 .profile-photo-email{max-width:100%;overflow:hidden;color:#69778d;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
 .profile-photo-role{color:#7b879a;font-size:12px;text-transform:capitalize}
+.profile-photo-actions{width:100%;display:flex;flex-wrap:wrap;justify-content:center;gap:9px;margin-top:8px}
+.profile-photo-message,.profile-photo-loading{width:100%;margin:2px 0;text-align:center;font-size:12px}
+.profile-photo-message.error{color:#b34852}
+.profile-photo-message.success{color:#16804b}
+.profile-photo-loading{color:#64748b}
+.profile-photo-field{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.profile-photo-field-preview{width:68px;height:68px;flex:0 0 68px;display:grid;place-items:center;overflow:hidden;border-radius:50%;background:#e9effb;color:#416da4}
+.profile-photo-field-preview img{width:100%;height:100%;object-fit:cover}
+.profile-photo-field-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.profile-photo-field-hint{width:100%;color:#758198;font-size:11px}
+.profile-avatar img{width:100%;height:100%;object-fit:cover;border-radius:inherit}
 @keyframes profile-photo-fade{from{opacity:0}to{opacity:1}}
 @keyframes profile-photo-enter{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
 .dashboard-settings{max-width:900px;margin:0 auto}
@@ -508,6 +533,11 @@ html[data-theme="dark"] .public-account-avatar{background:#243d5c;color:#c5e0fc}
 html[data-theme="dark"] .public-account-copy small{color:#a3b0c5}
 html[data-theme="dark"] .public-account-menu,html[data-theme="dark"] .info-card,html[data-theme="dark"] .panel,html[data-theme="dark"] .metric-card,html[data-theme="dark"] .login-card,html[data-theme="dark"] .registration-card,html[data-theme="dark"] .contact-card,html[data-theme="dark"] .contact-form-card,html[data-theme="dark"] .event-detail-card,html[data-theme="dark"] .event-request-modal .modal,html[data-theme="dark"] .modal,html[data-theme="dark"] .dashboard-popover,html[data-theme="dark"] .table-wrap,html[data-theme="dark"] .setting-row{border-color:#29364b;background:#121e31;color:#e7edf7}
 html[data-theme="dark"] .public-notification-toggle{border-color:#34445c;background:#142238;color:#e4ebf6}
+html[data-theme="dark"] .profile-photo-modal{border-color:#29364b;background:#121e31;color:#e7edf7}
+html[data-theme="dark"] .profile-photo-modal h2,html[data-theme="dark"] .profile-photo-name{color:#e7edf7}
+html[data-theme="dark"] .profile-photo-email,html[data-theme="dark"] .profile-photo-role,html[data-theme="dark"] .profile-photo-loading{color:#a3b0c5}
+html[data-theme="dark"] .profile-photo-preview,html[data-theme="dark"] .profile-photo-field-preview{border-color:#24344b;background:#1b3550;color:#a8d1f2}
+html[data-theme="dark"] .profile-photo-field-hint{color:#a3b0c5}
 html[data-theme="dark"] .public-account-menu button,html[data-theme="dark"] .info-card h3,html[data-theme="dark"] .metric-card strong,html[data-theme="dark"] .login-card h1,html[data-theme="dark"] .login-card h2,html[data-theme="dark"] .contact-card h2,html[data-theme="dark"] .contact-card h3{color:#e7edf7}
 html[data-theme="dark"] .contact-details-heading button{background:#121e31;color:#e7edf7}
 html[data-theme="dark"] .contact-details-heading button:hover{background:#17263b;color:#b8d7f4}
@@ -713,3 +743,25 @@ html[data-theme="dark"] .about-load-error{border-color:#633b46;background:#2c1d2
 @media(prefers-reduced-motion:reduce){
   .about-value-card,.about-audience-card{transition:none}
 }
+.system-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.system-settings-card{padding:20px}
+.system-settings-card h3{margin:0 0 16px;color:var(--ink);font:700 15px Manrope,sans-serif}
+.system-settings-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.system-settings-fields .field{display:grid;gap:6px;min-width:0;color:var(--muted);font-size:11px}
+.system-settings-fields .field:has(textarea){grid-column:1/-1}
+.system-settings-fields input:not([type="checkbox"]),.system-settings-fields textarea,.system-settings-fields select{width:100%;min-width:0;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--ink);padding:9px 10px;font-size:12px}
+.system-settings-fields textarea{resize:vertical}
+.settings-toggle{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px;border:1px solid var(--line);border-radius:8px;color:var(--ink)}
+.settings-toggle span{display:grid;gap:3px}
+.settings-toggle strong{font-size:12px}
+.settings-toggle small{color:var(--muted);font-size:10px}
+.settings-toggle input{width:18px;height:18px;accent-color:var(--accent);flex:0 0 auto}
+.system-settings-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:16px}
+.system-settings-actions>.muted{margin-right:auto}
+.maintenance-screen{min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--pagebg)}
+.maintenance-card{width:min(100%,520px);padding:36px;text-align:center}
+.maintenance-card .brand-mark{margin:0 auto 18px}
+.maintenance-card h1{margin:0 0 12px;color:var(--ink);font:700 26px Manrope,sans-serif}
+.maintenance-card p:not(.eyebrow){margin:0 auto 22px;max-width:420px;color:var(--muted);font-size:14px}
+@media(max-width:900px){.system-settings-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.system-settings-fields{grid-template-columns:1fr}.system-settings-fields .field:has(textarea),.settings-toggle{grid-column:auto}.system-settings-actions{align-items:stretch;flex-direction:column-reverse}.system-settings-actions>.muted{margin:0}.system-settings-actions .button{width:100%}}

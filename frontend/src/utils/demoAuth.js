@@ -1,5 +1,6 @@
 export const DEMO_ACCOUNT_STORAGE_KEY = 'eventhub-demo-accounts';
 export const DEMO_SESSION_STORAGE_KEY = 'eventhub-demo-session';
+export const DEMO_PROFILE_STORAGE_KEY = 'eventhub-demo-profiles';
 
 export const DEMO_LOGIN_CREDENTIALS = [
   { username: 'admin', email: 'admin@demo.eventhub', password: 'AdminDemo123', name: 'Demo Administrator', role: 'admin' },
@@ -81,6 +82,58 @@ export function readDemoSession(storage = globalThis.localStorage) {
   const normalized = normalizeDemoProfile(profile);
   if (!normalized) throw new Error('Saved demo session data is invalid. Sign in again.');
   return normalized;
+}
+
+export function readDemoProfile(email, storage = globalThis.localStorage) {
+  const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (!normalizedEmail) return null;
+  const value = getStorage(storage).getItem(DEMO_PROFILE_STORAGE_KEY);
+  if (value === null) return null;
+
+  let profiles;
+  try {
+    profiles = JSON.parse(value);
+  } catch {
+    throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+  }
+  if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) {
+    throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+  }
+
+  const profile = profiles[normalizedEmail];
+  if (!profile) return null;
+  if (typeof profile.name !== 'string' || typeof profile.phone !== 'string') {
+    throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+  }
+  return { name: profile.name, phone: profile.phone };
+}
+
+export function saveDemoProfile(email, profile, storage = globalThis.localStorage) {
+  const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const name = typeof profile?.full_name === 'string' ? profile.full_name.trim() : '';
+  const phone = profile?.phone === null ? '' : typeof profile?.phone === 'string' ? profile.phone : '';
+  if (!normalizedEmail || !name || name.length > 160 || phone.length > 40) {
+    throw new Error('Enter a valid name and phone number.');
+  }
+
+  const targetStorage = getStorage(storage);
+  const value = targetStorage.getItem(DEMO_PROFILE_STORAGE_KEY);
+  let profiles = {};
+  if (value !== null) {
+    try {
+      profiles = JSON.parse(value);
+    } catch {
+      throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+    }
+    if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) {
+      throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+    }
+  }
+
+  const updated = { name, phone };
+  profiles[normalizedEmail] = updated;
+  targetStorage.setItem(DEMO_PROFILE_STORAGE_KEY, JSON.stringify(profiles));
+  return updated;
 }
 
 export function clearDemoSession(storage = globalThis.localStorage) {
