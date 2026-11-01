@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, CalendarDays, Check, Clock3, MapPin, Share2, Ticket, Users } from 'lucide-react';
 import { formatEventDate, formatEventBudget } from './eventUtils.js';
+import { withStableKeys } from './listKeys.js';
 import './eventsExperience.css';
 
 function messageFor(error, fallback) {
@@ -170,6 +171,7 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
 
   const mapQuery = [event.venue, event.location].filter(Boolean).join(', ');
   const minimumPrice = tickets.length ? Math.min(...tickets.map((ticket) => Number(ticket.price))) : null;
+  const galleryImages = withStableKeys(event.galleryImages, (image) => image);
   const defaultCover = 'linear-gradient(120deg, #10243d, #276b92 58%, #79b6c4)';
 
   return <main className="page-shell event-details-page">
@@ -208,7 +210,7 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
           {shareMessage && <span className="event-inline-message" role="status">{shareMessage}</span>}
         </article>
         {Array.isArray(event.galleryImages) && event.galleryImages.length > 0 && <section className="event-gallery" aria-label="Event gallery">
-          {event.galleryImages.map((image, index) => <img key={`${image}-${index}`} src={image} alt={`${event.title} gallery ${index + 1}`} loading="lazy" />)}
+          {galleryImages.map(({ item: image, key }, index) => <img key={key} src={image} alt={`${event.title} gallery ${index + 1}`} loading="lazy" />)}
         </section>}
         {related.length > 0 && <section className="related-events">
           <h2>Related events</h2>

@@ -1,12 +1,19 @@
 import express, { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
+import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { z } from 'zod';
 import { inTransaction, pool } from '../db.js';
-import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
+import { optionalPlatformUser, requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { getProfilePhoto, profilePhotoUploadParser, removeProfilePhoto, saveProfilePhoto } from '../lib/profilePhoto.js';
 import { createUserSession, hashToken, writeAudit } from '../lib/security.js';
+import {
+  MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
+  sanitizeVendorDocumentName,
+  validateVendorVerificationDocument,
+  VENDOR_VERIFICATION_DOCUMENT_TYPES,
+} from '../lib/vendorVerificationDocuments.js';
 import { loadSystemSettings } from '../lib/systemSettings.js';
 import { calculateDashboardSummary, createBookingSnapshot } from '../lib/bookingRules.js';
 import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } from '../lib/eventCatalog.js';
@@ -21,7 +28,32 @@ import {
 
 const router = Router();
 const profilePhotoParser = profilePhotoUploadParser(express);
+const vendorVerificationDocumentParser = express.raw({
+  type: [...VENDOR_VERIFICATION_DOCUMENT_TYPES],
+  limit: MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
+});
+const databaseFor = (req) => req.app?.locals?.database || pool;
 const emailSchema = z.string().trim().email().max(190);
+const sessionCheckLimiter = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  message: 'Too many session checks. Please try again later.',
+});
+const registrationLimiter = createAuthRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  message: 'Too many registration attempts. Please try again later.',
+});
+const platformLoginLimiter = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: 'Too many sign-in attempts. Please try again later.',
+});
+const passwordRecoveryLimiter = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  message: 'Too many password recovery requests. Please try again later.',
+});
 
 function setPlatformCookie(res, token) {
   res.cookie('platform_session', token, {
@@ -35,7 +67,7 @@ function setPlatformCookie(res, token) {
 
 const bookingSelect = `
   SELECT b.id, b.event_id, b.vendor_id, b.service_description, b.quoted_amount, b.currency,
-         b.status, b.moderation_reason, b.created_at, b.updated_at,
+         b.status, b.moderation_reason, b.created_at,
          e.title AS event_title, DATE_FORMAT(e.start_date, '%Y-%m-%d') AS event_start_date,
          cu.full_name AS customer_name,
          vp.business_name AS vendor_name
@@ -178,9 +210,15 @@ router.get('/vendors', async (req, res) => {
   });
 });
 
-router.get('/vendors/:id', async (req, res) => {
+router.get('/vendors/:id', asyncHandler(async (req, res) => {
+  const parsedId = z.string()
+    .regex(/^[1-9]\d*$/)
+    .refine((value) => Number.isSafeInteger(Number(value)))
+    .safeParse(req.params.id);
+  if (!parsedId.success) return res.status(400).json({ error: 'Invalid vendor ID.' });
+
   const marketplace = await loadPublicMarketplace();
-  const vendor = getPublicVendorById(marketplace.vendors, req.params.id);
+  const vendor = getPublicVendorById(marketplace.vendors, Number(parsedId.data));
   if (!vendor) return res.status(404).json({ error: 'Vendor not found.' });
   const [[reviews], [availability]] = await Promise.all([
     pool.execute(
@@ -206,7 +244,7 @@ router.get('/vendors/:id', async (req, res) => {
   return res.json({
     data: {
       ...vendor,
-      reviews: reviews[0].map((review) => ({
+      reviews: reviews.map((review) => ({
         rating: Number(review.rating),
         comment: review.comment || '',
         customerName: review.customer_name || 'Customer',
@@ -218,7 +256,7 @@ router.get('/vendors/:id', async (req, res) => {
       })),
     },
   });
-});
+}));
 
 router.get('/services', async (req, res) => {
   const marketplace = await loadPublicMarketplace();
@@ -236,7 +274,7 @@ router.get('/services', async (req, res) => {
   });
 });
 
-router.get('/services/:id', async (req, res) => {
+router.get('/services/:id', asyncHandler(async (req, res) => {
   const marketplace = await loadPublicMarketplace();
   const service = getPublicServiceById(marketplace.services, req.params.id);
   if (!service) return res.status(404).json({ error: 'Service not found.' });
@@ -278,7 +316,7 @@ router.get('/services/:id', async (req, res) => {
       })),
     },
   });
-});
+}));
 
 router.get('/events', async (req, res) => {
   const parsed = publicEventsQuerySchema.safeParse(req.query);
@@ -1084,6 +1122,9 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
     if (existing?.verification_status === 'verified') {
       return { error: 'This account already has an approved vendor profile.', status: 409 };
     }
+    if (['under_review', 'suspended'].includes(existing?.verification_status)) {
+      return { error: 'This vendor application cannot be edited in its current status.', status: 409 };
+    }
 
     if (existing) {
       await connection.execute(
@@ -1093,6 +1134,11 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
          WHERE id = ?`,
         [parsed.data.businessName, parsed.data.categoryId, parsed.data.city || null, parsed.data.description || null, existing.id]
       );
+      await connection.execute(
+        `INSERT INTO vendor_verification_history (vendor_id, actor_id, from_status, to_status, reason)
+         VALUES (?, ?, ?, 'pending', ?)`,
+        [existing.id, req.platformUser.id, existing.verification_status, 'Vendor application resubmitted.'],
+      );
       return { id: existing.id, verificationStatus: 'pending', created: false };
     }
 
@@ -1101,6 +1147,11 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
          user_id, business_name, category_id, city, description, verification_status
        ) VALUES (?, ?, ?, ?, ?, 'pending')`,
       [req.platformUser.id, parsed.data.businessName, parsed.data.categoryId, parsed.data.city || null, parsed.data.description || null]
+    );
+    await connection.execute(
+       `INSERT INTO vendor_verification_history (vendor_id, actor_id, from_status, to_status, reason)
+        VALUES (?, ?, NULL, 'pending', ?)`,
+       [result.insertId, req.platformUser.id, 'Vendor application submitted.'],
     );
     return { id: result.insertId, verificationStatus: 'pending', created: true };
   });
@@ -1112,6 +1163,66 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
     success: true,
     data: application,
     message: 'Your vendor application has been submitted for review.',
+  });
+});
+
+router.get('/vendor-application/documents', requirePlatformUser, async (req, res) => {
+  if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+    return res.status(403).json({ error: 'Vendor application documents are unavailable to this account.' });
+  }
+  const database = databaseFor(req);
+  const [[vendor]] = await database.execute(
+    'SELECT id FROM vendor_profiles WHERE user_id = ? LIMIT 1',
+    [req.platformUser.id],
+  );
+  if (!vendor) return res.json({ data: [] });
+  const [documents] = await database.execute(
+    `SELECT id, original_name, content_type, file_size, created_at
+     FROM vendor_verification_documents WHERE vendor_id = ? ORDER BY created_at DESC`,
+    [vendor.id],
+  );
+  return res.json({ data: documents });
+});
+
+router.post('/vendor-application/documents', requirePlatformUser, vendorVerificationDocumentParser, async (req, res) => {
+  if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+    return res.status(403).json({ error: 'Vendor application documents are unavailable to this account.' });
+  }
+  const contentType = String(req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  const validationError = validateVendorVerificationDocument(req.body, contentType);
+  if (validationError) return res.status(400).json({ error: validationError });
+
+  const database = databaseFor(req);
+  const [[vendor]] = await database.execute(
+    `SELECT id, verification_status FROM vendor_profiles
+     WHERE user_id = ? AND verification_status IN ('pending', 'under_review', 'information_requested')
+     LIMIT 1`,
+    [req.platformUser.id],
+  );
+  if (!vendor) return res.status(409).json({ error: 'Submit an eligible vendor application before uploading documents.' });
+  const [[count]] = await database.execute(
+    'SELECT COUNT(*) AS total FROM vendor_verification_documents WHERE vendor_id = ?',
+    [vendor.id],
+  );
+  if (Number(count.total) >= 10) return res.status(400).json({ error: 'A vendor application may contain at most 10 documents.' });
+
+  const name = sanitizeVendorDocumentName(req.query.filename);
+  const [result] = await database.execute(
+    `INSERT INTO vendor_verification_documents
+       (vendor_id, uploaded_by, original_name, content_type, file_size, content)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [vendor.id, req.platformUser.id, name, contentType, req.body.length, req.body],
+  );
+  await writeAudit(database, {
+    actorId: req.platformUser.id,
+    action: 'vendor.document_submitted',
+    entityType: 'vendor',
+    entityId: vendor.id,
+    details: { documentId: result.insertId, name, contentType, fileSize: req.body.length },
+    ip: req.ip,
+  });
+  return res.status(201).json({
+    data: { id: result.insertId, original_name: name, content_type: contentType, file_size: req.body.length },
   });
 });
 
@@ -1194,7 +1305,8 @@ router.patch('/bookings/:id/status', requirePlatformUser, async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Invalid booking status.' });
 
   const [rows] = await pool.execute(
-    `SELECT b.id, b.status, b.vendor_id, e.organizer_id, vp.user_id AS vendor_user_id
+    `SELECT b.id, b.status, b.vendor_id, e.organizer_id, vp.user_id AS vendor_user_id,
+            vp.verification_status AS vendor_verification_status
      FROM bookings b
      JOIN events e ON e.id = b.event_id
      JOIN vendor_profiles vp ON vp.id = b.vendor_id
@@ -1208,6 +1320,9 @@ router.patch('/bookings/:id/status', requirePlatformUser, async (req, res) => {
   const isVendor = booking.vendor_user_id === userId;
   const isOrganizer = booking.organizer_id === userId;
   if (!isVendor && !isOrganizer) return res.status(403).json({ error: 'Access denied.' });
+  if (isVendor && booking.vendor_verification_status !== 'verified') {
+    return res.status(403).json({ error: 'Vendor verification is required to respond to bookings.' });
+  }
 
   const nextStatus = parsed.data.status;
   const vendorTransitions = {
@@ -1378,7 +1493,7 @@ router.patch('/quotations/:id/respond', requirePlatformUser, async (req, res) =>
     return res.status(400).json({ error: 'Enter the quote amount before sending a response.' });
   }
   const [vendors] = await pool.execute(
-    'SELECT id FROM vendor_profiles WHERE user_id = ? LIMIT 1',
+    "SELECT id FROM vendor_profiles WHERE user_id = ? AND verification_status = 'verified' LIMIT 1",
     [req.platformUser.id]
   );
   if (!vendors.length) return res.status(404).json({ error: 'Vendor profile not found.' });
@@ -1408,7 +1523,7 @@ router.patch('/quotations/:id/respond', requirePlatformUser, async (req, res) =>
   });
 });
 
-router.post('/register', async (req, res) => {
+router.post('/register', registrationLimiter, async (req, res) => {
   const schema = z.object({
     name: z.string().trim().min(2).max(120),
     email: emailSchema,
@@ -1464,7 +1579,7 @@ router.post('/register', async (req, res) => {
   });
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', platformLoginLimiter, async (req, res) => {
   const schema = z.object({
     email: emailSchema,
     password: z.string().min(1).max(128),
@@ -1524,7 +1639,8 @@ router.post('/logout', async (req, res) => {
   return res.status(204).end();
 });
 
-router.get('/me', requirePlatformUser, async (req, res) => {
+router.get('/me', sessionCheckLimiter, optionalPlatformUser, asyncHandler(async (req, res) => {
+  if (!req.platformUser) return res.json({ data: { user: null } });
   const profile = req.platformUser.role === 'vendor'
     ? await ensureVendorProfileRecord(req.platformUser.id, req.platformUser.full_name)
     : null;
@@ -1548,13 +1664,13 @@ router.get('/me', requirePlatformUser, async (req, res) => {
       },
     },
   });
-});
+}));
 
 router.get('/profile/photo', requirePlatformUser, asyncHandler(async (req, res) => getProfilePhoto(pool, req.platformUser.id, res)));
 router.put('/profile/photo', requirePlatformUser, profilePhotoParser, asyncHandler(async (req, res) => saveProfilePhoto(pool, req.platformUser.id, req, res)));
 router.delete('/profile/photo', requirePlatformUser, asyncHandler(async (req, res) => removeProfilePhoto(pool, req.platformUser.id, res)));
 
-router.post('/password-recovery', async (req, res) => {
+router.post('/password-recovery', passwordRecoveryLimiter, async (req, res) => {
   const parsed = emailSchema.safeParse(req.body?.email);
   if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email address.' });
   await writeAudit(pool, {

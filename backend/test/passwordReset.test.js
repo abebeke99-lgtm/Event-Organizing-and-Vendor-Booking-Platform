@@ -231,7 +231,7 @@ test('OTP verification grants a single-use HttpOnly reset authorization and rese
     assert.equal(state.userSessionsDeleted, 1);
   });
 
-  test('OTP verification supports every account role without changing role assignments', async () => {
+  await test('OTP verification supports every account role without changing role assignments', async () => {
     for (const role of ['admin', 'customer', 'vendor', 'organizer', 'staff']) {
       const harness = createHarness({ role });
       await withServer(harness, async (baseUrl, state) => {
@@ -244,7 +244,7 @@ test('OTP verification grants a single-use HttpOnly reset authorization and rese
     }
   });
 
-  test('expired reset authorization cannot update the account password', async () => {
+  await test('expired reset authorization cannot update the account password', async () => {
     const harness = createHarness();
     await withServer(harness, async (baseUrl, state) => {
       await requestOtp(baseUrl);

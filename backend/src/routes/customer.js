@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
+import { requirePermission } from '../middleware/rbac.js';
 import { loadPublicMarketplace, mapBookingRecord } from '../lib/marketplace.js';
 import { listPublicServices } from '../lib/serviceCatalog.js';
 import { listPublicVendors } from '../lib/vendorCatalog.js';
@@ -17,7 +18,10 @@ const databaseFor = (req) => req.app?.locals?.database || pool;
 const getRoute = (path, handler) => router.get(path, asyncHandler(handler));
 const postRoute = (path, handler) => router.post(path, asyncHandler(handler));
 const deleteRoute = (path, handler) => router.delete(path, asyncHandler(handler));
-const catalogQuerySchema = z.object({
+const getPermissionRoute = (path, permission, handler) => router.get(path, requirePermission(permission), asyncHandler(handler));
+const postPermissionRoute = (path, permission, handler) => router.post(path, requirePermission(permission), asyncHandler(handler));
+const deletePermissionRoute = (path, permission, handler) => router.delete(path, requirePermission(permission), asyncHandler(handler));
+const catalogQueryFields = {
   search: z.string().trim().max(120).optional(),
   category: z.string().trim().max(80).optional(),
   location: z.string().trim().max(120).optional(),
@@ -25,18 +29,27 @@ const catalogQuerySchema = z.object({
   minPrice: z.coerce.number().finite().min(0).optional(),
   maxPrice: z.coerce.number().finite().min(0).optional(),
   minRating: z.coerce.number().finite().min(0).max(5).optional(),
-  sort: z.enum(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'price_asc', 'price_desc', 'alphabetical', 'upcoming', 'earliest', 'latest', 'recent']).optional(),
+   sort: z.enum(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az']).optional(),
   page: z.coerce.number().int().min(1).max(100000).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
-}).strict().superRefine((query, context) => {
+};
+
+function catalogQuerySchema(sorts) {
+  return z.object({
+    ...catalogQueryFields,
+    sort: z.enum(sorts).optional(),
+  }).strict().superRefine((query, context) => {
   if (query.minPrice !== undefined && query.maxPrice !== undefined && query.maxPrice < query.minPrice) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxPrice'], message: 'Maximum price must be greater than or equal to minimum price.' });
   }
-});
+  });
+}
+const vendorCatalogQuerySchema = catalogQuerySchema(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az']);
+const serviceCatalogQuerySchema = catalogQuerySchema(['recommended', 'highest-rated', 'price-low', 'price-high', 'alphabetical']);
 const favoriteSchema = z.object({ vendorId: z.coerce.number().int().positive() }).strict();
 
-function parseCatalogQuery(req, res) {
-  const parsed = catalogQuerySchema.safeParse(req.query);
+function parseCatalogQuery(req, res, schema) {
+  const parsed = schema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({
       error: 'Invalid catalog filters.',
@@ -106,7 +119,7 @@ getRoute('/overview', async (req, res) => {
 });
 
 getRoute('/vendors', async (req, res) => {
-  const filters = parseCatalogQuery(req, res);
+  const filters = parseCatalogQuery(req, res, vendorCatalogQuerySchema);
   if (!filters) return;
   const marketplace = await loadPublicMarketplace(databaseFor(req));
   const result = listPublicVendors(marketplace.vendors, filters);
@@ -118,7 +131,7 @@ getRoute('/vendors', async (req, res) => {
 });
 
 getRoute('/services', async (req, res) => {
-  const filters = parseCatalogQuery(req, res);
+  const filters = parseCatalogQuery(req, res, serviceCatalogQuerySchema);
   if (!filters) return;
   const marketplace = await loadPublicMarketplace(databaseFor(req));
   const result = listPublicServices(marketplace.services, filters);
@@ -170,7 +183,7 @@ getRoute('/events', async (req, res) => {
   })));
 });
 
-getRoute('/favorites', async (req, res) => {
+getPermissionRoute('/favorites', 'favorites.manage_own', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
     `SELECT vp.id, vp.business_name, vp.city, vp.description, vp.verification_status,
             sc.name AS category
@@ -192,7 +205,7 @@ getRoute('/favorites', async (req, res) => {
   })));
 });
 
-postRoute('/favorites', async (req, res) => {
+postPermissionRoute('/favorites', 'favorites.manage_own', async (req, res) => {
   const parsed = favoriteSchema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: 'A valid vendor ID is required.' });
 
@@ -215,7 +228,7 @@ postRoute('/favorites', async (req, res) => {
   }
 });
 
-deleteRoute('/favorites/:vendorId', async (req, res) => {
+deletePermissionRoute('/favorites/:vendorId', 'favorites.manage_own', async (req, res) => {
   const vendorId = z.coerce.number().int().positive().safeParse(req.params.vendorId);
   if (!vendorId.success) return res.status(400).json({ error: 'Vendor ID is invalid.' });
   const [result] = await databaseFor(req).execute(

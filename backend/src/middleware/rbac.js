@@ -1,11 +1,18 @@
 import { pool } from '../db.js';
-import { getModuleLockState, getSystemLockState, hasPermission, normalizePermissionKeys } from '../lib/rbac.js';
+import {
+  getModuleLockState,
+  getRolePermissionPolicy,
+  getSystemLockState,
+  hasPermission,
+  isCriticalPermission,
+  normalizePermissionKeys,
+} from '../lib/rbac.js';
 import { loadSystemSettings, updateSystemSettingsCache } from '../lib/systemSettings.js';
 
-export async function getEffectiveUserPermissions(userId) {
+export async function getEffectiveUserPermissions(userId, database = pool) {
   if (!userId) return [];
-  const [rows] = await pool.execute(
-    `SELECT DISTINCT p.permission_key
+  const [rows] = await database.execute(
+    `SELECT DISTINCT p.permission_key, r.name AS role_name
      FROM user_roles ur
      JOIN roles r ON r.id = ur.role_id
      JOIN role_permissions rp ON rp.role_id = r.id
@@ -13,7 +20,9 @@ export async function getEffectiveUserPermissions(userId) {
      WHERE ur.user_id = ? AND r.is_active = TRUE`,
     [userId]
   );
-  return normalizePermissionKeys(rows.map((row) => row.permission_key));
+  const allowed = new Set(rows.flatMap((row) => getRolePermissionPolicy(row.role_name)));
+  return normalizePermissionKeys(rows.map((row) => row.permission_key)
+    .filter((permissionKey) => allowed.has(permissionKey) && !isCriticalPermission(permissionKey)));
 }
 
 export function requirePermission(requiredPermission) {

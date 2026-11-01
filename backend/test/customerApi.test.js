@@ -29,12 +29,13 @@ const serviceRows = [
 function createDatabase() {
   const favorites = [{ id: 7, user_id: 99, vendor_id: 11 }];
   const statements = [];
+  let permissionKeys = ['favorites.manage_own', 'bookings.view_own'];
   let nextFavoriteId = 8;
 
   async function execute(sql, values = []) {
     statements.push({ sql, values });
     if (sql.includes('FROM user_sessions s')) {
-      return [values[0] === hashToken(sessionToken) ? [{ ...user }] : [], []];
+      return [values[0] === hashToken(sessionToken) ? [{ ...user, permission_keys: permissionKeys.join(',') }] : [], []];
     }
     if (sql === "SELECT id FROM vendor_profiles WHERE id = ? AND verification_status = 'verified'") {
       return [vendorRows.some((vendor) => vendor.id === Number(values[0])) ? [{ id: Number(values[0]) }] : [], []];
@@ -84,7 +85,13 @@ function createDatabase() {
     throw new Error(`Unexpected test query: ${sql}`);
   }
 
-  return { favorites, statements, execute, query };
+  return {
+    favorites,
+    statements,
+    execute,
+    query,
+    setPermissionKeys(keys) { permissionKeys = keys; },
+  };
 }
 
 const database = createDatabase();
@@ -188,4 +195,14 @@ test('customer cannot remove a favorite belonging to another user', async () => 
 
   assert.equal(response.status, 404);
   assert.equal(database.favorites.some((favorite) => favorite.user_id === 99 && favorite.vendor_id === 11), true);
+});
+
+test('revoking a role permission blocks the protected customer operation on the next request', async () => {
+  database.setPermissionKeys(['bookings.view_own']);
+  const response = await request('/api/customer/favorites');
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: 'Access denied. The required permission is not assigned to this account.',
+  });
+  database.setPermissionKeys(['favorites.manage_own', 'bookings.view_own']);
 });

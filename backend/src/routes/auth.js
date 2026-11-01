@@ -1,7 +1,6 @@
 ﻿import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
-import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -13,7 +12,8 @@ import {
   hashPasswordResetOtp,
   verifyPasswordResetOtp,
 } from '../lib/passwordResetOtp.js';
-import { requireAdmin } from '../middleware/requireAdmin.js';
+import { optionalAdmin, requireAdmin } from '../middleware/requireAdmin.js';
+import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 
 const cookieOptions = () => {
   return {
@@ -52,33 +52,35 @@ export function createAuthRouter({
   otpVerifier = verifyPasswordResetOtp,
 } = {}) {
   const router = Router();
-  const requestOtpLimiter = rateLimit({
+  const sessionCheckLimiter = createAuthRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    limit: 60,
+    message: 'Too many session checks. Please try again later.',
+  });
+  const adminLoginLimiter = createAuthRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    message: 'Too many administrator sign-in attempts. Please try again later.',
+  });
+  const requestOtpLimiter = createAuthRateLimiter({
     windowMs: 15 * 60 * 1000,
     limit: 5,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many verification code requests. Please try again later.' },
+    message: 'Too many verification code requests. Please try again later.',
   });
-  const resendOtpLimiter = rateLimit({
+  const resendOtpLimiter = createAuthRateLimiter({
     windowMs: 15 * 60 * 1000,
     limit: 3,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many verification code requests. Please try again later.' },
+    message: 'Too many verification code requests. Please try again later.',
   });
-  const verifyOtpLimiter = rateLimit({
+  const verifyOtpLimiter = createAuthRateLimiter({
     windowMs: 15 * 60 * 1000,
     limit: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many verification attempts. Please try again later.' },
+    message: 'Too many verification attempts. Please try again later.',
   });
-  const resetPasswordLimiter = rateLimit({
+  const resetPasswordLimiter = createAuthRateLimiter({
     windowMs: 15 * 60 * 1000,
     limit: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Too many password reset attempts. Please try again later.' },
+    message: 'Too many password reset attempts. Please try again later.',
   });
 
   const requestOtp = asyncHandler(async (req, res) => {
@@ -273,7 +275,7 @@ export function createAuthRouter({
     }
   }));
 
-  router.post('/login', async (req, res, next) => {
+  router.post('/login', adminLoginLimiter, async (req, res, next) => {
     const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
     if (!email || !password || email.length > 254 || password.length > 256) {
@@ -308,7 +310,7 @@ export function createAuthRouter({
     } catch (error) { next(error); }
   });
 
-  router.get('/me', requireAdmin, asyncHandler(async (req, res) => res.json({ user: req.admin })));
+  router.get('/me', sessionCheckLimiter, optionalAdmin, (req, res) => res.json({ user: req.admin }));
   return router;
 }
 

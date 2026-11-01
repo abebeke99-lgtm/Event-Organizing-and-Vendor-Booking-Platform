@@ -1,11 +1,23 @@
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { z } from 'zod';
 import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
+import { requirePermission } from '../middleware/rbac.js';
 import { ensureVendorProfile, loadVendorProfileForUser } from '../lib/marketplace.js';
+import { writeAudit } from '../lib/security.js';
+import {
+  MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
+  sanitizeVendorDocumentName,
+  validateVendorVerificationDocument,
+  VENDOR_VERIFICATION_DOCUMENT_TYPES,
+} from '../lib/vendorVerificationDocuments.js';
 
 const router = Router();
+const vendorVerificationDocumentParser = express.raw({
+  type: [...VENDOR_VERIFICATION_DOCUMENT_TYPES],
+  limit: MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
+});
 
 const statusLabel = (status) => ({
   requested: 'Pending',
@@ -29,6 +41,10 @@ const getRoute = (path, handler) => router.get(path, asyncHandler(handler));
 const postRoute = (path, handler) => router.post(path, asyncHandler(handler));
 const patchRoute = (path, handler) => router.patch(path, asyncHandler(handler));
 const deleteRoute = (path, handler) => router.delete(path, asyncHandler(handler));
+const getPermissionRoute = (path, permission, handler) => router.get(path, requirePermission(permission), asyncHandler(handler));
+const postPermissionRoute = (path, permission, handler) => router.post(path, requirePermission(permission), asyncHandler(handler));
+const patchPermissionRoute = (path, permission, handler) => router.patch(path, requirePermission(permission), asyncHandler(handler));
+const deletePermissionRoute = (path, permission, handler) => router.delete(path, requirePermission(permission), asyncHandler(handler));
 const categoryIdSchema = z.preprocess(
   (value) => value === '' || value === null ? null : value,
   z.coerce.number().int().positive().nullable()
@@ -115,6 +131,16 @@ router.use(asyncHandler(async (req, res, next) => {
   );
   if (!vendor) return res.status(404).json({ error: 'Vendor profile not found.' });
   req.vendor = vendor;
+  const allowedWhileUnverified = req.method === 'GET' || (
+    req.path === '/verification/documents'
+    && req.method === 'POST'
+    && ['pending', 'under_review', 'information_requested'].includes(vendor.verification_status)
+  ) || (
+    req.path === '/profile' && req.method === 'PATCH' && vendor.verification_status !== 'suspended'
+  );
+  if (vendor.verification_status !== 'verified' && !allowedWhileUnverified) {
+    return res.status(403).json({ error: `Vendor access is unavailable while the account is ${vendor.verification_status.replaceAll('_', ' ')}.` });
+  }
   next();
 }));
 
@@ -210,16 +236,60 @@ patchRoute('/profile', async (req, res) => {
 
 getRoute('/verification', async (req, res) => {
   const vendor = req.vendor;
+  const [documents] = await databaseFor(req).execute(
+    `SELECT id, original_name, content_type, file_size, created_at
+     FROM vendor_verification_documents WHERE vendor_id = ? ORDER BY created_at DESC`,
+    [vendor.id],
+  );
+  const [history] = await databaseFor(req).execute(
+    `SELECT from_status, to_status, reason, created_at
+     FROM vendor_verification_history WHERE vendor_id = ? ORDER BY created_at DESC`,
+    [vendor.id],
+  );
   return ok(res, {
     status: vendor.verification_status,
     submittedAt: vendor.created_at,
-    reviewProgress: vendor.verification_status === 'verified' ? 'Approved' : vendor.verification_status === 'rejected' ? 'Rejected' : 'Under review',
+    reviewProgress: vendor.verification_status.replaceAll('_', ' '),
     reasons: vendor.verification_reason ? [vendor.verification_reason] : [],
-    documents: [],
+    documents,
+    history,
   });
 });
 
-getRoute('/services', async (req, res) => {
+router.post('/verification/documents', vendorVerificationDocumentParser, asyncHandler(async (req, res) => {
+  const contentType = String(req.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
+  const validationError = validateVendorVerificationDocument(req.body, contentType);
+  if (validationError) return res.status(400).json({ error: validationError });
+  if (!['pending', 'under_review', 'information_requested'].includes(req.vendor.verification_status)) {
+    return res.status(409).json({ error: 'Documents cannot be added for this vendor status.' });
+  }
+  const database = databaseFor(req);
+  const [[count]] = await database.execute(
+    'SELECT COUNT(*) AS total FROM vendor_verification_documents WHERE vendor_id = ?',
+    [req.vendor.id],
+  );
+  if (Number(count.total) >= 10) return res.status(400).json({ error: 'A vendor application may contain at most 10 documents.' });
+  const name = sanitizeVendorDocumentName(req.query.filename);
+  const [result] = await database.execute(
+    `INSERT INTO vendor_verification_documents
+       (vendor_id, uploaded_by, original_name, content_type, file_size, content)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [req.vendor.id, req.platformUser.id, name, contentType, req.body.length, req.body],
+  );
+  await writeAudit(database, {
+    actorId: req.platformUser.id,
+    action: 'vendor.document_submitted',
+    entityType: 'vendor',
+    entityId: req.vendor.id,
+    details: { documentId: result.insertId, name, contentType, fileSize: req.body.length },
+    ip: req.ip,
+  });
+  return res.status(201).json({
+    data: { id: result.insertId, original_name: name, content_type: contentType, file_size: req.body.length },
+  });
+}));
+
+getPermissionRoute('/services', 'services.manage_own', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
     `SELECT s.id, s.title, s.description, s.price, s.currency, s.status, s.created_at,
             COALESCE(sc.name, 'General') AS category,
@@ -243,7 +313,7 @@ getRoute('/services', async (req, res) => {
   })));
 });
 
-postRoute('/services', async (req, res) => {
+postPermissionRoute('/services', 'services.manage_own', async (req, res) => {
   const parsed = serviceFieldsSchema.safeParse(req.body || {});
   if (!parsed.success) return sendValidationError(res, parsed.error);
   if (!await validateCategory(databaseFor(req), parsed.data.categoryId)) {
@@ -273,7 +343,7 @@ postRoute('/services', async (req, res) => {
   });
 });
 
-patchRoute('/services/:id', async (req, res) => {
+patchPermissionRoute('/services/:id', 'services.manage_own', async (req, res) => {
   const id = z.coerce.number().int().positive().safeParse(req.params.id);
   const parsed = servicePatchSchema.safeParse(req.body || {});
   if (!id.success || !parsed.success) {
@@ -312,7 +382,7 @@ patchRoute('/services/:id', async (req, res) => {
   return ok(res, { id: id.data, status: statusLabel(parsed.data.status || service.status) });
 });
 
-deleteRoute('/services/:id', async (req, res) => {
+deletePermissionRoute('/services/:id', 'services.manage_own', async (req, res) => {
   const id = z.coerce.number().int().positive().safeParse(req.params.id);
   if (!id.success) return res.status(400).json({ error: 'Service ID is invalid.' });
   const database = databaseFor(req);

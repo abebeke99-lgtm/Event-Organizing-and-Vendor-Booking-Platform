@@ -326,7 +326,7 @@ test('database health route remains available and checks database connectivity',
   const response = await fetch(`${baseUrl}/api/health`);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: 'ok' });
+  assert.deepEqual(await response.json(), { status: 'ok', db: 'connected' });
   assert.equal(healthQueryCount, 2);
 });
 
@@ -405,8 +405,116 @@ test('database health route reports unavailable when the database query fails', 
 test('mounted protected API routes reach authorization instead of the 404 handler', async () => {
   const response = await fetch(`${baseUrl}/api/platform/me`);
 
-  assert.equal(response.status, 401);
-  assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { data: { user: null } });
+});
+
+test('anonymous administrator session checks do not consume sign-in rate limits', async () => {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const response = await fetch(`${baseUrl}/api/auth/me`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { user: null });
+  }
+});
+
+test('anonymous platform session checks do not consume sign-in rate limits', async () => {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const response = await fetch(`${baseUrl}/api/platform/me`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { data: { user: null } });
+  }
+});
+
+test('session endpoints return 401 when a cookie is present but invalid', async () => {
+  const adminResponse = await fetch(`${baseUrl}/api/auth/me`, {
+    headers: { Cookie: 'admin_session=invalid-test-session' },
+  });
+  const platformResponse = await fetch(`${baseUrl}/api/platform/me`, {
+    headers: { Cookie: 'platform_session=invalid-test-session' },
+  });
+
+  assert.equal(adminResponse.status, 401);
+  assert.deepEqual(await adminResponse.json(), { error: 'Authentication required.' });
+  assert.match(adminResponse.headers.get('set-cookie') || '', /admin_session=/);
+  assert.equal(platformResponse.status, 401);
+  assert.deepEqual(await platformResponse.json(), { error: 'Authentication required.' });
+  assert.match(platformResponse.headers.get('set-cookie') || '', /platform_session=/);
+});
+
+test('administrator login attempts are rate limited with Retry-After metadata', async () => {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(response.status, 400);
+  }
+
+  const response = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const retryAfter = Number(response.headers.get('retry-after'));
+  const body = await response.json();
+
+  assert.equal(response.status, 429);
+  assert.ok(retryAfter > 0);
+  assert.equal(body.retryAfterSeconds, retryAfter);
+  assert.match(body.error, /sign-in attempts/i);
+});
+
+test('platform login attempts are rate limited separately from session checks', async () => {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const response = await fetch(`${baseUrl}/api/platform/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(response.status, 400);
+  }
+
+  const response = await fetch(`${baseUrl}/api/platform/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+
+  assert.equal(response.status, 429);
+  assert.ok(Number(response.headers.get('retry-after')) > 0);
+});
+
+test('platform registration and password recovery have separate rate limits', async () => {
+  for (const [path, limit] of [['/api/platform/register', 5], ['/api/platform/password-recovery', 5]]) {
+    for (let attempt = 0; attempt < limit; attempt += 1) {
+      const response = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      assert.equal(response.status, 400, `${path} request ${attempt + 1}`);
+    }
+
+    const limited = await fetch(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(limited.status, 429, path);
+    assert.ok(Number(limited.headers.get('retry-after')) > 0, path);
+  }
+});
+
+test('logout clears both session cookies without requiring a session', async () => {
+  for (const [path, cookieName] of [
+    ['/api/auth/logout', 'admin_session'],
+    ['/api/platform/logout', 'platform_session'],
+  ]) {
+    const response = await fetch(`${baseUrl}${path}`, { method: 'POST' });
+    assert.equal(response.status, 204, path);
+    assert.match(response.headers.get('set-cookie') || '', new RegExp(`${cookieName}=`));
+  }
 });
 
 test('profile photo endpoints require the authenticated account for platform and administrator roles', async () => {

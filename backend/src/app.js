@@ -2,7 +2,6 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
-import { rateLimit } from 'express-rate-limit';
 import { createAuthRouter } from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import platformRoutes from './routes/platform.js';
@@ -30,6 +29,7 @@ export function createApp({
 } = {}) {
   const app = express();
   app.locals.database = database;
+  app.locals.passwordReset = { emailConfigured, emailSender, otpGenerator, otpHasher };
   const localOrigins = process.env.NODE_ENV === 'production'
     ? []
     : ['http://127.0.0.1:5173', 'http://localhost:5173'];
@@ -37,6 +37,7 @@ export function createApp({
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
+  if (process.env.CLIENT_URL?.trim()) configuredOrigins.push(process.env.CLIENT_URL.trim());
   const allowedOrigins = new Set([...localOrigins, ...configuredOrigins]);
   const isAllowedOrigin = (requestOrigin) => !requestOrigin || allowedOrigins.has(requestOrigin);
   app.locals.systemSettings = {
@@ -80,7 +81,7 @@ export function createApp({
         reasonCode: getDatabaseFailureCode(error),
       });
     }
-    res.json({ status: 'ok' });
+    res.json({ status: 'ok', db: 'connected' });
   }));
   app.get('/api/platform/availability', asyncHandler(async (req, res) => {
     const settings = await loadSystemSettings(database);
@@ -104,7 +105,7 @@ export function createApp({
   app.use('/api/contact', requirePlatformAvailable, contactRoutes);
   app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), vendorRoutes);
   app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer'), customerRoutes);
-  app.use('/api/auth', rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false }), createAuthRouter({
+  app.use('/api/auth', createAuthRouter({
     database,
     emailConfigured,
     emailSender,

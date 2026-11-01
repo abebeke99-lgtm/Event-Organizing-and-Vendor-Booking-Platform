@@ -54,6 +54,45 @@ export const ROLE_PERMISSION_MATRIX = Object.freeze({
   ],
 });
 
+export const ASSIGNABLE_PLATFORM_ROLES = Object.freeze(['organizer', 'vendor', 'customer']);
+
+export const CRITICAL_PERMISSION_KEYS = Object.freeze([
+  'admin:*',
+  'roles.manage',
+  'roles.permissions.manage',
+  'system.settings.manage',
+  'system.modules.manage',
+  'system.security.manage',
+  'users.manage',
+  'users.lock',
+  'payments.manage',
+  'payments.refund',
+  'payments.export',
+]);
+
+export function getRolePermissionPolicy(roleName) {
+  const normalizedRole = String(roleName ?? '').trim().toLowerCase();
+  return Object.hasOwn(ROLE_PERMISSION_MATRIX, normalizedRole)
+    ? ROLE_PERMISSION_MATRIX[normalizedRole]
+    : [];
+}
+
+export function isCriticalPermission(permissionKey) {
+  const normalized = String(permissionKey ?? '').trim();
+  return CRITICAL_PERMISSION_KEYS.includes(normalized)
+    || /^system\./i.test(normalized)
+    || /\.(?:export|refund)$/i.test(normalized);
+}
+
+export function describePermission(permissionKey) {
+  const normalized = String(permissionKey ?? '').trim();
+  const separator = normalized.indexOf('.');
+  if (separator < 1) {
+    return { module: normalized === 'admin:*' ? 'administrator' : normalized, action: normalized === 'admin:*' ? 'all' : 'manage' };
+  }
+  return { module: normalized.slice(0, separator), action: normalized.slice(separator + 1) };
+}
+
 export function normalizePermissionKeys(permissionKeys = []) {
   const entries = new Set();
 

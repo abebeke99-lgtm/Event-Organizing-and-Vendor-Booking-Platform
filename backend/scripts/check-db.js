@@ -1,7 +1,9 @@
 import 'dotenv/config';
 import { getDatabaseConfigurationErrors } from '../src/lib/databaseConfig.js';
 
-const missingVariables = getDatabaseConfigurationErrors(process.env, { requireTls: true })
+const requireTls = process.env.NODE_ENV === 'production';
+const tlsEnabled = process.env.DB_SSL === 'true';
+const missingVariables = getDatabaseConfigurationErrors(process.env, { requireTls })
   .map((error) => error.split(/[ (]/)[0].split('=')[0]);
 
 if (missingVariables.length) {
@@ -13,11 +15,11 @@ if (missingVariables.length) {
 }
 
 async function checkDatabase({ formatDatabaseError, getDatabaseFailureCode, pool }) {
-  let step = 'TLS-verified connection and SELECT 1';
+  let step = tlsEnabled ? 'TLS-verified connection and SELECT 1' : 'MySQL connection and SELECT 1';
   try {
     const [result] = await pool.query('SELECT 1 AS result');
     if (Number(result[0]?.result) !== 1) throw new Error('SELECT 1 returned an unexpected result.');
-    console.log('PASS TLS-verified MySQL connection');
+    console.log(tlsEnabled ? 'PASS TLS-verified MySQL connection' : 'PASS local MySQL connection');
     console.log('PASS SELECT 1');
     step = 'SELECT DATABASE()';
     const [rows] = await pool.query('SELECT DATABASE() AS database_name');

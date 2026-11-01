@@ -6,7 +6,8 @@ export async function requireAdmin(req, res, next) {
   const token = req.cookies?.admin_session;
   if (!token) return res.status(401).json({ error: 'Authentication required.' });
   try {
-    const [rows] = await pool.execute(
+    const database = req.app?.locals?.database || pool;
+    const [rows] = await database.execute(
       `SELECT u.id, u.full_name, u.email, u.phone, u.status, GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles
        FROM admin_sessions s JOIN users u ON u.id = s.user_id
        JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
@@ -14,7 +15,15 @@ export async function requireAdmin(req, res, next) {
        GROUP BY u.id, u.full_name, u.email, u.phone, u.status LIMIT 1`,
       [hashToken(token)]
     );
-    if (!rows.length) return res.status(403).json({ error: 'Administrator access required.' });
+    if (!rows.length) {
+      res.clearCookie('admin_session', {
+        httpOnly: true,
+        secure: process.env.COOKIE_SECURE === 'true',
+        sameSite: process.env.COOKIE_SAME_SITE || 'strict',
+        path: '/',
+      });
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
     req.admin = rows[0];
     req.user = { ...rows[0], permissions: [...ROLE_PERMISSION_MATRIX.admin], roles: (rows[0].roles || '').split(',').map((name) => name.trim()).filter(Boolean) };
     req.permissions = [...ROLE_PERMISSION_MATRIX.admin];
@@ -22,4 +31,12 @@ export async function requireAdmin(req, res, next) {
   } catch (error) {
     next(error);
   }
+}
+
+export function optionalAdmin(req, res, next) {
+  if (!req.cookies?.admin_session) {
+    req.admin = null;
+    return next();
+  }
+  return requireAdmin(req, res, next);
 }

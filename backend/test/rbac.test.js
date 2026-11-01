@@ -5,6 +5,8 @@ import {
   ROLE_PERMISSION_MATRIX,
   normalizePermissionKeys,
   hasPermission,
+  getRolePermissionPolicy,
+  isCriticalPermission,
   getSystemLockState,
   getModuleLockState,
 } from '../src/lib/rbac.js';
@@ -26,6 +28,17 @@ test('permission checks honor wildcard and nested permissions', () => {
 test('permission normalization removes duplicates and empty values', () => {
   const result = normalizePermissionKeys([' users.view ', 'users.view', '', 'bookings.create']);
   assert.deepEqual(result, ['users.view', 'bookings.create']);
+});
+
+test('unknown role names cannot resolve inherited object properties as permissions', () => {
+  assert.deepEqual(getRolePermissionPolicy('constructor'), []);
+  assert.deepEqual(getRolePermissionPolicy('__proto__'), []);
+});
+
+test('refund and export permissions are protected from platform-role assignment', () => {
+  assert.equal(isCriticalPermission('payments.refund'), true);
+  assert.equal(isCriticalPermission('bookings.export'), true);
+  assert.equal(isCriticalPermission('events.create'), false);
 });
 
 test('system lock and module lock helpers resolve the lock state', () => {

@@ -1,14 +1,20 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
+import apiClient from './api/axios.js';
 import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, Mail, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate } from './eventUtils.js';
 import { setLanguage, translate, translateText, useLanguage } from './language.js';
 import { setTheme, useTheme } from './theme.js';
 import { getDashboardDateRange } from './dashboardUtils.js';
+import { createAuthSessionLoader } from './authSession.js';
+import { withStableKeys } from './listKeys.js';
 import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { EventDetailsPage, MyEventBookingsPage, OrganizerEventsManager } from './EventsExperience.jsx';
+import AdminUserManagement from './AdminUserManagement.jsx';
+import AdminRoleManagement from './AdminRoleManagement.jsx';
+import AdminVendorVerification from './AdminVendorVerification.jsx';
 
 const DEMO_AUTH_ENABLED = import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTH === 'true';
 const menu = [
@@ -141,23 +147,6 @@ const toDemoUser = (profile) => {
     id: `demo-${profile.email}`,
   };
 };
-const configuredApiUrl = (import.meta.env.VITE_API_URL || '').trim();
-let apiBaseUrl = '';
-if (configuredApiUrl) {
-  try {
-    const parsedApiUrl = new URL(configuredApiUrl);
-    if (parsedApiUrl.pathname !== '/' || parsedApiUrl.search || parsedApiUrl.hash
-      || (import.meta.env.PROD && parsedApiUrl.protocol !== 'https:')) {
-      throw new Error('Expected an HTTPS API origin without a path, query, or fragment.');
-    }
-    apiBaseUrl = parsedApiUrl.origin;
-  } catch (error) {
-    console.error(`Invalid VITE_API_URL: ${error.message}`);
-  }
-} else if (import.meta.env.PROD) {
-  console.error('VITE_API_URL is missing. Configure it in Netlify with the Render API origin, without /api or a trailing slash, then redeploy.');
-}
-
 function navigateBrowserPath(path) {
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
@@ -276,16 +265,12 @@ async function api(path, options={}) {
     }
     return { data: [], pagination: { page: 1, total: 0, totalPages: 1, limit: 12 } };
   }
-  if (!apiBaseUrl && import.meta.env.PROD) {
-    throw new Error('API is not configured. Set VITE_API_URL in the deployment environment and redeploy.');
-  }
   try {
-    const response = await axios.request({
-      url: `${apiBaseUrl}/api${path}`,
+    const response = await apiClient.request({
+      url: path,
       method: options.method || 'GET',
       data: options.body,
       signal: options.signal,
-      withCredentials: true,
       responseType: options.responseType,
       headers: { ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) },
     });
@@ -295,22 +280,23 @@ async function api(path, options={}) {
     if (axios.isCancel(error)) {
       throw Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
     }
-    if (axios.isAxiosError(error) && error.response) {
-      let result = error.response.data;
-      if (result instanceof Blob) {
-        const text = await result.text();
-        try {
-          result = JSON.parse(text);
-        } catch {
-          result = null;
-        }
-      }
-      const message = result && typeof result === 'object' && (result.message || result.error);
-      throw Object.assign(new Error(message || `Request failed (${error.response.status}).`), { status: error.response.status });
-    }
     throw error;
   }
 }
+
+const authSessionLoader = createAuthSessionLoader({
+  getAdminSession: () => api('/auth/me'),
+  getPlatformSession: () => api('/platform/me'),
+});
+
+function useAuthSessionSnapshot() {
+  return useSyncExternalStore(
+    authSessionLoader.subscribe,
+    authSessionLoader.getSnapshot,
+    authSessionLoader.getSnapshot,
+  );
+}
+
 function display(value) {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'object') return JSON.stringify(value);
@@ -358,8 +344,42 @@ const ROUTE_LABELS = {
   '/help': 'Help Center',
 };
 
+function SessionStatusNotice({ sessionState }) {
+  const [retryReady, setRetryReady] = useState(() => !sessionState.retryAt || sessionState.retryAt <= Date.now());
+
+  useEffect(() => {
+    if (!sessionState.retryAt) {
+      setRetryReady(true);
+      return undefined;
+    }
+    const delay = sessionState.retryAt - Date.now();
+    if (delay <= 0) {
+      setRetryReady(true);
+      return undefined;
+    }
+    setRetryReady(false);
+    const timer = window.setTimeout(() => setRetryReady(true), delay);
+    return () => window.clearTimeout(timer);
+  }, [sessionState.retryAt]);
+
+  return <div className={`auth-session-notice alert ${sessionState.status === 'rate-limited' ? 'warning' : 'error'}`} role="alert">
+    <span>{sessionState.message}</span>
+    <button className="text-link" type="button" disabled={!retryReady} onClick={() => { void authSessionLoader.load({ force: true }); }}>Retry session check</button>
+  </div>;
+}
+
+function SessionRecoveryPage({ sessionState }) {
+  return <main className="login-wrap"><section className="login-card">
+    <h1>Session verification unavailable</h1>
+    <p className="muted">We could not verify your account. Your public browsing remains available; retry before opening a protected workspace.</p>
+    <SessionStatusNotice sessionState={sessionState}/>
+    <a className="auth-home-link" href="/">Back to Home</a>
+  </section></main>;
+}
+
 function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpenRegister }) {
   const language = useLanguage();
+  const authSessionState = useAuthSessionSnapshot();
   const platformName = document.documentElement.dataset.platformName || 'EventHub';
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -423,7 +443,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
     };
   }, []);
 
-  return <header className="site-header"><div className="site-header-inner">
+  return <><header className="site-header"><div className="site-header-inner">
     <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}><span className="brand-mark small">EH</span><div><strong>{platformName}</strong><small>{translate('platform', language)}</small></div></a>
     <button type="button" className="mobile-nav-toggle" aria-label={translate(mobileMenuOpen ? 'closeMenu' : 'openMenu', language)} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X size={20}/> : <Menu size={20}/>}</button>
     <nav className={`site-nav ${mobileMenuOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}>{PUBLIC_NAV_ITEMS.map((item) => <a key={item.path} href={item.path} className={`nav-link ${routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'active' : ''}`} aria-current={routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'page' : undefined} onClick={(event) => { event.preventDefault(); setMobileMenuOpen(false); onNavigate(item.path); }}>{translateText(item.label, language)}</a>)}</nav>
@@ -448,7 +468,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
       <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
       <div className="public-account-menu"><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
     </details> : <div className="public-auth-actions"><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></div>}</div>
-  </div></header>;
+  </div></header>{['error', 'rate-limited'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
 }
 
 function LanguageSelector() {
@@ -943,6 +963,8 @@ function SearchResultsPage({ initialQuery, onNavigate }) {
 function VendorApplicationPage({ user, onNavigate }) {
   const [application, setApplication] = useState(null);
   const [categories, setCategories] = useState([]);
+  const [documents, setDocuments] = useState([]);
+  const [selectedDocuments, setSelectedDocuments] = useState([]);
   const [form, setForm] = useState({ businessName: '', categoryId: '', city: '', description: '' });
   const [loading, setLoading] = useState(Boolean(user));
   const [busy, setBusy] = useState(false);
@@ -956,7 +978,7 @@ function VendorApplicationPage({ user, onNavigate }) {
       return undefined;
     }
     let active = true;
-    Promise.allSettled([api('/platform/vendor-application'), api('/platform/categories')]).then(([applicationResult, categoryResult]) => {
+    Promise.allSettled([api('/platform/vendor-application'), api('/platform/categories'), api('/platform/vendor-application/documents')]).then(([applicationResult, categoryResult, documentResult]) => {
       if (!active) return;
       if (applicationResult.status === 'rejected') {
         setError(applicationResult.reason?.message || 'Unable to load vendor application details.');
@@ -967,6 +989,7 @@ function VendorApplicationPage({ user, onNavigate }) {
       const current = applicationResponse?.data && !Array.isArray(applicationResponse.data) ? applicationResponse.data : null;
       setApplication(current);
       setCategories(Array.isArray(categoryResponse?.data) ? categoryResponse.data : []);
+      if (documentResult.status === 'fulfilled') setDocuments(Array.isArray(documentResult.value?.data) ? documentResult.value.data : []);
       if (categoryResult.status === 'rejected') setCategoryError(categoryResult.reason?.message || 'Service categories are unavailable.');
       if (current) {
         setForm({
@@ -1001,12 +1024,61 @@ function VendorApplicationPage({ user, onNavigate }) {
       if (response?.data?.verificationStatus === 'pending') {
         setApplication({ ...response.data, business_name: form.businessName.trim() });
       }
+      for (const file of selectedDocuments) {
+        await api(`/platform/vendor-application/documents?filename=${encodeURIComponent(file.name)}`, {
+          method: 'POST',
+          body: file,
+          headers: { 'Content-Type': file.type },
+        });
+      }
+      if (selectedDocuments.length) {
+        const documentResponse = await api('/platform/vendor-application/documents');
+        setDocuments(documentResponse.data || []);
+        setSelectedDocuments([]);
+      }
       setNotice(response?.message || 'Your application was submitted for review.');
     } catch (issue) {
       setError(issue.message || 'Unable to submit your vendor application.');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function uploadApplicationDocuments(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      for (const file of selectedDocuments) {
+        await api(`/platform/vendor-application/documents?filename=${encodeURIComponent(file.name)}`, {
+          method: 'POST',
+          body: file,
+          headers: { 'Content-Type': file.type },
+        });
+      }
+      const response = await api('/platform/vendor-application/documents');
+      setDocuments(response.data || []);
+      setSelectedDocuments([]);
+      setNotice('Verification documents uploaded securely.');
+    } catch (issue) {
+      setError(issue.message || 'Unable to upload verification documents.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function chooseVerificationDocuments(event) {
+    const files = Array.from(event.target.files || []);
+    const invalid = files.find((file) => !['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024);
+    if (invalid) {
+      setError('Upload PDF, JPEG, or PNG files that are no larger than 5 MB each.');
+      setSelectedDocuments([]);
+      event.target.value = '';
+      return;
+    }
+    setError('');
+    setSelectedDocuments(files);
   }
 
   if (!user) return <main className="page-shell"><div className="content-stack"><div className="empty panel"><strong>Sign in to apply as a vendor</strong><span>Vendor applications are linked to your EventFlow account and reviewed before approval.</span><button className="button" type="button" onClick={() => { sessionStorage.setItem('eventhub_after_login', '/vendor-application'); onNavigate('/login'); }}>Sign in</button><button className="button secondary" type="button" onClick={() => onNavigate('/register?role=vendor')}>Create a vendor account</button></div></div></main>;
@@ -1020,14 +1092,17 @@ function VendorApplicationPage({ user, onNavigate }) {
     {categoryError && <div className="alert warning" role="status">{categoryError} You may submit without selecting a category.</div>}
     {notice && <div className="alert success" role="status">{notice}</div>}
     {loading ? <div className="loading" role="status"><span className="spinner"/>Loading application status…</div>
-      : application?.verification_status === 'pending' ? <section className="panel vendor-application-status"><span className="pill pending">Pending review</span><h2>{application.business_name}</h2><p>Your application is already with our review team. You can’t submit another application while this one is pending.</p>{application.category_name && <p>Category: {application.category_name}</p>}</section>
+      : ['pending', 'under_review'].includes(application?.verification_status) ? <section className="panel vendor-application-status"><span className="pill pending">{application.verification_status === 'pending' ? 'Pending review' : 'Under review'}</span><h2>{application.business_name}</h2><p>Your application is with our review team. You may submit supporting documents while it is being reviewed.</p>{application.category_name && <p>Category: {application.category_name}</p>}<form onSubmit={uploadApplicationDocuments}><label className="field"><span>Verification documents (PDF, JPEG, PNG; up to 5 MB each)</span><input type="file" accept="application/pdf,image/jpeg,image/png" multiple onChange={chooseVerificationDocuments}/></label>{selectedDocuments.length > 0 && <p>{selectedDocuments.length} document(s) selected.</p>}<button type="submit" className="button secondary" disabled={busy || !selectedDocuments.length}>{busy ? 'Uploading…' : 'Upload documents'}</button></form>{documents.length > 0 && <div className="list-stack">{documents.map((document) => <div key={document.id} className="list-card"><strong>{document.original_name}</strong><small>{document.content_type} · {Math.ceil(document.file_size / 1024)} KB</small></div>)}</div>}</section>
         : application?.verification_status === 'verified' ? <section className="panel vendor-application-status"><span className="pill verified">Approved</span><h2>{application.business_name}</h2><p>Your vendor profile has been approved. Vendor permissions are not granted automatically; contact an administrator if your account role has not been updated.</p></section>
           : <form className="panel vendor-application-form" onSubmit={submitApplication}>
             {application?.verification_status === 'rejected' && <p className="alert error">Previous application was not approved: {application.verification_reason || 'No reason was provided.'} You may update the details and resubmit.</p>}
+            {application?.verification_status === 'information_requested' && <p className="alert warning">Additional information was requested: {application.verification_reason || 'Review the requested information and update your application.'}</p>}
             <label className="field"><span>Business name</span><input name="businessName" minLength="2" maxLength="160" required value={form.businessName} onChange={(event) => setForm((current) => ({ ...current, businessName: event.target.value }))}/></label>
             <label className="field"><span>Service category</span><select name="categoryId" value={form.categoryId} onChange={(event) => setForm((current) => ({ ...current, categoryId: event.target.value }))}><option value="">Select a category (optional)</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
             <label className="field"><span>City or service area</span><input name="city" maxLength="120" value={form.city} onChange={(event) => setForm((current) => ({ ...current, city: event.target.value }))}/></label>
             <label className="field"><span>Business description</span><textarea name="description" rows="4" maxLength="1500" value={form.description} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}/></label>
+            <label className="field"><span>Verification documents (PDF, JPEG, PNG; up to 5 MB each)</span><input type="file" accept="application/pdf,image/jpeg,image/png" multiple onChange={chooseVerificationDocuments}/></label>
+            {selectedDocuments.length > 0 && <p>{selectedDocuments.length} document(s) selected.</p>}
             <button type="submit" className="button" disabled={busy || loading}>{busy ? 'Submitting…' : application?.verification_status === 'rejected' ? 'Resubmit application' : 'Submit application'}</button>
           </form>}
   </div></main>;
@@ -1790,6 +1865,17 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
   if (loading) return <main className="page-shell"><div className="loading" role="status"><span className="spinner"/>{t('loadingServices')}</div></main>;
   if (error || !service) return <main className="page-shell"><div className="empty panel"><strong>Service unavailable</strong><span>{error || 'This service is no longer available.'}</span><button className="button secondary" type="button" onClick={() => onNavigate('/services')}>Back to Services</button></div></main>;
 
+  const availabilityItems = withStableKeys(
+    (Array.isArray(service.availability) ? service.availability : []).filter((entry) => entry?.date != null),
+    (entry) => String(entry.date),
+  );
+  const reviewItems = withStableKeys(service.reviews || [], (review) => review.id ?? JSON.stringify([
+    review.createdAt ?? null,
+    review.customerName ?? null,
+    review.rating ?? null,
+    review.comment ?? '',
+  ]));
+
   return <main className="page-shell"><div className="content-stack">
     <button className="text-action" type="button" onClick={() => onNavigate('/services')}>← Back to Services</button>
     <section className="info-card wide"><p className="eyebrow">{service.category}</p><h1>{service.title}</h1><p>{service.description}</p><div className="detail-meta-grid">
@@ -1801,9 +1887,9 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
     <section className="panel"><div className="panel-header"><h2>Other services from this provider</h2></div>
       {service.packages?.filter((item) => item.id !== service.id).length ? <div className="card-grid">{service.packages.filter((item) => item.id !== service.id).map((item) => <article className="info-card" key={item.id}><h3>{item.title}</h3><p>{item.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{item.price ? `${item.currency} ${Number(item.price).toLocaleString()}` : t('priceOnRequest')}</strong><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${item.id}`)}>View Details</button></div></article>)}</div> : <p>No other published services are listed for this provider.</p>}
     </section>
-    {service.availability?.length > 0 && <section className="panel"><div className="panel-header"><h2>Availability</h2></div><div className="list-stack">{service.availability.map((entry) => <div className="list-card" key={String(entry.date)}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
+    {availabilityItems.length > 0 && <section className="panel"><div className="panel-header"><h2>Availability</h2></div><div className="list-stack">{availabilityItems.map(({ item: entry, key }) => <div className="list-card" key={key}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
     <section className="panel"><div className="panel-header"><h2>Customer reviews</h2></div>
-      {service.reviews?.length ? <div className="list-stack">{service.reviews.map((review, index) => <article className="list-card" key={`${review.createdAt}-${index}`}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div> : <p>No published reviews are available for this service yet.</p>}
+      {reviewItems.length ? <div className="list-stack">{reviewItems.map(({ item: review, key }) => <article className="list-card" key={key}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div> : <p>No published reviews are available for this service yet.</p>}
     </section>
   </div>{requestOpen && <QuoteRequestModal service={service} user={user} onNavigate={onNavigate} onClose={() => setRequestOpen(false)}/>}</main>;
 }
@@ -1841,6 +1927,17 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
     return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">{t('profileUnavailable')}</p><h2>{t('vendorNotFound')}</h2><p>{error ? translateText(error, language) : t('vendorUnavailable')}</p><button className="button" type="button" onClick={() => onNavigate('/vendors')}>{t('browseAllVendors')}</button></div></div></main>;
   }
 
+  const reviewItems = withStableKeys(vendor.reviews || [], (review) => review.id ?? JSON.stringify([
+    review.createdAt ?? null,
+    review.customerName ?? null,
+    review.rating ?? null,
+    review.comment ?? '',
+  ]));
+  const availabilityItems = withStableKeys(
+    (Array.isArray(vendor.availability) ? vendor.availability : []).filter((entry) => entry?.date != null),
+    (entry) => String(entry.date),
+  );
+
   return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorProfile')}</p><h2>{vendor.business_name || vendor.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>{t('browseAllVendors')}</button></div>
     <article className="info-card wide">
       <div className="profile-panel">
@@ -1863,8 +1960,8 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
       <div className="section-header compact-header"><div><p className="eyebrow">{t('publishedServices')}</p><h2>{t('availableServicePackages')}</h2></div></div>
       {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong><button className="button secondary small" type="button" onClick={() => setRequestService(service)}>Request Quote</button></div></article>)}</div> : <div className="empty-card">{t('noPublishedServices')}</div>}
     </section>
-    {vendor.reviews?.length > 0 && <section className="panel"><div className="panel-header"><h3>Customer reviews</h3></div><div className="list-stack">{vendor.reviews.map((review, index) => <article className="list-card" key={`${review.createdAt}-${index}`}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div></section>}
-    {Array.isArray(vendor.availability) && vendor.availability.length > 0 && <section className="panel"><div className="panel-header"><h3>Availability</h3></div><div className="list-stack">{vendor.availability.map((entry) => <div className="list-card" key={entry.date}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
+    {reviewItems.length > 0 && <section className="panel"><div className="panel-header"><h3>Customer reviews</h3></div><div className="list-stack">{reviewItems.map(({ item: review, key }) => <article className="list-card" key={key}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div></section>}
+    {availabilityItems.length > 0 && <section className="panel"><div className="panel-header"><h3>Availability</h3></div><div className="list-stack">{availabilityItems.map(({ item: entry, key }) => <div className="list-card" key={key}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
   </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
 }
 
@@ -2477,7 +2574,7 @@ function ContactPage() {
                 </div>
                 {contactInfo.socials.length > 0 && <div className="contact-socials">
                   <h3>{t('followUs')}</h3>
-                  <div>{contactInfo.socials.map((entry, index) => <a tabIndex={contactDetailsOpen ? 0 : -1} key={`${entry.url}-${index}`} href={entry.url} target="_blank" rel="noopener noreferrer"><Share2 size={15} aria-hidden="true" />{entry.label}<ExternalLink size={13} aria-hidden="true" /></a>)}</div>
+                  <div>{withStableKeys(contactInfo.socials, (entry) => entry.url).map(({ item: entry, key }) => <a tabIndex={contactDetailsOpen ? 0 : -1} key={key} href={entry.url} target="_blank" rel="noopener noreferrer"><Share2 size={15} aria-hidden="true" />{entry.label}<ExternalLink size={13} aria-hidden="true" /></a>)}</div>
                 </div>}
               </> : <p className="contact-info-empty">{t('contactInfoUnavailable')}</p>}
             </div>
@@ -2869,6 +2966,36 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [documentBusy, setDocumentBusy] = useState(false);
+
+  async function uploadVendorVerificationDocuments(event) {
+    const files = Array.from(event.target.files || []);
+    const invalid = files.find((file) => !['application/pdf', 'image/jpeg', 'image/png'].includes(file.type) || file.size > 5 * 1024 * 1024);
+    if (invalid) {
+      setError('Upload PDF, JPEG, or PNG files that are no larger than 5 MB each.');
+      event.target.value = '';
+      return;
+    }
+    if (!files.length) return;
+    setDocumentBusy(true);
+    setError('');
+    try {
+      for (const file of files) {
+        await api(`/vendor/verification/documents?filename=${encodeURIComponent(file.name)}`, {
+          method: 'POST',
+          body: file,
+          headers: { 'Content-Type': file.type },
+        });
+      }
+      const response = await api('/vendor/verification');
+      setData((current) => ({ ...current, verification: response.data }));
+      event.target.value = '';
+    } catch (issue) {
+      setError(issue.message || 'Unable to upload verification documents.');
+    } finally {
+      setDocumentBusy(false);
+    }
+  }
 
   useEffect(() => {
     async function load() {
@@ -2898,7 +3025,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
       case 'profile':
         return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BUSINESS PROFILE</p><h2>Business information</h2><p className="muted">Manage your public-facing vendor identity and service coverage.</p></div><button className="button secondary">Preview public profile</button></div><div className="panel profile-panel"><div className="profile-avatar">{data.profile?.businessName?.slice(0,1) || 'G'}</div><div><h3>{data.profile?.businessName}</h3><p className="muted">{data.profile?.businessType}</p><p>{data.profile?.serviceLocation}</p></div></div><div className="panel" style={{padding:'20px'}}><div className="field"><span>Business name</span><input value={data.profile?.businessName || ''} readOnly /></div><div className="field"><span>Business description</span><textarea rows="4" value={data.profile?.description || ''} readOnly /></div><div className="field"><span>Website</span><input value={data.profile?.website || ''} readOnly /></div></div></div>;
       case 'verification':
-        return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">VENDOR VERIFICATION</p><h2>Verification status</h2><p className="muted">Track your verification application, documents, and any review updates.</p></div></div><div className="metric-grid"><article className="metric-card"><p>Status</p><strong>{data.verification?.status || 'Pending'}</strong><span>{data.verification?.reviewProgress || 'Under review'}</span></article><article className="metric-card"><p>Submitted</p><strong>{data.verification?.submittedAt ? new Date(data.verification.submittedAt).toLocaleDateString() : '—'}</strong><span>Application date</span></article></div><div className="panel" style={{padding:'20px'}}><h3>Verification documents</h3><div className="list-stack">{(data.verification?.documents || []).map((doc) => <div key={doc.name} className="list-card"><div><strong>{doc.name}</strong><small>Private document</small></div><span className="pill active">{doc.status}</span></div>)}</div></div></div>;
+        return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">VENDOR VERIFICATION</p><h2>Verification status</h2><p className="muted">Track your vendor application, submitted documents, and review updates.</p></div></div><div className="metric-grid"><article className="metric-card"><p>Status</p><strong>{data.verification?.status || 'Pending'}</strong><span>{data.verification?.reasons?.[0] || data.verification?.reviewProgress || 'Under review'}</span></article><article className="metric-card"><p>Submitted</p><strong>{data.verification?.submittedAt ? new Date(data.verification.submittedAt).toLocaleDateString() : '—'}</strong><span>Application date</span></article></div><div className="panel" style={{padding:'20px'}}><h3>Verification documents</h3>{['pending','under_review','information_requested'].includes(data.verification?.status) && <label className="field"><span>{documentBusy ? 'Uploading…' : 'Add documents (PDF, JPEG, or PNG; up to 5 MB each)'}</span><input type="file" accept="application/pdf,image/jpeg,image/png" multiple disabled={documentBusy} onChange={uploadVendorVerificationDocuments}/></label>}<div className="list-stack">{(data.verification?.documents || []).map((doc) => <div key={doc.id} className="list-card"><div><strong>{doc.original_name}</strong><small>{doc.content_type} · {Math.ceil(doc.file_size / 1024)} KB · Private document</small></div><span className="pill active">Submitted</span></div>)}</div>{(data.verification?.history || []).length > 0 && <><h3>Verification history</h3><div className="list-stack">{data.verification.history.map((entry, index) => <div key={`${entry.created_at}-${index}`} className="list-card"><div><strong>{entry.from_status ? `${entry.from_status.replaceAll('_', ' ')} → ` : ''}{entry.to_status.replaceAll('_', ' ')}</strong><small>{entry.reason} · {new Date(entry.created_at).toLocaleString()}</small></div></div>)}</div></>}</div></div>;
       case 'services':
         return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">MY SERVICES</p><h2>Service portfolio</h2><p className="muted">Search, filter, view, and manage all services owned by your business.</p></div><button className="button">+ Add service</button></div><div className="table-wrap"><table><thead><tr><th>Name</th><th>Category</th><th>Status</th><th>Price</th><th>Bookings</th></tr></thead><tbody>{(data.services || []).map((service) => <tr key={service.id}><td>{service.name}</td><td>{service.category}</td><td><span className="pill active">{service.status}</span></td><td>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits:0 }).format(service.price)}</td><td>{service.bookings}</td></tr>)}</tbody></table></div></div>;
       case 'add-edit-services':
@@ -3972,6 +4099,7 @@ function MaintenancePage({ platformName, message, onAdminSignIn }) {
 
 export default function App(){
   const language = useLanguage();
+  const authSessionState = useAuthSessionSnapshot();
   const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [sidebarCollapsed,setSidebarCollapsed]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => window.location.pathname || '/');const [platformAvailability,setPlatformAvailability]=useState(null);
   const [passwordResetEmail, setPasswordResetEmail] = useState('');
 
@@ -4047,7 +4175,6 @@ export default function App(){
   }, [normalizePath]);
 
   useEffect(()=>{
-    const controller=new AbortController();
     resolve();
     const listener=()=>resolve();
     window.addEventListener('popstate',listener);
@@ -4057,28 +4184,60 @@ export default function App(){
         if (demoProfile) {
           setUser(toDemoUser(demoProfile));
           setPortal(demoProfile.role);
+          authSessionLoader.setAuthenticated(toDemoUser(demoProfile), demoProfile.role);
+        } else {
+          authSessionLoader.setUnauthenticated();
         }
       } catch (issue) {
         setGlobalError(issue.message);
+        authSessionLoader.setUnauthenticated();
       } finally {
         setChecking(false);
       }
     } else {
-      api('/auth/me',{signal:controller.signal}).then((r)=>{setUser(r.user);setPortal('admin');}).catch((issue)=>{if(issue.name==='AbortError')return;return api('/platform/me',{signal:controller.signal}).then((r)=>{const profile=r?.data?.user||null;setUser(profile);if(profile?.role)setPortal(profile.role);}).catch((platformIssue)=>{if(platformIssue.name!=='AbortError')setUser(null);});}).finally(()=>{if(!controller.signal.aborted)setChecking(false);});
+      void authSessionLoader.load();
     }
-    return()=>{controller.abort();window.removeEventListener('popstate',listener);};
+    return()=>window.removeEventListener('popstate',listener);
   },[resolve]);
+
+  useEffect(() => {
+    if (DEMO_AUTH_ENABLED || authSessionState.status === 'loading') return;
+    setChecking(false);
+    if (authSessionState.status === 'authenticated') {
+      setUser(authSessionState.user);
+      setPortal(authSessionState.role);
+      setGlobalError('');
+    } else if (authSessionState.status === 'unauthenticated') {
+      setUser(null);
+      setPortal('admin');
+    } else {
+      setUser(null);
+      setPortal('admin');
+    }
+  }, [authSessionState]);
+
+  useEffect(() => {
+    function handleAuthInvalidated() {
+      authSessionLoader.setUnauthenticated();
+      setUser(null);
+      setPortal('admin');
+    }
+    window.addEventListener('eventhub:auth-invalidated', handleAuthInvalidated);
+    return () => window.removeEventListener('eventhub:auth-invalidated', handleAuthInvalidated);
+  }, []);
 
   async function login(email,password){
     if (DEMO_AUTH_ENABLED) {
       const credential = findDemoLogin(email, password);
       if (!credential) throw new Error('Demo sign-in failed. Choose one of the predefined demo accounts and enter its mock password.');
       const profile = saveDemoSession(credential);
+      authSessionLoader.setAuthenticated(toDemoUser(profile), profile.role);
       setUser(toDemoUser(profile));setPortal(profile.role);setGlobalError('');setShowLogin(false);
       navigatePublic(dashboardPathForRole(profile.role));
       return;
     }
     const adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
+    authSessionLoader.setAuthenticated(adminResponse.user, 'admin');
     setUser(adminResponse.user);setPortal('admin');setGlobalError('');setShowLogin(false);navigatePublic('/admin');
   }
   async function loginPublic(email,password){
@@ -4092,25 +4251,33 @@ export default function App(){
       }
       return;
     }
+    let adminResponse;
     try {
-      const adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
-      setUser(adminResponse.user);setPortal('admin');setGlobalError('');setShowLogin(false);navigatePublic('/admin');
-      return;
-    } catch (adminError) {
-      const platformResponse = await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});
-      const role = platformResponse?.data?.user?.role || 'customer';
-      setUser(platformResponse.data.user);setPortal(role);setGlobalError('');setShowLogin(false);
-      const rolePath = role === 'admin' ? '/admin' : role === 'organizer' ? '/organizer/dashboard' : role === 'vendor' ? '/vendor/dashboard' : '/customer/dashboard';
-      const continuation = sessionStorage.getItem('eventhub_after_login');
-      const canContinue = continuation && (
-        role === 'customer' && (/^\/events\/\d+$/.test(continuation) || continuation === '/my-bookings' || continuation === '/vendor-application')
-        || role === 'organizer' && continuation === '/vendor-application'
-      );
-      if (canContinue) sessionStorage.removeItem('eventhub_after_login');
-      navigatePublic(canContinue ? continuation : rolePath);
+      adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
+    } catch (error) {
+      if (error.status !== 401) throw error;
     }
+    if (adminResponse?.user) {
+      authSessionLoader.setAuthenticated(adminResponse.user, 'admin');
+      setUser(adminResponse.user);setPortal('admin');setGlobalError('');setShowLogin(false);
+      navigatePublic('/admin');
+      return;
+    }
+    const platformResponse = await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});
+    const role = platformResponse?.data?.user?.role || 'customer';
+    authSessionLoader.setAuthenticated(platformResponse.data.user, role);
+    setUser(platformResponse.data.user);setPortal(role);setGlobalError('');setShowLogin(false);
+    const rolePath = role === 'admin' ? '/admin' : role === 'organizer' ? '/organizer/dashboard' : role === 'vendor' ? '/vendor/dashboard' : '/customer/dashboard';
+    const continuation = sessionStorage.getItem('eventhub_after_login');
+    const canContinue = continuation && (
+      role === 'customer' && (/^\/events\/\d+$/.test(continuation) || continuation === '/my-bookings' || continuation === '/vendor-application')
+      || role === 'organizer' && continuation === '/vendor-application'
+    );
+    if (canContinue) sessionStorage.removeItem('eventhub_after_login');
+    navigatePublic(canContinue ? continuation : rolePath);
   }
   function completeDemoRegistration(profile, dashboardPath) {
+    authSessionLoader.setAuthenticated(toDemoUser(profile), profile.role);
     setUser(toDemoUser(profile));setPortal(profile.role);setGlobalError('');setShowLogin(false);
     navigatePublic(dashboardPath);
   }
@@ -4133,9 +4300,9 @@ export default function App(){
   async function verifyPasswordResetOtp(email,otp){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/verify-reset-otp',{method:'POST',body:JSON.stringify({email,otp})}); }
   async function resetPassword(newPassword){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/reset-password',{method:'POST',body:JSON.stringify({newPassword})}); }
   async function verifyEmail(token){ const response = await api('/platform/verify-email',{method:'POST',body:JSON.stringify({token})}); return response; }
-  async function loginCustomer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'customer') throw new Error('Customer access is required.');setUser(r.data.user);setPortal('customer');setGlobalError('');setShowLogin(false);navigatePublic('/customer/dashboard');}
-  async function loginOrganizer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'organizer') throw new Error('Organizer access is required.');setUser(r.data.user);setPortal('organizer');setGlobalError('');setShowLogin(false);navigatePublic('/organizer/dashboard');}
-  async function loginVendor(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'vendor') throw new Error('Vendor access is required.');setUser(r.data.user);setPortal('vendor');setGlobalError('');setShowLogin(false);navigatePublic('/vendor/dashboard');}
+  async function loginCustomer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'customer') throw new Error('Customer access is required.');authSessionLoader.setAuthenticated(r.data.user, 'customer');setUser(r.data.user);setPortal('customer');setGlobalError('');setShowLogin(false);navigatePublic('/customer/dashboard');}
+  async function loginOrganizer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'organizer') throw new Error('Organizer access is required.');authSessionLoader.setAuthenticated(r.data.user, 'organizer');setUser(r.data.user);setPortal('organizer');setGlobalError('');setShowLogin(false);navigatePublic('/organizer/dashboard');}
+  async function loginVendor(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'vendor') throw new Error('Vendor access is required.');authSessionLoader.setAuthenticated(r.data.user, 'vendor');setUser(r.data.user);setPortal('vendor');setGlobalError('');setShowLogin(false);navigatePublic('/vendor/dashboard');}
   function navigate(next){history.pushState({},'',slugPath(next));setSlug(next);setSidebarOpen(false);setGlobalError('');}
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
@@ -4146,6 +4313,7 @@ export default function App(){
     } catch (issue) {
       setGlobalError(issue.message);
     } finally {
+      authSessionLoader.setUnauthenticated();
       setUser(null);setShowLogin(false);setPortal('admin');navigatePublic('/login');
     }
   }
@@ -4172,7 +4340,12 @@ export default function App(){
   const eventRoute = routePath.match(/^\/events\/(\d+)$/);
   const serviceRoute = routePath.match(/^\/services\/(\d+)$/);
   const vendorRoute = routePath.match(/^\/vendors\/(\d+)$/);
-  if(checking)return <div className="loading full-screen"><span className="spinner"/>Verifying administrator session…</div>;
+  const roleDashboardRoute = /^\/(customer|organizer|vendor)\/dashboard(?:\/|$)/.test(routePath);
+  const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || roleDashboardRoute;
+  if (checking && requiresSession) return <div className="loading full-screen"><span className="spinner"/>Checking your session…</div>;
+  if (requiresSession && !user && ['error', 'rate-limited'].includes(authSessionState.status)) {
+    return <SessionRecoveryPage sessionState={authSessionState}/>;
+  }
   if (platformAvailability?.maintenanceMode && !(user && portal === 'admin') && routePath !== '/login' && !routePath.startsWith('/admin')) {
     return <MaintenancePage platformName={platformAvailability.platformName} message={platformAvailability.maintenanceMessage} onAdminSignIn={() => navigatePublic('/login')} />;
   }
@@ -4204,6 +4377,7 @@ export default function App(){
   }
   if(!user){
     if (currentPath.startsWith('/admin')) return DEMO_AUTH_ENABLED ? <LoginPage onLogin={login} demoMode /> : <Login onLogin={login}/>;
+    if (roleDashboardRoute) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
     if (routePath === '/login') return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
     if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onDemoRegistrationComplete={completeDemoRegistration} demoMode={DEMO_AUTH_ENABLED} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} defaultRegistrationRole={platformAvailability?.defaultRegistrationRole ?? 'customer'}/>;
     if (DEMO_AUTH_ENABLED && /^\/(customer|organizer|vendor)\/dashboard$/.test(currentPath)) return <LoginPage onLogin={loginPublic} demoMode />;
@@ -4221,5 +4395,5 @@ export default function App(){
   if (portal === 'customer') return <><DemoModeBanner user={user}/><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
   if (portal === 'organizer') return <><DemoModeBanner user={user}/><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
   if (portal === 'vendor') return <><DemoModeBanner user={user}/><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  return <><DemoModeBanner user={user}/><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
+  return <><DemoModeBanner user={user}/><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
 }

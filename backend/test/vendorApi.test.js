@@ -33,13 +33,15 @@ function createDatabase() {
     status: user.status,
   };
   const services = [];
+  const verificationDocuments = [];
   const statements = [];
+  let permissionKeys = ['services.manage_own', 'bookings.view_own'];
   let nextServiceId = 1;
 
   async function execute(sql, values = []) {
     statements.push({ sql, values });
     if (sql.includes('FROM user_sessions s')) {
-      return [values[0] === hashToken(sessionToken) ? [{ ...user }] : [], []];
+      return [values[0] === hashToken(sessionToken) ? [{ ...user, permission_keys: permissionKeys.join(',') }] : [], []];
     }
     if (sql.includes('FROM vendor_profiles vp') && sql.includes('WHERE vp.user_id = ?')) {
       return [Number(values[0]) === vendor.user_id ? [{ ...vendor }] : [], []];
@@ -62,6 +64,22 @@ function createDatabase() {
       const service = services.find((row) => row.id === Number(values[0]) && row.vendor_id === Number(values[1]));
       return [service ? [{ id: service.id, status: service.status }] : [], []];
     }
+    if (sql.startsWith('SELECT COUNT(*) AS total FROM vendor_verification_documents')) {
+      return [[{ total: verificationDocuments.length }], []];
+    }
+    if (sql.startsWith('SELECT id, original_name, content_type, file_size, created_at FROM vendor_verification_documents')) {
+      return [verificationDocuments.map(({ content, ...document }) => ({ ...document })), []];
+    }
+    if (sql.startsWith('SELECT from_status, to_status, reason, created_at FROM vendor_verification_history')) {
+      return [[], []];
+    }
+    if (sql.startsWith('INSERT INTO vendor_verification_documents')) {
+      const [vendorId, uploadedBy, originalName, contentType, fileSize, content] = values;
+      const document = { id: verificationDocuments.length + 1, vendor_id: vendorId, uploaded_by: uploadedBy, original_name: originalName, content_type: contentType, file_size: fileSize, content, created_at: new Date().toISOString() };
+      verificationDocuments.push(document);
+      return [{ insertId: document.id, affectedRows: 1 }, []];
+    }
+    if (sql.startsWith('INSERT INTO audit_logs')) return [{ insertId: 1, affectedRows: 1 }, []];
     if (sql === "UPDATE services SET status = 'archived' WHERE id = ? AND vendor_id = ?") {
       const service = services.find((row) => row.id === Number(values[0]) && row.vendor_id === Number(values[1]));
       if (!service) return [{ affectedRows: 0 }, []];
@@ -98,9 +116,11 @@ function createDatabase() {
   return {
     vendor,
     services,
+    verificationDocuments,
     statements,
     execute,
     query: execute,
+    setPermissionKeys(keys) { permissionKeys = keys; },
     async getConnection() {
       return {
         execute,
@@ -203,7 +223,7 @@ test('unverified vendors cannot publish services and invalid service data is rej
     body: { title: 'Unverified service', status: 'active' },
   });
   database.vendor.verification_status = 'verified';
-  assert.equal(publish.status, 409);
+  assert.equal(publish.status, 403);
   assert.equal(database.services.length, serviceCountBefore);
 
   const badCategory = await request('/api/vendor/services', {
@@ -248,4 +268,48 @@ test('vendor service deletion archives the owned record and rejects another vend
   const foreignResponse = await request('/api/vendor/services/500', { method: 'DELETE' });
   assert.equal(foreignResponse.status, 404);
   assert.equal(database.services.find((service) => service.id === 500).status, 'active');
+});
+
+test('revoking a role permission blocks the protected vendor operation on the next request', async () => {
+  database.setPermissionKeys(['bookings.view_own']);
+  const response = await request('/api/vendor/services');
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), {
+    error: 'Access denied. The required permission is not assigned to this account.',
+  });
+
+  test('unverified vendors cannot mutate services, but can securely upload verification documents', async () => {
+    database.vendor.verification_status = 'suspended';
+    const blocked = await request('/api/vendor/services', {
+      method: 'POST',
+      body: { title: 'Suspended vendor service' },
+    });
+    assert.equal(blocked.status, 403);
+
+    database.vendor.verification_status = 'information_requested';
+    const pdf = Buffer.from('%PDF-1.7 vendor license');
+    const uploaded = await fetch(`${baseUrl}/api/vendor/verification/documents?filename=license.pdf`, {
+      method: 'POST',
+      headers: {
+        Cookie: `platform_session=${sessionToken}`,
+        'Content-Type': 'application/pdf',
+      },
+      body: pdf,
+    });
+    assert.equal(uploaded.status, 201);
+    assert.equal(database.verificationDocuments[0].original_name, 'license.pdf');
+    assert.deepEqual(database.verificationDocuments[0].content, pdf);
+
+    const spoofed = await fetch(`${baseUrl}/api/vendor/verification/documents?filename=fake.pdf`, {
+      method: 'POST',
+      headers: {
+        Cookie: `platform_session=${sessionToken}`,
+        'Content-Type': 'application/pdf',
+      },
+      body: Buffer.from('not a PDF'),
+    });
+    assert.equal(spoofed.status, 400);
+    database.vendor.verification_status = 'verified';
+  });
+  database.setPermissionKeys(['services.manage_own', 'bookings.view_own']);
 });
