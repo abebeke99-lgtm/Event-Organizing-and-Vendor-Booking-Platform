@@ -16,20 +16,36 @@ import { formatDatabaseError, getDatabaseFailureCode, pool, verifyDatabaseConnec
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { requirePlatformAvailable } from './middleware/rbac.js';
 import { loadSystemSettings, updateSystemSettingsCache } from './lib/systemSettings.js';
+import adminPaymentRoutes from './routes/adminPayments.js';
+import adminReviewsComplaintsRoutes from './routes/adminReviewsComplaints.js';
+import adminNotificationsRoutes from './routes/adminNotifications.js';
+import paymentWebhookRoutes from './routes/paymentWebhook.js';
+import adminReportsRoutes from './routes/adminReports.js';
+import adminAuditLogRoutes from './routes/adminAuditLogs.js';
+import { requestContextMiddleware } from './lib/requestContext.js';
 
 export function createApp({
   database = pool,
   expectedDatabase = process.env.DB_NAME,
   emailConfigured,
   emailSender,
+  notificationEmailConfigured,
+  notificationEmailSender,
   passwordHasher,
   otpGenerator,
   otpHasher,
   otpVerifier,
+  paymentProvider = null,
 } = {}) {
   const app = express();
+  app.use(requestContextMiddleware);
   app.locals.database = database;
   app.locals.passwordReset = { emailConfigured, emailSender, otpGenerator, otpHasher };
+  app.locals.notificationServices = {
+    emailConfigured: notificationEmailConfigured,
+    emailSender: notificationEmailSender,
+  };
+  app.locals.paymentProvider = paymentProvider;
   const localOrigins = process.env.NODE_ENV === 'production'
     ? []
     : ['http://127.0.0.1:5173', 'http://localhost:5173'];
@@ -55,7 +71,6 @@ export function createApp({
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
-  app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
   app.use((req, res, next) => {
     if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) && !isAllowedOrigin(req.headers.origin)) {
@@ -63,6 +78,8 @@ export function createApp({
     }
     next();
   });
+  app.use('/api/payments/webhook', paymentWebhookRoutes);
+  app.use(express.json({ limit: '100kb' }));
   app.get('/', (req, res) => res.json({
     status: 'ok',
     service: 'event-organizing-and-vendor-booking-api',
@@ -97,6 +114,10 @@ export function createApp({
         defaultRegistrationRole: settings.default_registration_role,
         supportEmail: settings.support_email,
         supportPhone: settings.support_phone,
+        brandingLogoUrl: settings.branding_logo_url,
+        platformLocale: settings.platform_locale,
+        platformCurrency: settings.platform_currency,
+        reportTimezone: settings.report_timezone,
       },
     });
   }));
@@ -116,7 +137,13 @@ export function createApp({
   }));
   app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
   app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
-  app.use('/api/admin', requireAdmin, adminRoutes);
+  app.use('/api/admin', requireAdmin);
+  app.use('/api/admin', adminAuditLogRoutes);
+  app.use('/api/admin', adminPaymentRoutes);
+  app.use('/api/admin/reports', adminReportsRoutes);
+  app.use('/api/admin', adminReviewsComplaintsRoutes);
+  app.use('/api/admin', adminNotificationsRoutes);
+  app.use('/api/admin', adminRoutes);
   app.use((req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);

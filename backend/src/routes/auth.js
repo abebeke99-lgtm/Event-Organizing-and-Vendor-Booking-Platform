@@ -299,13 +299,13 @@ export function createAuthRouter({
 
   router.post('/logout', async (req, res, next) => {
     const token = req.cookies?.admin_session;
+    res.clearCookie('admin_session', { ...cookieOptions(), maxAge: undefined });
     try {
       if (token) {
         const [sessions] = await database.execute('SELECT user_id FROM admin_sessions WHERE token_hash = ?', [hashToken(token)]);
         await database.execute('DELETE FROM admin_sessions WHERE token_hash = ?', [hashToken(token)]);
         if (sessions.length) await writeAudit(database, { actorId: sessions[0].user_id, action: 'auth.logout', entityType: 'session', ip: req.ip });
       }
-      res.clearCookie('admin_session', { ...cookieOptions(), maxAge: undefined });
       res.status(204).end();
     } catch (error) { next(error); }
   });

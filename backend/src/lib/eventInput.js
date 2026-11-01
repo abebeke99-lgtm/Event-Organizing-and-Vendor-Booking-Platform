@@ -34,7 +34,7 @@ const optionalAmount = (maximum) => z.preprocess(
   z.union([z.null(), z.coerce.number().finite().min(0).max(maximum)]),
 );
 
-export const createEventSchema = z.object({
+const eventDetailsSchema = z.object({
   title: z.string().trim().min(2).max(180),
   type: z.string().trim().min(2).max(80),
   city: z.string().trim().max(120).optional().default(''),
@@ -59,7 +59,9 @@ export const createEventSchema = z.object({
     z.union([z.coerce.number().int().positive().max(100000), z.null()]),
   ).optional().default(null),
   notes: z.string().trim().max(2000).optional().default(''),
-}).superRefine((event, context) => {
+});
+
+function validateEventDateRange(event, context) {
   if (event.endDate && Date.parse(event.endDate) <= Date.parse(event.startDate)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -67,10 +69,17 @@ export const createEventSchema = z.object({
       message: 'Event end date must be after its start date.',
     });
   }
-});
+}
+
+export const createEventSchema = eventDetailsSchema.superRefine(validateEventDateRange);
+export const partialEventSchema = eventDetailsSchema.partial();
 
 export function toMysqlDateTime(value) {
   if (!value) return null;
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const pad = (part) => String(part).padStart(2, '0');
+    return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;
+  }
   const normalized = value.replace('T', ' ');
   return normalized.length === 16 ? `${normalized}:00` : normalized;
 }

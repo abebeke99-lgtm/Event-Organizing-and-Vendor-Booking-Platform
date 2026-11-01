@@ -4,7 +4,7 @@ import apiClient from './api/axios.js';
 import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, Mail, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate } from './eventUtils.js';
-import { setLanguage, translate, translateText, useLanguage } from './language.js';
+import { setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
 import { setTheme, useTheme } from './theme.js';
 import { getDashboardDateRange } from './dashboardUtils.js';
 import { createAuthSessionLoader } from './authSession.js';
@@ -15,6 +15,13 @@ import { EventDetailsPage, MyEventBookingsPage, OrganizerEventsManager } from '.
 import AdminUserManagement from './AdminUserManagement.jsx';
 import AdminRoleManagement from './AdminRoleManagement.jsx';
 import AdminVendorVerification from './AdminVendorVerification.jsx';
+import AdminEventManagement from './AdminEventManagement.jsx';
+import AdminBookingManagement from './AdminBookingManagement.jsx';
+import AdminReviewsComplaints from './AdminReviewsComplaints.jsx';
+import AdminPaymentManagement from './AdminPaymentManagement.jsx';
+import AdminNotifications from './AdminNotifications.jsx';
+import AdminAuditLogs from './AdminAuditLogs.jsx';
+import AdminProfile from './AdminProfile.jsx';
 
 const DEMO_AUTH_ENABLED = import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTH === 'true';
 const menu = [
@@ -39,11 +46,10 @@ const modules = {
   events:{title:'Event Management', endpoint:'events', columns:['id','title','event_type','organizer_id','city','venue','start_date','capacity','status'], fields:[['organizer_id','Organizer user ID','number'],['title','Title','text'],['event_type','Event type','text'],['description','Description (optional)','textarea'],['city','City (optional)','text'],['venue','Venue (optional)','text'],['cover_image_url','Cover image URL (optional)','url'],['start_date','Start date','datetime-local'],['end_date','End date (optional)','datetime-local'],['budget','Budget (optional)','number'],['capacity','Capacity (optional)','number'],['status','Status','select','draft,active,booked,in_progress,completed,cancelled'],['notes','Notes (optional)','textarea']], create:true, actions:['edit','deactivate']},
   bookings:{title:'Booking Management', endpoint:'bookings', columns:['id','event_id','vendor_id','service_description','quoted_amount','currency','status','moderation_reason','created_at'], actions:['moderate']},
   'package-requests':{title:'Event Package Requests', endpoint:'event-package-requests', columns:['id','event_id','event_title','event_type','requested_date','requested_location','requester_name','requester_email','service_category','guest_count','budget','notes','status','created_at'], actions:['package-status'], statuses:['new','reviewed','replied','closed']},
-  payments:{title:'Payment and Refund Management', endpoint:'payments', columns:['id','booking_id','amount','currency','provider','provider_reference','status','created_at'], actions:['refund']},
   reviews:{title:'Reviews and Complaints', endpoint:'reviews', columns:['id','booking_id','rating','comment','status','created_at'], actions:['review']},
   complaints:{title:'Reviews and Complaints', endpoint:'complaints', columns:['id','user_id','booking_id','subject','details','status','resolution','created_at'], actions:['complaint']},
   messages:{title:'Contact Messages', endpoint:'contact', columns:['id','full_name','email','phone','subject','inquiry_type','message','status','created_at'], actions:['view','status','delete'], statuses:['new','reviewed','in_progress','replied','resolved','closed'], inquiryTypes:INQUIRY_TYPES},
-  notifications:{title:'Notifications', endpoint:'notifications', columns:['id','user_id','title','message','status','created_at'], fields:[['user_id','Recipient user ID (optional)','number'],['title','Title','text'],['message','Message','textarea']], create:true},
+  notifications:{title:'Notifications', endpoint:'notifications', columns:['id','user_id','title','message','status','created_at'], readonly:true},
   'audit-logs':{title:'Audit Logs', endpoint:'audit-logs', columns:['id','actor_id','action','entity_type','entity_id','details','ip_address','created_at'], readonly:true},
 };
 const permissions = ['users:read','users:write','vendors:verify','events:write','bookings:moderate','payments:read','reviews:moderate','categories:write','reports:read','notifications:write'];
@@ -309,6 +315,14 @@ function Field({field,value,onChange}) {
   const common = { id:name, name, value:value ?? '', onChange:(event)=>onChange(name, event.target.value), required: !label.includes('optional') };
   return <label className="field"><span>{translateText(label, language)}</span>{type === 'textarea' ? <textarea {...common} rows="3" /> : type === 'select' ? <select {...common}>{choices.split(',').map((item)=><option key={item} value={item}>{translateText(item, language)}</option>)}</select> : <input {...common} type={type} step={type==='number'?'0.01':undefined} />}</label>;
 }
+
+function resolveApiAssetUrl(path) {
+  if (!path || !path.startsWith('/api/')) return path;
+  const baseUrl = apiClient.defaults.baseURL;
+  if (!baseUrl || baseUrl.startsWith('/')) return path;
+  return new URL(path, baseUrl).toString();
+}
+
 function Modal({title,children,onClose,onSubmit,busy,submitLabel='Save',cancelLabel='Cancel',closeLabel='Close',danger=false}) {
   return <div className="overlay" onMouseDown={(event)=>event.target===event.currentTarget && !busy && onClose()}><form className="modal" onSubmit={onSubmit}><div className="modal-head"><h2>{title}</h2><button className="icon-button" type="button" onClick={onClose} aria-label={closeLabel}><X size={18}/></button></div><div className="modal-body">{children}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>{cancelLabel}</button><button className={`button ${danger?'danger':''}`} disabled={busy}>{busy?'Saving…':submitLabel}</button></div></form></div>;
 }
@@ -381,6 +395,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   const language = useLanguage();
   const authSessionState = useAuthSessionSnapshot();
   const platformName = document.documentElement.dataset.platformName || 'EventHub';
+  const platformLogo = document.documentElement.dataset.brandingLogoUrl || '';
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationItems, setNotificationItems] = useState([]);
@@ -444,7 +459,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   }, []);
 
   return <><header className="site-header"><div className="site-header-inner">
-    <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}><span className="brand-mark small">EH</span><div><strong>{platformName}</strong><small>{translate('platform', language)}</small></div></a>
+    <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}>{platformLogo ? <img className="site-brand-logo" src={platformLogo} alt="" /> : <span className="brand-mark small">EH</span>}<div><strong>{platformName}</strong><small>{translate('platform', language)}</small></div></a>
     <button type="button" className="mobile-nav-toggle" aria-label={translate(mobileMenuOpen ? 'closeMenu' : 'openMenu', language)} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X size={20}/> : <Menu size={20}/>}</button>
     <nav className={`site-nav ${mobileMenuOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}>{PUBLIC_NAV_ITEMS.map((item) => <a key={item.path} href={item.path} className={`nav-link ${routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'active' : ''}`} aria-current={routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'page' : undefined} onClick={(event) => { event.preventDefault(); setMobileMenuOpen(false); onNavigate(item.path); }}>{translateText(item.label, language)}</a>)}</nav>
     <div className="header-actions">
@@ -733,7 +748,7 @@ function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, sideba
         <span className="dashboard-avatar">{avatar ? <img src={avatar} alt="" /> : <UserRound size={19}/>}</span>
       </button>
       <div className="dashboard-profile-copy"><strong>{name}</strong><small>{role}</small></div>
-      <button className="icon-button dashboard-logout" type="button" aria-label="Logout" title="Logout" onClick={onLogout}><LogOut size={17}/></button>
+      <button className="icon-button dashboard-logout" type="button" aria-label={translate('logout', language)} title={translate('logout', language)} onClick={onLogout}><LogOut size={17}/></button>
     </div>
     {viewingPhoto && <div className="profile-photo-overlay" onClick={(event) => { if (event.target === event.currentTarget) closeProfilePhoto(); }}>
       <section className="profile-photo-modal" role="dialog" aria-modal="true" aria-labelledby="profile-photo-title">
@@ -1296,7 +1311,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
             ? <div className="empty-card">No public categories are available right now. <button type="button" className="button secondary small" onClick={() => onNavigate('/categories')}>Browse categories</button></div>
             : categoryCards.map((category) => (
             <button key={category.name} type="button" className="category-card" onClick={() => onNavigate(category.path)}>
-              <img src={category.image} alt={category.name} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+              <img src={resolveApiAssetUrl(category.image)} alt={category.name} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
               <span>{category.name}</span>
             </button>
           ))}
@@ -2231,7 +2246,7 @@ function CategoriesPage({ onNavigate }) {
     return () => { active = false; };
   }, [search]);
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('categoriesEyebrow')}</p><h2>{t('categoriesHeading')}</h2></div></div>{error && <div className="alert error">{translateText(error, language)}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><div className="search-box"><Search size={16}/><input aria-label={t('searchCategories')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchCategories')} /></div><button type="button" className="button secondary small" onClick={() => setSearch('')}>{t('clear')}</button></div></div>{loading ? <div className="loading"><span className="spinner" />{t('loadingCategories')}</div> : categories.length ? <div className="card-grid soft-grid">{categories.map((category) => <article key={category.id} className="info-card"><img src={category.image || 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80'} alt={category.name} loading="lazy" className="category-card-image" /><h3>{category.name}</h3><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} ${t('vendorsLabel')}` : t('noVendorsAvailable')}</span><span>{category.serviceCount ? `${category.serviceCount} ${t('availableServices')}` : t('noServicesListed')}</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/categories/${category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`)}>{t('openCategory')}</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></article>)}</div> : <EmptyState title={t('noCategoriesFound')} message={t('noCategoriesMatch')} />}</div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('categoriesEyebrow')}</p><h2>{t('categoriesHeading')}</h2></div></div>{error && <div className="alert error">{translateText(error, language)}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><div className="search-box"><Search size={16}/><input aria-label={t('searchCategories')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchCategories')} /></div><button type="button" className="button secondary small" onClick={() => setSearch('')}>{t('clear')}</button></div></div>{loading ? <div className="loading"><span className="spinner" />{t('loadingCategories')}</div> : categories.length ? <div className="card-grid soft-grid">{categories.map((category) => <article key={category.id} className="info-card"><img src={resolveApiAssetUrl(category.image || 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80')} alt={category.name} loading="lazy" className="category-card-image" /><h3>{category.name}</h3><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} ${t('vendorsLabel')}` : t('noVendorsAvailable')}</span><span>{category.serviceCount ? `${category.serviceCount} ${t('availableServices')}` : t('noServicesListed')}</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/categories/${category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`)}>{t('openCategory')}</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></article>)}</div> : <EmptyState title={t('noCategoriesFound')} message={t('noCategoriesMatch')} />}</div></main>;
 }
 
 function CategoryDetailPage({ slug, onNavigate }) {
@@ -2275,7 +2290,7 @@ function CategoryDetailPage({ slug, onNavigate }) {
 
   return <main className="page-shell"><div className="content-stack">
     <div className="section-header"><div><p className="eyebrow">CATEGORY</p><h2>{category.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>Back to categories</button></div>
-    <div className="info-card wide"><img src={category.image} alt="" className="category-detail-image" /><div className="category-detail-copy"><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.eventCount || 0} events</span><span>{category.vendorCount || 0} active vendors</span><span>{category.serviceCount || 0} available services</span></div><button className="button" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></div>
+    <div className="info-card wide"><img src={resolveApiAssetUrl(category.image)} alt="" className="category-detail-image" /><div className="category-detail-copy"><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.eventCount || 0} events</span><span>{category.vendorCount || 0} active vendors</span><span>{category.serviceCount || 0} available services</span></div><button className="button" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></div>
     <div className="panel"><label className="field"><span>Search related listings</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search events, vendors, and services"/></label></div>
     <section className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">EVENTS</p><h3>Related events</h3></div></div>{events.length ? <div className="card-grid">{events.map((event) => <article className="info-card" key={event.id}><h3>{event.title}</h3><p>{event.location || t('locationAvailable')}</p><p>{formatEventDate(event.startDate, language)}</p><button className="button secondary small" type="button" onClick={() => onNavigate(`/events/${event.id}`)}>View event</button></article>)}</div> : <EmptyState title="No related events" message="There are no public events in this category right now."/>}</section>
     <section className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">VENDORS</p><h3>Relevant vendors</h3></div></div>{vendors.length ? <div className="card-grid">{vendors.map((vendor) => <article key={vendor.id} className="vendor-card"><div className="card-image-wrap"><img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.business_name || vendor.name} loading="lazy" />{vendor.verified && <span className="verify-badge">Verified</span>}</div><div className="card-body"><div className="meta-row"><span>{vendor.category || 'Event services'}</span>{vendor.reviewCount > 0 && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div><h3>{vendor.business_name || vendor.name}</h3><p>{vendor.description || vendor.city || t('locationAvailable')}</p><div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount || 0} reviews</span></div><button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button></div></article>)}</div> : <EmptyState title="No vendors currently available" message="This category has no eligible vendors right now." />}</section>
@@ -3453,7 +3468,303 @@ function Overview({ onNavigate }) {
   </>;
 }
 
-function DataPage({slug,user,onUserChange}) {
+function AdminServiceCategories() {
+  const [data, setData] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, pageSize: 20, total: 0 });
+  const [page, setPage] = useState(1);
+  const [query, setQuery] = useState('');
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [sortBy, setSortBy] = useState('display_order');
+  const [sortDirection, setSortDirection] = useState('asc');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState({});
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [removeImage, setRemoveImage] = useState(false);
+  const [fileError, setFileError] = useState('');
+  const [history, setHistory] = useState([]);
+  const [historyError, setHistoryError] = useState('');
+
+  const load = useCallback(async (requestedPage = 1) => {
+    setLoading(true);
+    setError('');
+    try {
+      const params = new URLSearchParams({
+        page: String(requestedPage),
+        pageSize: String(pagination.pageSize),
+        sortBy,
+        sortDirection,
+      });
+      if (search) params.set('q', search);
+      if (status) params.set('status', status);
+      const result = await api(`/admin/categories?${params}`);
+      setData(result.data);
+      setPagination(result.pagination);
+      setPage(requestedPage);
+    } catch (issue) {
+      setError(issue.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [pagination.pageSize, search, sortBy, sortDirection, status]);
+
+  useEffect(() => { void load(1); }, [load]);
+  useEffect(() => () => {
+    if (imagePreview.startsWith('blob:')) URL.revokeObjectURL(imagePreview);
+  }, [imagePreview]);
+
+  function closeModal() {
+    setModal(null);
+    setImageFile(null);
+    setImagePreview('');
+    setRemoveImage(false);
+    setFileError('');
+  }
+
+  function startCreate() {
+    setForm({ name: '', description: '', display_order: '0' });
+    setImageFile(null);
+    setImagePreview('');
+    setRemoveImage(false);
+    setFileError('');
+    setModal({ kind: 'create' });
+  }
+
+  function startEdit(category) {
+    setForm({
+      name: category.name || '',
+      description: category.description || '',
+      display_order: String(category.display_order ?? 0),
+    });
+    setImageFile(null);
+    setImagePreview('');
+    setRemoveImage(false);
+    setFileError('');
+    setModal({ kind: 'edit', row: category });
+  }
+
+  function chooseImage(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    setFileError('');
+    if (!file) return;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setImageFile(null);
+      setImagePreview('');
+      setFileError('Choose a JPG, PNG, or WebP image.');
+      return;
+    }
+    if (file.size === 0 || file.size > 5 * 1024 * 1024) {
+      setImageFile(null);
+      setImagePreview('');
+      setFileError('Category images must be greater than 0 bytes and 5 MB or smaller.');
+      return;
+    }
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setRemoveImage(false);
+  }
+
+  async function submitCategory(event) {
+    event.preventDefault();
+    if (fileError) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    let savedId;
+    try {
+      const payload = {
+        name: form.name,
+        description: form.description,
+        display_order: Number(form.display_order),
+      };
+      if (modal.kind === 'create') {
+        const result = await api('/admin/categories', { method: 'POST', body: JSON.stringify(payload) });
+        savedId = result.data.id;
+      } else {
+        savedId = modal.row.id;
+        await api(`/admin/categories/${savedId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      }
+
+      try {
+        if (imageFile) {
+          await api(`/admin/categories/${savedId}/image`, {
+            method: 'PUT',
+            body: imageFile,
+            headers: { 'Content-Type': imageFile.type },
+          });
+        } else if (removeImage && modal.row?.image) {
+          await api(`/admin/categories/${savedId}/image`, { method: 'DELETE' });
+        }
+      } catch (imageIssue) {
+        setNotice(`Category details were saved, but the image change failed: ${imageIssue.message}`);
+        closeModal();
+        await load(page);
+        return;
+      }
+
+      setNotice(modal.kind === 'create' ? 'Category created.' : 'Category updated.');
+      closeModal();
+      await load(page);
+    } catch (issue) {
+      setError(issue.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleStatus(category) {
+    const activating = !category.is_active;
+    const message = activating
+      ? `Activate “${category.name}”?`
+      : `Deactivate “${category.name}”? ${category.service_count} associated service(s) will remain assigned but the category will be hidden from public browsing and new selections.`;
+    if (!window.confirm(message)) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await api(`/admin/categories/${category.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_active: activating }),
+      });
+      setNotice(`Category ${activating ? 'activated' : 'deactivated'}.`);
+      await load(page);
+    } catch (issue) {
+      setError(issue.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function showHistory(category) {
+    setHistory([]);
+    setHistoryError('');
+    setModal({ kind: 'history', row: category });
+    try {
+      const result = await api(`/admin/categories/${category.id}/history?pageSize=50`);
+      setHistory(result.data);
+    } catch (issue) {
+      setHistoryError(issue.message);
+    }
+  }
+
+  const title = modal?.kind === 'create' ? 'Create category' : `Edit ${modal?.row?.name || 'category'}`;
+  const shownImage = imagePreview || (!removeImage && modal?.row?.image ? resolveApiAssetUrl(modal.row.image) : '');
+
+  return (
+    <section>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">SYSTEM CONTROL</p>
+          <h2>Service Category Management</h2>
+          <p className="muted">Manage the shared categories used by customer browsing and vendor service forms.</p>
+        </div>
+        <button className="button" type="button" onClick={startCreate}>Create category</button>
+      </div>
+      {notice && <div className="alert success" role="status">{notice}</div>}
+      {error && <div className="alert error" role="alert">{error}</div>}
+      <div className="toolbar">
+        <form className="search-box" onSubmit={(event) => { event.preventDefault(); setSearch(query.trim()); }}>
+          <Search size={17} />
+          <input aria-label="Search categories" placeholder="Search name or description" value={query} onChange={(event) => setQuery(event.target.value)} />
+          <button type="submit">Search</button>
+        </form>
+        <select className="filter-select" aria-label="Filter category status" value={status} onChange={(event) => setStatus(event.target.value)}>
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <select className="filter-select" aria-label="Sort categories" value={`${sortBy}:${sortDirection}`} onChange={(event) => {
+          const [nextSort, nextDirection] = event.target.value.split(':');
+          setSortBy(nextSort);
+          setSortDirection(nextDirection);
+        }}>
+          <option value="display_order:asc">Display order</option>
+          <option value="name:asc">Name A–Z</option>
+          <option value="name:desc">Name Z–A</option>
+          <option value="service_count:desc">Most services</option>
+          <option value="created_at:desc">Newest first</option>
+        </select>
+        <span className="result-count">{pagination.total} categories</span>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Image</th><th>Name</th><th>Description</th><th>Display order</th><th>Services</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan="7"><div className="loading"><span className="spinner" />Loading categories</div></td></tr>
+            ) : data.length === 0 ? (
+              <tr><td colSpan="7"><div className="empty"><strong>No categories found</strong><span>Try a different search or create a category.</span></div></td></tr>
+            ) : data.map((category) => (
+              <tr key={category.id}>
+                <td>{category.image ? <img className="category-admin-thumbnail" src={resolveApiAssetUrl(category.image)} alt="" /> : <span className="category-admin-thumbnail category-admin-thumbnail-empty">—</span>}</td>
+                <td><strong>{category.name}</strong></td>
+                <td title={category.description || ''}><span className="cell-value">{category.description || '—'}</span></td>
+                <td>{category.display_order}</td>
+                <td>{category.service_count}</td>
+                <td><span className={`pill ${category.is_active ? 'active' : 'inactive'}`}>{category.is_active ? 'Active' : 'Inactive'}</span></td>
+                <td><div className="row-actions">
+                  <button className="text-action" type="button" disabled={busy} onClick={() => startEdit(category)}>Edit</button>
+                  <button className={`text-action ${category.is_active ? 'subtle-danger' : ''}`} type="button" disabled={busy} onClick={() => void toggleStatus(category)}>{category.is_active ? 'Deactivate' : 'Activate'}</button>
+                  <button className="text-action" type="button" disabled={busy} onClick={() => void showHistory(category)}>History</button>
+                </div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="pagination">
+        <span>Showing {data.length ? ((page - 1) * pagination.pageSize) + 1 : 0}–{Math.min(page * pagination.pageSize, pagination.total)} of {pagination.total}</span>
+        <div>
+          <button className="icon-button" type="button" disabled={page <= 1 || loading} onClick={() => void load(page - 1)} aria-label="Previous category page"><ChevronLeft size={18} /></button>
+          <span>Page {page} of {Math.max(1, Math.ceil(pagination.total / pagination.pageSize))}</span>
+          <button className="icon-button" type="button" disabled={page * pagination.pageSize >= pagination.total || loading} onClick={() => void load(page + 1)} aria-label="Next category page"><ChevronRight size={18} /></button>
+        </div>
+      </div>
+      {modal?.kind === 'history' ? (
+        <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && setModal(null)}>
+          <section className="modal" role="dialog" aria-modal="true" aria-labelledby="category-history-title">
+            <div className="modal-head"><h2 id="category-history-title">Category history: {modal.row.name}</h2><button className="icon-button" type="button" onClick={() => setModal(null)} aria-label="Close"><X size={18} /></button></div>
+            <div className="modal-body">
+              {historyError ? <div className="alert error" role="alert">{historyError}</div> : history.length ? history.map((entry) => {
+                let details = entry.details;
+                if (typeof details === 'string') {
+                  try { details = JSON.parse(details); } catch { details = { raw: details }; }
+                }
+                return <article className="category-history-entry" key={entry.id}>
+                  <div><strong>{String(entry.action).replaceAll('_', ' ')}</strong><span>{entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'} · Actor #{entry.actor_id}</span></div>
+                  <pre>{JSON.stringify(details, null, 2)}</pre>
+                </article>;
+              }) : <div className="empty"><strong>No category changes recorded yet</strong></div>}
+            </div>
+            <div className="modal-foot"><button className="button secondary" type="button" onClick={() => setModal(null)}>Close</button></div>
+          </section>
+        </div>
+      ) : modal && (
+        <Modal title={title} onClose={closeModal} onSubmit={submitCategory} busy={busy}>
+          <label className="field"><span>Category name</span><input required maxLength={120} value={form.name || ''} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
+          <label className="field"><span>Description</span><textarea maxLength={500} value={form.description || ''} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
+          <label className="field"><span>Display order</span><input type="number" min="0" max="100000" step="1" required value={form.display_order ?? '0'} onChange={(event) => setForm((current) => ({ ...current, display_order: event.target.value }))} /></label>
+          <div className="field">
+            <span>Category image</span>
+            {shownImage && <img className="category-admin-preview" src={shownImage} alt="Category preview" />}
+            <input type="file" accept="image/jpeg,image/png,image/webp" onChange={chooseImage} aria-label="Upload category image" />
+            <small className="muted">JPG, PNG, or WebP; maximum 5 MB.</small>
+            {modal.kind === 'edit' && modal.row.image && <button className="text-action subtle-danger" type="button" onClick={() => { setImageFile(null); setImagePreview(''); setRemoveImage((current) => !current); setFileError(''); }}>{removeImage ? 'Keep current image' : 'Remove image'}</button>}
+            {fileError && <small className="profile-photo-message error" role="alert">{fileError}</small>}
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+function GenericDataPage({slug,user,onUserChange}) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const config = modules[slug] || {
@@ -3467,7 +3778,7 @@ function DataPage({slug,user,onUserChange}) {
   const [loading,setLoading]=useState(true); const [error,setError]=useState(''); const [notice,setNotice]=useState(''); const [query,setQuery]=useState(''); const [search,setSearch]=useState(''); const [status,setStatus]=useState(''); const [inquiryType,setInquiryType]=useState(''); const [modal,setModal]=useState(null); const [busy,setBusy]=useState(false); const [form,setForm]=useState({}); const [roleRows,setRoleRows]=useState([]);
   const [profilePhotoFile,setProfilePhotoFile]=useState(null); const [profilePhotoPreview,setProfilePhotoPreview]=useState(''); const [profilePhotoError,setProfilePhotoError]=useState(''); const [profilePhotoRemoved,setProfilePhotoRemoved]=useState(false); const profilePhotoInputRef=useRef(null);
   useEffect(()=>()=>{if(profilePhotoPreview)URL.revokeObjectURL(profilePhotoPreview);},[profilePhotoPreview]);
-  const statuses={users:['active','suspended','pending'],roles:['active','inactive'],categories:['active','inactive'],vendors:['pending','verified','rejected'],events:['draft','active','booked','in_progress','completed','cancelled'],bookings:['requested','quoted','accepted','rejected','cancelled','completed','under_review'],'package-requests':['new','reviewed','replied','closed'],payments:['pending','authorized','paid','failed','refunded','refund_pending'],reviews:['published','hidden','flagged'],complaints:['open','investigating','resolved','dismissed'],messages:['new','reviewed','in_progress','replied','resolved','closed'],notifications:['queued','sent','failed','read']}[slug]||[];
+  const statuses={users:['active','suspended','pending'],roles:['active','inactive'],categories:['active','inactive'],vendors:['pending','verified','rejected'],events:['draft','active','booked','in_progress','completed','cancelled'],bookings:['requested','quoted','accepted','rejected','cancelled','completed','under_review'],'package-requests':['new','reviewed','replied','closed'],reviews:['published','hidden','flagged'],complaints:['open','investigating','resolved','dismissed'],messages:['new','reviewed','in_progress','replied','resolved','closed'],notifications:['queued','sent','failed','read']}[slug]||[];
   const statusLabel=(value)=>slug==='messages'?({new:'New',reviewed:'Read',in_progress:'In Progress',replied:'Replied',resolved:'Resolved',closed:'Closed'}[value]||value):translateText(value,language);
   const load=useCallback(async(page=1)=>{setLoading(true);setError('');try{const params=new URLSearchParams({page:String(page),pageSize:String(pagination.pageSize)});if(search)params.set('q',search);if(status)params.set('status',slug==='roles'||slug==='categories'?(status==='active'?'1':'0'):status);if(inquiryType)params.set('inquiry_type',inquiryType);const result=await api(`/admin/${config.endpoint}?${params}`);setData(result.data);setPagination(result.pagination);}catch(issue){setError(issue.message);}finally{setLoading(false);}},[config.endpoint,inquiryType,pagination.pageSize,search,status,slug]);
   useEffect(()=>{if(slug==='profile'){setLoading(false);return;}load(1);},[load,slug]);
@@ -3505,8 +3816,6 @@ function DataPage({slug,user,onUserChange}) {
       result=await api(`/admin/vendors/${row.id}/verification`,{method:'PATCH',body:JSON.stringify({decision:modal.kind==='verify'?'verified':'rejected',reason:form.reason})});
     } else if(modal.kind==='moderate'){
       result=await api(`/admin/bookings/${row.id}/moderation`,{method:'PATCH',body:JSON.stringify({status:form.status,reason:form.reason})});
-    } else if(modal.kind==='refund'){
-      result=await api(`/admin/payments/${row.id}/refunds`,{method:'POST',body:JSON.stringify({reason:form.reason})});
     } else if(modal.kind==='role'){
       result=await api(`/admin/users/${row.id}/role`,{method:'PATCH',body:JSON.stringify({role_id:Number(form.role_id)})});
     } else if(modal.kind==='package-status'){
@@ -3539,7 +3848,7 @@ function DataPage({slug,user,onUserChange}) {
       setProfilePhotoFile(null);setProfilePhotoPreview('');setProfilePhotoRemoved(false);
     }
     if(modal.kind==='setting'){result=await api(`/admin/settings/${encodeURIComponent(form.setting_key)}`,{method:'PUT',body:JSON.stringify({value:form.setting_value})});}
-    setNotice(slug==='payments'?'Request was not processed.':modal.kind==='profile'?(DEMO_AUTH_ENABLED?t('demoProfileUpdated'):t('profileUpdatedSuccessfully')):'Changes saved.');setModal(null);if(slug!=='profile')await load(pagination.page);
+    setNotice(modal.kind==='profile'?(DEMO_AUTH_ENABLED?t('demoProfileUpdated'):t('profileUpdatedSuccessfully')):'Changes saved.');setModal(null);if(slug!=='profile')await load(pagination.page);
   }catch(issue){setError(issue.message);if(modal.kind==='profile'&&(profilePhotoFile||profilePhotoRemoved))setProfilePhotoError(issue.message);}finally{setBusy(false);}}
   async function deleteContactMessage(row){
     if(!window.confirm(`Permanently delete contact message #${row.id}? This action is recorded in the audit log.`))return;
@@ -3553,8 +3862,8 @@ function DataPage({slug,user,onUserChange}) {
   }
   const actions=(row)=>{const names=config.actions||[];return names.map((action)=>{
     if(action==='delete')return <button key={action} className="text-action subtle-danger" type="button" disabled={busy} onClick={()=>deleteContactMessage(row)}>Delete</button>;
-    const label=action==='status'&&slug==='messages'?(row.status==='new'?'Mark read':'Update status'):{edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',refund:'Request refund',role:'Change role',status:row.status==='suspended'?'Activate':'Suspend','package-status':'Update status',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint',view:'View message'}[action];
-    const danger=['deactivate','reject','refund'].includes(action)||(action==='status'&&slug!=='messages');
+    const label=action==='status'&&slug==='messages'?(row.status==='new'?'Mark read':'Update status'):{edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',role:'Change role',status:row.status==='suspended'?'Activate':'Suspend','package-status':'Update status',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint',view:'View message'}[action];
+    const danger=['deactivate','reject'].includes(action)||(action==='status'&&slug!=='messages');
     return <button key={action} className={`text-action ${danger?'subtle-danger':''}`} type="button" onClick={()=>startAction(action==='package-status'?'package-status':action,row)}>{label}</button>;
   });};
   const title=translateText(config.title, language);
@@ -3566,7 +3875,6 @@ function DataPage({slug,user,onUserChange}) {
       verify: 'Verify vendor',
       reject: 'Reject vendor',
       moderate: 'Moderate booking',
-      refund: 'Request refund',
       role: 'Change user role',
       status: slug === 'messages' ? 'Update contact message' : 'Update account status',
       'package-status': 'Update package request status',
@@ -3598,7 +3906,7 @@ function DataPage({slug,user,onUserChange}) {
       ));
     }
 
-    if (modal.kind === 'verify' || modal.kind === 'reject' || modal.kind === 'refund' || modal.kind === 'status' || modal.kind === 'package-status') {
+    if (modal.kind === 'verify' || modal.kind === 'reject' || modal.kind === 'status' || modal.kind === 'package-status') {
       if (slug === 'package-requests') {
         return <label className="field"><span>Request status</span><select value={form.status || modal.row.status} onChange={(event) => changeField('status', event.target.value)}>{['new', 'reviewed', 'replied', 'closed'].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>;
       }
@@ -3622,9 +3930,9 @@ function DataPage({slug,user,onUserChange}) {
 
       return (
         <>
-          <p className="muted">{modal.kind === 'refund' ? 'No refund is initiated unless a verified provider is configured.' : 'This sensitive action is written to the audit log.'}</p>
+          <p className="muted">This sensitive action is written to the audit log.</p>
           <label className="field">
-            <span>{modal.kind === 'refund' ? 'Refund reason' : 'Decision reason'}</span>
+            <span>Decision reason</span>
             <textarea required minLength="5" maxLength="500" rows="4" value={form.reason || ''} onChange={(event) => changeField('reason', event.target.value)} />
           </label>
           {modal.kind === 'status' && (
@@ -3789,7 +4097,6 @@ function DataPage({slug,user,onUserChange}) {
         </div>
         {config.create && <button className="button" onClick={startCreate}>{t('createNew')}</button>}
       </div>
-      {slug === 'payments' && <div className="alert warning">Payment entries are read-only. Refund requests cannot be processed until a provider is configured and verifies the transaction.</div>}
       {notice && <div className="alert success">{translateText(notice, language)}</div>}
       {error && <div className="alert error">{translateText(error, language)}<button className="dismiss" onClick={() => setError('')}>{t('dismiss')}</button></div>}
       {slug === 'profile' && (
@@ -3867,36 +4174,270 @@ function DataPage({slug,user,onUserChange}) {
           </div>
         </>
       )}
-      {modal?.kind === 'view' ? <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && closeModal()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="contact-message-title"><div className="modal-head"><h2 id="contact-message-title">Contact message #{modal.row.id}</h2><button className="icon-button" type="button" onClick={closeModal} aria-label="Close"><X size={18}/></button></div><div className="modal-body"><p><strong>From:</strong> {modal.row.full_name} ({modal.row.email})</p>{modal.row.phone && <p><strong>Phone:</strong> {modal.row.phone}</p>}<p><strong>Subject:</strong> {modal.row.subject}</p><p><strong>Inquiry:</strong> {modal.row.inquiry_type}</p><p><strong>Status:</strong> {modal.row.status}</p><p><strong>Received:</strong> {modal.row.created_at}</p><div className="panel" style={{ padding: '14px', whiteSpace: 'pre-wrap' }}>{modal.row.message}</div>{modal.row.admin_reply && <div><strong>Admin reply</strong><p>{modal.row.admin_reply}</p></div>}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={closeModal}>Close</button><button className="button" type="button" onClick={() => startAction('status', modal.row)}>Update status</button></div></section></div> : modal && <Modal title={modalTitle()} onClose={closeModal} onSubmit={submit} busy={busy} submitLabel={modal.kind === 'refund' ? 'Submit request' : modal.kind === 'deactivate' ? 'Deactivate' : t('save')} cancelLabel={modal.kind === 'profile' ? t('cancel') : 'Cancel'} closeLabel={modal.kind === 'profile' ? t('close') : 'Close'} danger={['deactivate', 'reject', 'refund', 'status'].includes(modal.kind)}>{renderModalFields()}</Modal>}
+      {modal?.kind === 'view' ? <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && closeModal()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="contact-message-title"><div className="modal-head"><h2 id="contact-message-title">Contact message #{modal.row.id}</h2><button className="icon-button" type="button" onClick={closeModal} aria-label="Close"><X size={18}/></button></div><div className="modal-body"><p><strong>From:</strong> {modal.row.full_name} ({modal.row.email})</p>{modal.row.phone && <p><strong>Phone:</strong> {modal.row.phone}</p>}<p><strong>Subject:</strong> {modal.row.subject}</p><p><strong>Inquiry:</strong> {modal.row.inquiry_type}</p><p><strong>Status:</strong> {modal.row.status}</p><p><strong>Received:</strong> {modal.row.created_at}</p><div className="panel" style={{ padding: '14px', whiteSpace: 'pre-wrap' }}>{modal.row.message}</div>{modal.row.admin_reply && <div><strong>Admin reply</strong><p>{modal.row.admin_reply}</p></div>}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={closeModal}>Close</button><button className="button" type="button" onClick={() => startAction('status', modal.row)}>Update status</button></div></section></div> : modal && <Modal title={modalTitle()} onClose={closeModal} onSubmit={submit} busy={busy} submitLabel={modal.kind === 'deactivate' ? 'Deactivate' : t('save')} cancelLabel={modal.kind === 'profile' ? t('cancel') : 'Cancel'} closeLabel={modal.kind === 'profile' ? t('close') : 'Close'} danger={['deactivate', 'reject', 'status'].includes(modal.kind)}>{renderModalFields()}</Modal>}
     </section>
   );
 }
 
+function DataPage(props) {
+  return props.slug === 'categories'
+    ? <AdminServiceCategories />
+    : props.slug === 'payments'
+      ? <AdminPaymentManagement />
+      : props.slug === 'reviews'
+        ? <AdminReviewsComplaints kind="reviews" />
+        : props.slug === 'complaints'
+          ? <AdminReviewsComplaints kind="complaints" />
+          : <GenericDataPage {...props} />;
+}
+
+const ADMIN_REPORTS = [
+  ['users', 'User registrations'],
+  ['vendors', 'Vendor registrations and verification'],
+  ['events', 'Event creation and publication'],
+  ['bookings', 'Bookings'],
+  ['payments', 'Payments'],
+  ['refunds', 'Refunds'],
+  ['revenue', 'Revenue trend'],
+  ['categories', 'Service category performance'],
+  ['reviews', 'Customer reviews'],
+  ['complaints', 'Customer complaints'],
+  ['vendor-performance', 'Vendor performance'],
+  ['booking-outcomes', 'Cancellations and completions'],
+];
+
+const REPORT_PERIODS = [
+  ['today', 'Today'],
+  ['last7', 'Last 7 days'],
+  ['last30', 'Last 30 days'],
+  ['monthly', 'This month'],
+  ['yearly', 'This year'],
+  ['custom', 'Custom range'],
+];
+
+const REPORT_SORT_OPTIONS = {
+  users: [['created_at', 'Created'], ['name', 'Name'], ['status', 'Status']],
+  vendors: [['created_at', 'Created'], ['name', 'Business'], ['status', 'Verification status']],
+  events: [['created_at', 'Created'], ['published_at', 'Published'], ['title', 'Title'], ['status', 'Status']],
+  bookings: [['created_at', 'Created'], ['status', 'Status'], ['vendor', 'Vendor'], ['customer', 'Customer'], ['amount', 'Amount']],
+  payments: [['created_at', 'Created'], ['status', 'Status'], ['amount', 'Amount'], ['currency', 'Currency']],
+  refunds: [['created_at', 'Created'], ['status', 'Status'], ['amount', 'Amount'], ['currency', 'Currency']],
+  revenue: [['period', 'Date'], ['currency', 'Currency'], ['gross', 'Gross payments'], ['refunds', 'Refunds'], ['net', 'Net revenue']],
+  categories: [['category', 'Category'], ['bookings', 'Bookings'], ['completed', 'Completed']],
+  reviews: [['created_at', 'Created'], ['rating', 'Rating'], ['vendor', 'Vendor'], ['customer', 'Customer']],
+  complaints: [['created_at', 'Created'], ['status', 'Status'], ['customer', 'Customer']],
+  'vendor-performance': [['vendor', 'Vendor'], ['bookings', 'Bookings'], ['completed', 'Completed'], ['rating', 'Rating']],
+  'booking-outcomes': [['outcome_at', 'Outcome date'], ['status', 'Status'], ['vendor', 'Vendor'], ['customer', 'Customer']],
+};
+
+const REPORT_STATUS_OPTIONS = {
+  users: ['active', 'pending', 'suspended'],
+  vendors: ['pending', 'verified', 'rejected'],
+  events: ['draft', 'pending_approval', 'active', 'published', 'booked', 'in_progress', 'completed', 'rejected', 'cancelled'],
+  bookings: ['requested', 'quoted', 'accepted', 'rejected', 'under_review', 'completed', 'cancelled'],
+  payments: ['pending', 'authorized', 'paid', 'failed', 'cancelled', 'refunded', 'partially_refunded', 'refund_pending'],
+  refunds: ['pending', 'processing', 'succeeded', 'failed', 'rejected'],
+  reviews: ['published', 'hidden', 'flagged'],
+  complaints: ['open', 'under_review', 'resolved', 'closed'],
+  'booking-outcomes': ['completed', 'cancelled'],
+};
+
 function Reports() {
+  const [report, setReport] = useState('users');
+  const [period, setPeriod] = useState('last30');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [status, setStatus] = useState('');
+  const [q, setQ] = useState('');
+  const [currency, setCurrency] = useState('');
+  const [categoryId, setCategoryId] = useState('');
+  const [vendorId, setVendorId] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [sortBy, setSortBy] = useState('');
+  const [sortDirection, setSortDirection] = useState('desc');
+  const [page, setPage] = useState(1);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const parameters = new URLSearchParams({ report, period, page: String(page), pageSize: '20' });
+  if (period === 'custom' && startDate && endDate) {
+    parameters.set('startDate', startDate);
+    parameters.set('endDate', endDate);
+  }
+  if (status) parameters.set('status', status);
+  if (q.trim()) parameters.set('q', q.trim());
+  if (currency.trim()) parameters.set('currency', currency.trim().toUpperCase());
+  if (categoryId) parameters.set('categoryId', categoryId);
+  if (vendorId) parameters.set('vendorId', vendorId);
+  if (customerId) parameters.set('customerId', customerId);
+  if (sortBy) parameters.set('sortBy', sortBy);
+  parameters.set('sortDirection', sortDirection);
 
   useEffect(() => {
-    api('/admin/reports/summary').then((response) => setData(response.data)).catch((issue) => setError(issue.message));
-  }, []);
+    if (DEMO_AUTH_ENABLED) {
+      setError('Reports require a connected administrator database and are unavailable in demo mode.');
+      return undefined;
+    }
+    if (period === 'custom' && (!startDate || !endDate)) {
+      setData(null);
+      setError('');
+      return undefined;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setError('');
+    api(`/admin/reports?${parameters.toString()}`, { signal: controller.signal })
+      .then((response) => {
+        setData(response);
+        if (!currency && ['payments', 'refunds', 'revenue'].includes(report) && response.configuredCurrency) {
+          setCurrency(response.configuredCurrency);
+        }
+      })
+      .catch((issue) => {
+        if (issue.name !== 'AbortError') setError(issue.message || 'The report could not be loaded.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [report, period, startDate, endDate, status, q, currency, categoryId, vendorId, customerId, sortBy, sortDirection, page]);
 
-  if (error) return <div className="alert error">{error}</div>;
-  if (!data) return <div className="loading"><span className="spinner" />Loading analytics…</div>;
+  async function exportReport() {
+    setExporting(true);
+    setError('');
+    try {
+      const response = await apiClient.request({
+        url: `/admin/reports/export?${new URLSearchParams([...parameters.entries()].filter(([key]) => key !== 'page' && key !== 'pageSize')).toString()}`,
+        method: 'GET',
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(response.data);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${report}-report.csv`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (issue) {
+      setError(issue.message || 'The report could not be exported.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const rows = data?.data || [];
+  const columns = rows.length ? Object.keys(rows[0]) : [];
+  const chartData = data?.chartData || [];
+  const maxChartValue = Math.max(1, ...chartData.map((item) => Number(item.value || 0)));
+  const formattedValue = (value) => typeof value === 'number' && Number.isFinite(value)
+    ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)
+    : value ?? '—';
 
   return (
-    <div className="report-grid">
-      {Object.entries(data).map(([group, values]) => (
-        <article className="panel report-card" key={group}>
-          <h3>{group.replaceAll('_', ' ')}</h3>
-          {Object.entries(values).map(([key, value]) => (
-            <div className="report-row" key={key}>
-              <span>{key.replaceAll('_', ' ')}</span>
-              <strong>{value ?? 0}</strong>
-            </div>
+    <section className="admin-reports">
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Administrator analytics</p>
+          <h2>Reports</h2>
+          <p className="muted">Database-backed reports, filtered by the configured reporting timezone.</p>
+        </div>
+        <button className="button" type="button" disabled={!data || exporting || loading} onClick={exportReport}>
+          {exporting ? 'Preparing CSV…' : 'Export CSV'}
+        </button>
+      </div>
+      <div className="panel report-filters">
+        <label className="field"><span>Report</span><select value={report} onChange={(event) => {
+          setReport(event.target.value);
+          setStatus('');
+          setCurrency('');
+          setCategoryId('');
+          setVendorId('');
+          setCustomerId('');
+          setSortBy('');
+          setPage(1);
+        }}>
+          {ADMIN_REPORTS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>
+        <label className="field"><span>Date range</span><select value={period} onChange={(event) => { setPeriod(event.target.value); setPage(1); }}>
+          {REPORT_PERIODS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>
+        {period === 'custom' && <>
+          <label className="field"><span>Start date</span><input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); setPage(1); }} /></label>
+          <label className="field"><span>End date</span><input type="date" value={endDate} onChange={(event) => { setEndDate(event.target.value); setPage(1); }} /></label>
+        </>}
+        <label className="field"><span>Search</span><input type="search" maxLength={120} value={q} placeholder="Search report records" onChange={(event) => { setQ(event.target.value); setPage(1); }} /></label>
+        <label className="field"><span>Status</span>
+          {REPORT_STATUS_OPTIONS[report]
+            ? <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}>
+              <option value="">Any status</option>
+              {REPORT_STATUS_OPTIONS[report].map((value) => <option key={value} value={value}>{value.replaceAll('_', ' ')}</option>)}
+            </select>
+            : <input maxLength={40} value={status} placeholder="Any status" onChange={(event) => { setStatus(event.target.value); setPage(1); }} />}
+        </label>
+        {['payments', 'refunds', 'revenue'].includes(report) && <label className="field"><span>Currency</span><input maxLength={3} pattern="[A-Za-z]{3}" value={currency} onChange={(event) => { setCurrency(event.target.value.toUpperCase()); setPage(1); }} /></label>}
+        {['bookings', 'categories', 'reviews', 'complaints', 'vendor-performance', 'booking-outcomes'].includes(report) && <>
+          <label className="field"><span>Category ID</span><input type="number" min="1" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); setPage(1); }} /></label>
+          <label className="field"><span>Vendor ID</span><input type="number" min="1" value={vendorId} onChange={(event) => { setVendorId(event.target.value); setPage(1); }} /></label>
+          <label className="field"><span>Customer ID</span><input type="number" min="1" value={customerId} onChange={(event) => { setCustomerId(event.target.value); setPage(1); }} /></label>
+        </>}
+        <label className="field"><span>Sort by</span><select value={sortBy} onChange={(event) => { setSortBy(event.target.value); setPage(1); }}>
+          <option value="">Default</option>
+          {(REPORT_SORT_OPTIONS[report] || []).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>
+        <label className="field"><span>Direction</span><select value={sortDirection} onChange={(event) => { setSortDirection(event.target.value); setPage(1); }}>
+          <option value="desc">Descending</option><option value="asc">Ascending</option>
+        </select></label>
+      </div>
+      {error && <div className="alert error" role="alert">{error}</div>}
+      {data && <>
+        <div className="report-summary">
+          {(Array.isArray(data.summary) ? data.summary : []).map((item) => (
+            <article className="panel report-summary-card" key={item.label}>
+              <span>{String(item.label).replaceAll('_', ' ')}</span>
+              <strong>{formattedValue(item.value)}{item.currency ? ` ${item.currency}` : ''}</strong>
+              {item.grossPayments !== undefined && <small>Gross {formattedValue(item.grossPayments)} · Refunds {formattedValue(item.refunds)} · Net {formattedValue(item.netRevenue)}</small>}
+            </article>
           ))}
-        </article>
-      ))}
-    </div>
+        </div>
+        {!!chartData.length && <section className="panel report-chart">
+          <h3>{ADMIN_REPORTS.find(([value]) => value === report)?.[1]} overview</h3>
+          <div className="report-bars" role="img" aria-label="Report totals by category">
+            {chartData.slice(0, 20).map((item, index) => (
+              <div className="report-bar-row" key={`${item.label}-${item.currency || ''}-${index}`}>
+                <span title={item.label}>{item.label}{item.currency ? ` · ${item.currency}` : ''}</span>
+                <div className="report-bar-track"><div style={{ width: `${Math.min(100, Math.max(1, Number(item.value || 0) / maxChartValue * 100))}%` }} /></div>
+                <strong>{formattedValue(Number(item.value || 0))}</strong>
+              </div>
+            ))}
+          </div>
+        </section>}
+        <section className="panel report-table-panel">
+          <div className="report-table-heading">
+            <h3>Detailed records</h3>
+            <span className="muted">{data.pagination?.total || 0} records · Generated {data.generatedAt ? new Date(data.generatedAt).toLocaleString() : '—'}</span>
+          </div>
+          <div className="report-table-scroll">
+            <table className="data-table">
+              <thead><tr>{columns.map((column) => <th key={column}>{column.replaceAll('_', ' ')}</th>)}</tr></thead>
+              <tbody>
+                {rows.map((row, index) => <tr key={row.id ?? row.booking_reference ?? `${index}`}>
+                  {columns.map((column) => <td key={column}>{row[column] === null || row[column] === undefined ? '—' : formattedValue(row[column])}</td>)}
+                </tr>)}
+                {!rows.length && <tr><td className="empty" colSpan={Math.max(1, columns.length)}>{loading ? 'Loading report…' : 'No records match these filters.'}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="report-pagination">
+            <span className="muted">Page {data.pagination?.page || 1} of {Math.max(1, data.pagination?.totalPages || 1)}</span>
+            <div><button className="button secondary" type="button" disabled={loading || page <= 1} onClick={() => setPage((value) => value - 1)}>Previous</button>
+              <button className="button secondary" type="button" disabled={loading || page >= (data.pagination?.totalPages || 1)} onClick={() => setPage((value) => value + 1)}>Next</button></div>
+          </div>
+          <details className="report-metadata"><summary>Applied filters</summary><pre>{JSON.stringify(data.appliedFilters, null, 2)}</pre></details>
+        </section>
+      </>}
+      {!data && !error && <div className="panel report-empty">{loading ? 'Loading report…' : period === 'custom' ? 'Choose both dates to generate a custom report.' : 'No report data available.'}</div>}
+    </section>
   );
 }
 
@@ -3905,14 +4446,31 @@ function SettingsPage() {
   const t = (key) => translate(key, language);
   const [settings, setSettings] = useState(null);
   const [savedSettings, setSavedSettings] = useState(null);
+  const [configuration, setConfiguration] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [reloadToken, setReloadToken] = useState(0);
   const dirty = settings && JSON.stringify(settings) !== JSON.stringify(savedSettings);
+  const consequentialKeys = [
+    'public_registration_enabled',
+    'default_registration_role',
+    'platform_status',
+    'maintenance_mode',
+    'booking_cancellation_cutoff_hours',
+    'booking_rescheduling_enabled',
+    'booking_reschedule_cutoff_hours',
+    'booking_confirmation_workflow',
+    'vendor_require_category',
+    'vendor_require_city',
+    'vendor_require_description',
+    'refund_request_window_days',
+  ];
 
   useEffect(() => {
     const controller = new AbortController();
+    setLoading(true);
     if (DEMO_AUTH_ENABLED) {
       setError('System settings require a connected server and are unavailable in demo mode.');
       setLoading(false);
@@ -3925,6 +4483,7 @@ function SettingsPage() {
       }
       setSettings(response.settings);
       setSavedSettings(response.settings);
+      setConfiguration(response.configuration || {});
       setError('');
     }).catch((issue) => {
       if (issue.name !== 'AbortError') setError(issue.message || 'The settings could not be loaded.');
@@ -3932,7 +4491,7 @@ function SettingsPage() {
       if (!controller.signal.aborted) setLoading(false);
     });
     return () => controller.abort();
-  }, []);
+  }, [reloadToken]);
 
   function changeSetting(key, value) {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -3959,13 +4518,16 @@ function SettingsPage() {
   async function saveSettings(event) {
     event.preventDefault();
     if (!dirty || saving) return;
+    const changedConsequential = consequentialKeys.filter((key) => JSON.stringify(settings[key]) !== JSON.stringify(savedSettings?.[key]));
+    const confirmConsequential = changedConsequential.length > 0;
+    if (confirmConsequential && !window.confirm(`Apply consequential settings changes (${changedConsequential.join(', ')})?`)) return;
     setSaving(true);
     setError('');
     setNotice('');
     try {
       const response = await api('/admin/settings', {
         method: 'PATCH',
-        body: JSON.stringify(settings),
+        body: JSON.stringify({ ...settings, confirmConsequential }),
       });
       if (!response.data || typeof response.data !== 'object') {
         throw new Error('The settings response was invalid.');
@@ -3987,7 +4549,7 @@ function SettingsPage() {
     setError('');
     setNotice('');
     try {
-      const response = await api('/admin/settings/reset', { method: 'POST', body: JSON.stringify({}) });
+      const response = await api('/admin/settings/reset', { method: 'POST', body: JSON.stringify({ confirm: true }) });
       if (!response.data || typeof response.data !== 'object') {
         throw new Error('The reset response was invalid.');
       }
@@ -4023,7 +4585,9 @@ function SettingsPage() {
         </div>
       </div>
       {notice && <div className="alert success" role="status">{notice}</div>}
-      {error && <div className="alert error" role="alert"><strong>{t('failedToSaveSettings')}</strong> {error}</div>}
+      {error && <div className="alert error" role="alert"><strong>{t('failedToSaveSettings')}</strong> {error}
+        {!settings && !DEMO_AUTH_ENABLED && <button className="text-link" type="button" onClick={() => setReloadToken((value) => value + 1)}>Retry</button>}
+      </div>}
       {settings && (
         <>
           <section className="system-settings-grid" aria-label={t('systemSettings')}>
@@ -4032,24 +4596,124 @@ function SettingsPage() {
               <div className="system-settings-fields">
                 {textField('platform_name', 'platformName', { maxLength: 100 })}
                 {textField('platform_description', 'platformDescription', { multiline: true, maxLength: 500 })}
+                <label className="field">
+                  <span>{t('brandingLogoUrl')}</span>
+                  <input type="url" pattern="https://.*" maxLength={500} placeholder="https://example.com/logo.png" value={settings.branding_logo_url || ''} disabled={saving} onChange={(event) => changeSetting('branding_logo_url', event.target.value)} />
+                </label>
                 {textField('support_email', 'supportEmail', { type: 'email', maxLength: 254 })}
                 {textField('support_phone', 'supportPhone', { type: 'tel', maxLength: 40 })}
                 {textField('support_address', 'supportAddress', { maxLength: 255 })}
                 {textField('support_hours', 'supportHours', { maxLength: 255 })}
                 {textField('social_links', 'socialLinks', { multiline: true, maxLength: 5000 })}
+                <label className="field">
+                  <span>{t('platformLocale')}</span>
+                  <select value={settings.platform_locale} disabled={saving} onChange={(event) => changeSetting('platform_locale', event.target.value)}>
+                    <option value="en">English</option><option value="am">አማርኛ</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t('platformCurrency')}</span>
+                  <input required pattern="[A-Z]{3}" maxLength={3} value={settings.platform_currency || 'ETB'} disabled={saving} onChange={(event) => changeSetting('platform_currency', event.target.value.toUpperCase())} />
+                </label>
+                <label className="field">
+                  <span>{t('reportTimezone')}</span>
+                  <input required maxLength={64} value={settings.report_timezone || 'Africa/Addis_Ababa'} disabled={saving} onChange={(event) => changeSetting('report_timezone', event.target.value)} />
+                </label>
+              </div>
+            </article>
+            <article className="panel system-settings-card">
+              <h3>{t('bookingSettings')}</h3>
+              <div className="system-settings-fields">
+                <label className="field">
+                  <span>{t('bookingConfirmationWorkflow')}</span>
+                  <select value={settings.booking_confirmation_workflow} disabled={saving} onChange={(event) => changeSetting('booking_confirmation_workflow', event.target.value)}>
+                    <option value="vendor_acceptance">{t('vendorAcceptance')}</option>
+                    <option value="administrator_approval">{t('administratorApproval')}</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>{t('cancellationCutoffHours')}</span>
+                  <input type="number" min="0" max="8760" step="1" value={settings.booking_cancellation_cutoff_hours} disabled={saving} onChange={(event) => changeSetting('booking_cancellation_cutoff_hours', Number(event.target.value))} />
+                </label>
+                <label className="settings-toggle">
+                  <span><strong>{t('bookingReschedulingEnabled')}</strong><small>{t('bookingRulesHelp')}</small></span>
+                  <input type="checkbox" checked={settings.booking_rescheduling_enabled} disabled={saving} onChange={(event) => changeSetting('booking_rescheduling_enabled', event.target.checked)} />
+                </label>
+                <label className="field">
+                  <span>{t('rescheduleCutoffHours')}</span>
+                  <input type="number" min="0" max="8760" step="1" value={settings.booking_reschedule_cutoff_hours} disabled={saving || !settings.booking_rescheduling_enabled} onChange={(event) => changeSetting('booking_reschedule_cutoff_hours', Number(event.target.value))} />
+                </label>
+                <p className="settings-readonly-note">{t('bookingTimeLimitNote')}</p>
+              </div>
+            </article>
+            <article className="panel system-settings-card">
+              <h3>{t('vendorSettings')}</h3>
+              <div className="system-settings-fields">
+                <label className="settings-toggle">
+                  <span><strong>{t('requireVendorCategory')}</strong><small>{t('vendorInformationHelp')}</small></span>
+                  <input type="checkbox" checked={settings.vendor_require_category} disabled={saving} onChange={(event) => changeSetting('vendor_require_category', event.target.checked)} />
+                </label>
+                <label className="settings-toggle">
+                  <span><strong>{t('requireVendorCity')}</strong></span>
+                  <input type="checkbox" checked={settings.vendor_require_city} disabled={saving} onChange={(event) => changeSetting('vendor_require_city', event.target.checked)} />
+                </label>
+                <label className="settings-toggle">
+                  <span><strong>{t('requireVendorDescription')}</strong></span>
+                  <input type="checkbox" checked={settings.vendor_require_description} disabled={saving} onChange={(event) => changeSetting('vendor_require_description', event.target.checked)} />
+                </label>
+                <div className="settings-status-row"><span>{t('vendorVerificationStatus')}</span><strong>{t('alwaysRequired')}</strong></div>
+                <p className="settings-readonly-note">{t('servicePublicationRuleNote')}</p>
+              </div>
+            </article>
+            <article className="panel system-settings-card">
+              <h3>{t('notificationSettings')}</h3>
+              <div className="system-settings-fields">
+                <label className="settings-toggle">
+                  <span><strong>{t('notifyUserRegistrations')}</strong></span>
+                  <input type="checkbox" checked={settings.notify_admin_user_registrations} disabled={saving} onChange={(event) => changeSetting('notify_admin_user_registrations', event.target.checked)} />
+                </label>
+                <label className="settings-toggle">
+                  <span><strong>{t('notifyVendorApplications')}</strong></span>
+                  <input type="checkbox" checked={settings.notify_admin_vendor_applications} disabled={saving} onChange={(event) => changeSetting('notify_admin_vendor_applications', event.target.checked)} />
+                </label>
+                <label className="settings-toggle">
+                  <span><strong>{t('notifyComplaints')}</strong></span>
+                  <input type="checkbox" checked={settings.notify_admin_complaints} disabled={saving} onChange={(event) => changeSetting('notify_admin_complaints', event.target.checked)} />
+                </label>
+                {['inApp', 'email', 'sms'].map((channel) => (
+                  <div className="settings-status-row" key={channel}>
+                    <span>{t(`notificationChannel_${channel}`)}</span>
+                    <strong>{configuration?.notifications?.[channel]?.configured ? t('configured') : t('notConfigured')}</strong>
+                  </div>
+                ))}
+                <p className="settings-readonly-note">{t('emailSecretsNote')}</p>
+              </div>
+            </article>
+            <article className="panel system-settings-card">
+              <h3>{t('paymentSettings')}</h3>
+              <div className="system-settings-fields">
+                <label className="field">
+                  <span>{t('refundRequestWindowDays')}</span>
+                  <input type="number" min="0" max="365" step="1" value={settings.refund_request_window_days} disabled={saving} onChange={(event) => changeSetting('refund_request_window_days', Number(event.target.value))} />
+                </label>
+                <div className="settings-status-row">
+                  <span>{t('paymentProviderStatus')}</span>
+                  <strong>{configuration?.payments?.configured ? `${t('configured')} (${configuration.payments.provider})` : t('pendingIntegration')}</strong>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t('supportedCurrencies')}</span>
+                  <strong>{configuration?.payments?.supportedCurrencies?.join(', ') || settings.platform_currency}</strong>
+                </div>
+                <p className="settings-readonly-note">{t('paymentSecretsNote')}</p>
               </div>
             </article>
             <article className="panel system-settings-card">
               <h3>{t('securitySettings')}</h3>
               <div className="system-settings-fields">
-                <label className="field">
-                  <span>{t('platformStatus')}</span>
-                  <select value={settings.platform_status} disabled={saving} onChange={(event) => changePlatformStatus(event.target.value)}>
-                    <option value="open">{t('platformOpen')}</option>
-                    <option value="locked">{t('platformLocked')}</option>
-                    <option value="maintenance">{t('maintenance')}</option>
-                  </select>
-                </label>
+                <div className="settings-status-row"><span>{t('administratorSession')}</span><strong>{configuration?.security?.administratorSessionHours || 8} {t('hours')}</strong></div>
+                <div className="settings-status-row"><span>{t('userSession')}</span><strong>{configuration?.security?.userSessionHours || 8} {t('hours')}</strong></div>
+                <div className="settings-status-row"><span>{t('passwordPolicy')}</span><strong>{configuration?.security?.passwordMinimumLength || 12}–{configuration?.security?.passwordMaximumLength || 16} {t('charactersStrongPassword')}</strong></div>
+                <p className="settings-readonly-note">{t('securityPolicyReadonlyNote')}</p>
                 <label className="field">
                   <span>{t('defaultRegistrationRole')}</span>
                   <select value={settings.default_registration_role} disabled={saving} onChange={(event) => changeSetting('default_registration_role', event.target.value)}>
@@ -4061,6 +4725,19 @@ function SettingsPage() {
                 <label className="settings-toggle">
                   <span><strong>{t('publicRegistration')}</strong><small>{t('publicRegistrationHelp')}</small></span>
                   <input type="checkbox" checked={settings.public_registration_enabled} disabled={saving} onChange={(event) => changeSetting('public_registration_enabled', event.target.checked)} />
+                </label>
+              </div>
+            </article>
+            <article className="panel system-settings-card">
+              <h3>{t('maintenanceSettings')}</h3>
+              <div className="system-settings-fields">
+                <label className="field">
+                  <span>{t('platformStatus')}</span>
+                  <select value={settings.platform_status} disabled={saving} onChange={(event) => changePlatformStatus(event.target.value)}>
+                    <option value="open">{t('platformOpen')}</option>
+                    <option value="locked">{t('platformLocked')}</option>
+                    <option value="maintenance">{t('maintenance')}</option>
+                  </select>
                 </label>
                 <label className="settings-toggle">
                   <span><strong>{t('maintenanceMode')}</strong><small>{t('maintenanceModeHelp')}</small></span>
@@ -4122,21 +4799,27 @@ export default function App(){
     }
 
     const controller = new AbortController();
-    const updateAvailability = (settings) => setPlatformAvailability((current) => ({
-      ...current,
-      platformName: settings.platform_name ?? current?.platformName ?? 'EventHub',
-      platformDescription: settings.platform_description ?? current?.platformDescription ?? '',
-      maintenanceMode: Boolean(settings.maintenance_mode) || settings.platform_status === 'maintenance' || settings.platform_status === 'locked' || current?.maintenanceMode === true && settings.maintenance_mode === undefined && settings.platform_status === undefined,
-      maintenanceMessage: settings.maintenance_message ?? current?.maintenanceMessage ?? '',
-      publicRegistrationEnabled: settings.public_registration_enabled ?? current?.publicRegistrationEnabled ?? true,
-      defaultRegistrationRole: settings.default_registration_role ?? current?.defaultRegistrationRole ?? 'customer',
-      supportEmail: settings.support_email ?? current?.supportEmail ?? '',
-      supportPhone: settings.support_phone ?? current?.supportPhone ?? '',
-    }));
+    const updateAvailability = (settings) => {
+      if (settings.platform_locale) setPlatformDefaultLanguage(settings.platform_locale);
+      setPlatformAvailability((current) => ({
+        ...current,
+        platformName: settings.platform_name ?? current?.platformName ?? 'EventHub',
+        platformDescription: settings.platform_description ?? current?.platformDescription ?? '',
+        brandingLogoUrl: settings.branding_logo_url ?? current?.brandingLogoUrl ?? '',
+        platformLocale: settings.platform_locale ?? current?.platformLocale ?? 'en',
+        maintenanceMode: Boolean(settings.maintenance_mode) || settings.platform_status === 'maintenance' || settings.platform_status === 'locked' || current?.maintenanceMode === true && settings.maintenance_mode === undefined && settings.platform_status === undefined,
+        maintenanceMessage: settings.maintenance_message ?? current?.maintenanceMessage ?? '',
+        publicRegistrationEnabled: settings.public_registration_enabled ?? current?.publicRegistrationEnabled ?? true,
+        defaultRegistrationRole: settings.default_registration_role ?? current?.defaultRegistrationRole ?? 'customer',
+        supportEmail: settings.support_email ?? current?.supportEmail ?? '',
+        supportPhone: settings.support_phone ?? current?.supportPhone ?? '',
+      }));
+    };
 
     api('/platform/availability', { signal: controller.signal }).then((response) => {
       if (!response.data || typeof response.data !== 'object') throw new Error('Platform availability could not be loaded.');
       setPlatformAvailability(response.data);
+      if (response.data.platformLocale) setPlatformDefaultLanguage(response.data.platformLocale);
     }).catch((issue) => {
       if (issue.name !== 'AbortError') setGlobalError(issue.message || 'Platform availability could not be loaded.');
     });
@@ -4153,6 +4836,7 @@ export default function App(){
     if (!platformAvailability) return;
     document.documentElement.dataset.platformName = platformAvailability.platformName || 'EventHub';
     document.documentElement.dataset.platformDescription = platformAvailability.platformDescription || '';
+    document.documentElement.dataset.brandingLogoUrl = platformAvailability.brandingLogoUrl || '';
     document.documentElement.dataset.supportEmail = platformAvailability.supportEmail || '';
     document.documentElement.dataset.supportPhone = platformAvailability.supportPhone || '';
     if (platformAvailability.platformName) document.title = `${platformAvailability.platformName} | Event planning and vendor booking`;
@@ -4215,6 +4899,13 @@ export default function App(){
       setPortal('admin');
     }
   }, [authSessionState]);
+
+  useEffect(() => {
+    if (!checking && !user && currentPath.split('?')[0].startsWith('/admin')) {
+      window.history.replaceState({}, '', '/login');
+      setCurrentPath('/login');
+    }
+  }, [checking, currentPath, user]);
 
   useEffect(() => {
     function handleAuthInvalidated() {
@@ -4306,16 +4997,34 @@ export default function App(){
   function navigate(next){history.pushState({},'',slugPath(next));setSlug(next);setSidebarOpen(false);setGlobalError('');}
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
+    if (!window.confirm(translate('confirmLogout', language))) return;
     try {
       if (DEMO_AUTH_ENABLED) clearDemoSession();
       else if (portal === 'admin') await api('/auth/logout',{method:'POST'});
       else if (user) await api('/platform/logout',{method:'POST'});
     } catch (issue) {
-      setGlobalError(issue.message);
-    } finally {
-      authSessionLoader.setUnauthenticated();
-      setUser(null);setShowLogin(false);setPortal('admin');navigatePublic('/login');
+      setGlobalError(translate('logoutFailed', language));
+      if (issue.status === 401) {
+        authSessionLoader.setUnauthenticated();
+        setUser(null);
+        setPortal('admin');
+        window.history.replaceState({}, '', '/login');
+        setCurrentPath('/login');
+      }
+      return;
     }
+    authSessionLoader.setUnauthenticated();
+    setUser(null);
+    setShowLogin(false);
+    setPortal('admin');
+    setGlobalError('');
+    try {
+      window.sessionStorage.removeItem('eventhub_after_login');
+    } catch (issue) {
+      console.error('Post-login navigation state could not be cleared:', issue);
+    }
+    window.history.replaceState({}, '', '/login');
+    setCurrentPath('/login');
   }
 
   const publicRoutes = {
@@ -4395,5 +5104,5 @@ export default function App(){
   if (portal === 'customer') return <><DemoModeBanner user={user}/><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
   if (portal === 'organizer') return <><DemoModeBanner user={user}/><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
   if (portal === 'vendor') return <><DemoModeBanner user={user}/><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  return <><DemoModeBanner user={user}/><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='profile'?<DataPage slug="profile" user={user} onUserChange={setUser}/>:slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
+  return <><DemoModeBanner user={user}/><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
 }

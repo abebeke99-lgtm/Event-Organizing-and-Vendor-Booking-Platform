@@ -127,7 +127,7 @@ export async function loadAdminDashboardOverview(database, dateRange) {
     ),
     queryRows(
       `SELECT COUNT(*) AS total_complaints,
-              COALESCE(SUM(c.status IN ('open', 'investigating')), 0) AS open_complaints
+              COALESCE(SUM(c.status IN ('open', 'under_review')), 0) AS open_complaints
        FROM complaints c${complaintsFilter.sql}`,
       complaintsFilter.values,
     ),

@@ -37,9 +37,13 @@ function createDatabase() {
   const statements = [];
   let permissionKeys = ['services.manage_own', 'bookings.view_own'];
   let nextServiceId = 1;
+  let platformCurrency = 'ETB';
 
   async function execute(sql, values = []) {
     statements.push({ sql, values });
+    if (sql.includes('FROM system_settings')) {
+      return [[{ setting_key: 'platform_currency', setting_value: platformCurrency }], []];
+    }
     if (sql.includes('FROM user_sessions s')) {
       return [values[0] === hashToken(sessionToken) ? [{ ...user, permission_keys: permissionKeys.join(',') }] : [], []];
     }
@@ -118,6 +122,7 @@ function createDatabase() {
     services,
     verificationDocuments,
     statements,
+    setPlatformCurrency(value) { platformCurrency = value; },
     execute,
     query: execute,
     setPermissionKeys(keys) { permissionKeys = keys; },
@@ -206,6 +211,7 @@ test('vendor can create and read an owned service through the injected database'
   const created = (await createResponse.json()).data;
   assert.equal(created.vendorId, user.id === 44 ? 10 : 0);
   assert.equal(created.status, 'Draft');
+  assert.equal(created.currency, 'ETB');
   assert.equal(database.services[0].vendor_id, 10);
 
   const listResponse = await request('/api/vendor/services');
@@ -213,6 +219,20 @@ test('vendor can create and read an owned service through the injected database'
   const list = (await listResponse.json()).data;
   assert.equal(list.length, 1);
   assert.equal(list[0].title, 'Wedding Catering');
+});
+
+test('new services use the configured platform currency when none is specified', async () => {
+  database.setPlatformCurrency('USD');
+  try {
+    const response = await request('/api/vendor/services', {
+      method: 'POST',
+      body: { title: 'Currency-aware service' },
+    });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).data.currency, 'USD');
+  } finally {
+    database.setPlatformCurrency('ETB');
+  }
 });
 
 test('unverified vendors cannot publish services and invalid service data is rejected', async () => {

@@ -13,11 +13,23 @@ import {
   isCriticalPermission,
   ROLE_PERMISSION_MATRIX,
 } from '../lib/rbac.js';
-import { writeAudit } from '../lib/security.js';
+import { createSession, writeAudit } from '../lib/security.js';
+import { createNotification } from '../lib/notificationService.js';
+import {
+  checkBookingDateAvailability,
+  releaseBookingDate,
+  reserveBookingDate,
+} from '../lib/bookingAvailability.js';
 import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
-import { getProfilePhoto, profilePhotoUploadParser, removeProfilePhoto, saveProfilePhoto } from '../lib/profilePhoto.js';
+import { isStrongPassword } from '../lib/authFlow.js';
+import {
+  getProfilePhoto,
+  MAX_PROFILE_PHOTO_BYTES,
+  profilePhotoUploadParser,
+  validateProfilePhoto,
+} from '../lib/profilePhoto.js';
 import {
   DEFAULT_SYSTEM_SETTINGS,
   SYSTEM_SETTING_SCHEMAS,
@@ -27,10 +39,72 @@ import {
   systemSettingsPatchSchema,
   updateSystemSettingsCache,
 } from '../lib/systemSettings.js';
+import {
+  adminEventListSchema,
+  hasScheduleOverlap,
+  parseAdminEventInput,
+  resolveEventStatus,
+  toEventLocalDateTime,
+} from '../lib/adminEvents.js';
 
 const router = Router();
 const profilePhotoParser = profilePhotoUploadParser(express);
+const categoryImageParser = express.raw({
+  type: ['image/jpeg', 'image/png', 'image/webp'],
+  limit: MAX_PROFILE_PHOTO_BYTES,
+});
 const idSchema = z.coerce.number().int().positive();
+const categoryFieldsSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).nullable().optional(),
+  display_order: z.coerce.number().int().min(0).max(100000).optional(),
+}).strict();
+const categoryStatusSchema = z.object({ is_active: z.boolean() }).strict();
+const categoryListSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  q: z.string().trim().max(120).optional(),
+  status: z.enum(['active', 'inactive', '1', '0']).optional(),
+  sortBy: z.enum(['id', 'name', 'display_order', 'service_count', 'is_active', 'created_at']).default('display_order'),
+  sortDirection: z.enum(['asc', 'desc']).default('asc'),
+}).strict();
+const bookingStatuses = ['requested', 'quoted', 'accepted', 'rejected', 'cancelled', 'completed', 'under_review'];
+const paymentStatuses = ['unpaid', 'pending', 'authorized', 'paid', 'failed', 'refunded', 'partially_refunded', 'refund_pending'];
+const bookingFilterShape = {
+  q: z.string().trim().max(120).optional(),
+  status: z.enum(bookingStatuses).optional(),
+  paymentStatus: z.enum(paymentStatuses).optional(),
+  categoryId: z.coerce.number().int().positive().optional(),
+  dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  sortBy: z.enum(['id', 'status', 'scheduled_date', 'created_at', 'quoted_amount', 'event_title', 'customer_name', 'vendor_name']).default('created_at'),
+  sortDirection: z.enum(['asc', 'desc']).default('desc'),
+};
+function validateBookingDateRange(query, context) {
+  if (query.dateFrom && !isValidDate(query.dateFrom)) {
+    context.addIssue({ code: 'custom', path: ['dateFrom'], message: 'Enter a valid start date.' });
+  }
+  if (query.dateTo && !isValidDate(query.dateTo)) {
+    context.addIssue({ code: 'custom', path: ['dateTo'], message: 'Enter a valid end date.' });
+  }
+  if (query.dateFrom && query.dateTo && query.dateFrom > query.dateTo) {
+    context.addIssue({ code: 'custom', path: ['dateTo'], message: 'End date must be on or after start date.' });
+  }
+}
+const bookingListSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  ...bookingFilterShape,
+}).strict().superRefine(validateBookingDateRange);
+const bookingExportSchema = z.object(bookingFilterShape).strict().superRefine(validateBookingDateRange);
+const bookingActionSchema = z.object({
+  status: z.enum(['under_review', 'accepted', 'rejected', 'cancelled', 'completed']),
+  reason: z.string().trim().max(500).optional().default(''),
+}).strict();
+const bookingRescheduleSchema = z.object({
+  scheduled_date: z.string().trim().min(16).max(32),
+  reason: z.string().trim().min(5).max(500),
+}).strict();
 const userListSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -64,6 +138,14 @@ const vendorVerificationStatusSchema = z.object({
   status: z.enum(['under_review', 'verified', 'rejected', 'information_requested', 'suspended']),
   reason: z.string().trim().min(5).max(1000),
 }).strict();
+const eventStatusActionSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('approve') }).strict(),
+  z.object({ action: z.literal('reject'), reason: z.string().trim().min(5).max(1000) }).strict(),
+  z.object({ action: z.literal('publish') }).strict(),
+  z.object({ action: z.literal('unpublish'), reason: z.string().trim().min(5).max(1000).optional() }).strict(),
+  z.object({ action: z.literal('cancel'), reason: z.string().trim().min(5).max(1000) }).strict(),
+  z.object({ action: z.literal('complete') }).strict(),
+]);
 
 const resources = {
   users: {
@@ -95,11 +177,11 @@ const resources = {
   categories: {
     table: 'service_categories',
     id: 'id',
-    columns: ['id', 'name', 'description', 'is_active', 'created_at'],
+    columns: ['id', 'name', 'description', 'display_order', 'image_mime', 'is_active', 'created_at'],
     search: ['name', 'description'],
     statuses: ['1', '0'],
     statusField: 'is_active',
-    mutable: ['name', 'description', 'is_active'],
+    mutable: ['name', 'description', 'display_order', 'is_active'],
     required: ['name'],
     deactivate: { column: 'is_active', value: 0 },
   },
@@ -134,10 +216,10 @@ const resources = {
   payments: {
     table: 'payments',
     id: 'id',
-    columns: ['id', 'booking_id', 'amount', 'currency', 'provider', 'provider_reference', 'status', 'created_at'],
-    search: ['provider', 'provider_reference', 'currency'],
-    statuses: ['pending', 'authorized', 'paid', 'failed', 'refunded', 'refund_pending'],
-    mutable: ['status'],
+    columns: ['id', 'booking_id', 'amount', 'currency', 'provider', 'payment_method', 'provider_reference', 'status', 'verified_at', 'created_at'],
+    search: ['provider', 'provider_reference', 'payment_method', 'currency'],
+    statuses: ['pending', 'authorized', 'paid', 'failed', 'cancelled', 'refunded', 'partially_refunded', 'refund_pending'],
+    mutable: null,
   },
   reviews: {
     table: 'reviews',
@@ -145,17 +227,15 @@ const resources = {
     columns: ['id', 'booking_id', 'rating', 'comment', 'status', 'created_at'],
     search: ['comment'],
     statuses: ['published', 'hidden', 'flagged'],
-    mutable: ['status'],
-    deactivate: { column: 'status', value: 'hidden' },
+    mutable: [],
   },
   complaints: {
     table: 'complaints',
     id: 'id',
     columns: ['id', 'user_id', 'booking_id', 'subject', 'details', 'status', 'resolution', 'created_at'],
     search: ['subject', 'details'],
-    statuses: ['open', 'investigating', 'resolved', 'dismissed'],
-    mutable: ['status', 'resolution'],
-    deactivate: { column: 'status', value: 'dismissed' },
+    statuses: ['open', 'under_review', 'resolved', 'closed'],
+    mutable: [],
   },
   notifications: {
     table: 'notifications',
@@ -163,8 +243,7 @@ const resources = {
     columns: ['id', 'user_id', 'title', 'message', 'status', 'created_at'],
     search: ['title', 'message'],
     statuses: ['queued', 'sent', 'failed', 'read'],
-    mutable: ['user_id', 'title', 'message', 'status'],
-    required: ['title', 'message'],
+    mutable: [],
   },
 };
 
@@ -218,7 +297,7 @@ async function transitionVendorVerification(database, { vendorId, actorId, statu
      WHERE id = ?`,
     [status, reason, status, status, vendorId],
   );
-  await database.execute(
+  const [history] = await database.execute(
     `INSERT INTO vendor_verification_history (vendor_id, actor_id, from_status, to_status, reason)
      VALUES (?, ?, ?, ?, ?)`,
     [vendorId, actorId, vendor.verification_status, status, reason],
@@ -231,10 +310,16 @@ async function transitionVendorVerification(database, { vendorId, actorId, statu
     suspended: ['Vendor account suspended', `Your vendor account has been suspended: ${reason}`],
   }[status];
   if (notice) {
-    await database.execute(
-      'INSERT INTO notifications (user_id, title, message) VALUES (?, ?, ?)',
-      [vendor.user_id, notice[0], notice[1]],
-    );
+    await createNotification(database, {
+      userId: vendor.user_id,
+      title: notice[0],
+      message: notice[1],
+      type: 'vendor_verification',
+      relatedType: 'vendor',
+      relatedId: vendorId,
+      idempotencyKey: `vendor-status:${vendorId}:${history.insertId}`,
+      actorId,
+    });
   }
   await writeAudit(database, {
     actorId,
@@ -383,7 +468,15 @@ router.get('/roles', requirePermission('roles.manage'), async (req, res, next) =
       is_assignable: !role.is_admin && ASSIGNABLE_PLATFORM_ROLES.includes(String(role.name).toLowerCase()),
       permission_policy_count: getRolePermissionPolicy(role.name).length,
     }));
-    res.json({ data: rows, pagination: { page, pageSize, total: Number(count.total) } });
+    res.json({
+      data: rows.map((row) => ({
+        ...row,
+        status: resolveEventStatus(row.status),
+        start_date: toEventLocalDateTime(row.start_date),
+        end_date: toEventLocalDateTime(row.end_date),
+      })),
+      pagination: { page, pageSize, total: Number(count.total) },
+    });
   } catch (error) {
     next(error);
   }
@@ -612,14 +705,14 @@ router.patch('/security/lock', async (req, res, next) => {
   }
 });
 
-router.get('/reports/summary', async (req, res, next) => {
+router.get('/reports/summary', requirePermission('reports.view'), async (req, res, next) => {
   try {
     const [[users]] = await pool.query(`SELECT COUNT(*) AS total_users, SUM(status = 'active') AS active_users FROM users`);
     const [[vendors]] = await pool.query(`SELECT COUNT(*) AS total_vendors, SUM(verification_status = 'pending') AS pending_vendors, SUM(verification_status = 'verified') AS verified_vendors FROM vendor_profiles`);
     const [[events]] = await pool.query(`SELECT COUNT(*) AS total_events, SUM(status = 'completed') AS completed_events FROM events`);
     const [[bookings]] = await pool.query(`SELECT COUNT(*) AS total_bookings, SUM(status = 'under_review') AS bookings_under_review FROM bookings`);
     const [[payments]] = await pool.query(`SELECT COUNT(*) AS total_payments, SUM(status = 'paid') AS confirmed_payments, SUM(status = 'refund_pending') AS refunds_pending FROM payments`);
-    const [[complaints]] = await pool.query(`SELECT COUNT(*) AS open_complaints FROM complaints WHERE status IN ('open', 'investigating')`);
+    const [[complaints]] = await pool.query(`SELECT COUNT(*) AS open_complaints FROM complaints WHERE status IN ('open', 'under_review')`);
     res.json({ data: { users, vendors, events, bookings, payments, complaints } });
   } catch (error) {
     next(error);
@@ -638,49 +731,87 @@ router.get('/dashboard/overview', async (req, res, next) => {
   }
 });
 
-router.get('/audit-logs', async (req, res, next) => {
-  const parsed = pageSchema.safeParse(req.query);
-  if (!parsed.success) return sendError(res, parsed.error);
-  const { page, pageSize, q } = parsed.data;
-
+router.get('/settings', requirePermission('system.settings.manage'), async (req, res, next) => {
   try {
-    const values = [];
-    let where = '';
-    if (q) {
-      where = ' WHERE action LIKE ? OR entity_type LIKE ? OR entity_id LIKE ?';
-      values.push(`%${q}%`, `%${q}%`, `%${q}%`);
-    }
-    const [countRows] = await pool.execute(`SELECT COUNT(*) AS total FROM audit_logs${where}`, values);
-    const [rows] = await pool.execute(`SELECT id, actor_id, action, entity_type, entity_id, details, ip_address, created_at FROM audit_logs${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...values, Number(pageSize), Number((page - 1) * pageSize)]);
-    res.json({ data: rows, pagination: { page, pageSize, total: countRows[0].total } });
-  } catch (error) {
-    next(error);
-  }
-});
-
-router.get('/settings', async (req, res, next) => {
-  try {
+    const database = getDatabase(req);
     const supportedKeys = Object.keys(SYSTEM_SETTING_SCHEMAS);
     const placeholders = supportedKeys.map(() => '?').join(', ');
-    const [rows] = await pool.execute(
+    const [rows] = await database.execute(
       `SELECT setting_key, setting_value, updated_at FROM system_settings WHERE setting_key IN (${placeholders}) ORDER BY setting_key`,
       supportedKeys,
     );
     const settings = mergeSystemSettings(rows);
+    const [currencyRows] = await database.execute(
+      `SELECT currency FROM services
+       UNION SELECT currency FROM payments
+       UNION SELECT currency FROM bookings
+       ORDER BY currency`,
+    );
     const savedRows = new Map(rows.map((row) => [row.setting_key, row]));
     const data = Object.entries(settings).map(([setting_key, setting_value]) => ({
       setting_key,
       setting_value,
       updated_at: savedRows.get(setting_key)?.updated_at ?? null,
     }));
-    res.json({ data, settings });
+    const paymentProvider = req.app.locals.paymentProvider;
+    const notifications = req.app.locals.notificationServices || {};
+    res.json({
+      data,
+      settings,
+      configuration: {
+        notifications: {
+          inApp: { supported: true, configured: true },
+          email: { supported: true, configured: Boolean(notifications.emailConfigured) },
+          sms: { supported: false, configured: false },
+        },
+        payments: {
+          configured: Boolean(paymentProvider),
+          provider: paymentProvider?.name || null,
+          state: paymentProvider ? 'configured' : 'pending_integration',
+          supportedCurrencies: [...new Set(currencyRows.map((row) => String(row.currency || '').toUpperCase())
+            .filter((currency) => /^[A-Z]{3}$/.test(currency)))],
+        },
+        vendor: {
+          verificationRequired: true,
+          serviceApproval: 'not_supported',
+          requiredDocuments: 'configured_by_verification_workflow',
+        },
+        security: {
+          administratorSessionHours: 8,
+          userSessionHours: 8,
+          passwordMinimumLength: 12,
+          passwordMaximumLength: 16,
+          strongPasswordRequired: true,
+          credentialsManagedOutsideSystemSettings: true,
+        },
+      },
+    });
   } catch (error) {
     next(error);
   }
 });
 
-router.patch('/settings', async (req, res, next) => {
-  const parsed = systemSettingsPatchSchema.safeParse(req.body);
+const consequentialSettings = new Set([
+  'public_registration_enabled',
+  'default_registration_role',
+  'platform_status',
+  'maintenance_mode',
+  'booking_cancellation_cutoff_hours',
+  'booking_rescheduling_enabled',
+  'booking_reschedule_cutoff_hours',
+  'booking_confirmation_workflow',
+  'vendor_require_category',
+  'vendor_require_city',
+  'vendor_require_description',
+  'refund_request_window_days',
+]);
+
+router.patch('/settings', requirePermission('system.settings.manage'), async (req, res, next) => {
+  const { confirmConsequential = false, ...requestedSettings } = req.body || {};
+  if (typeof confirmConsequential !== 'boolean') {
+    return res.status(400).json({ error: 'Setting confirmation must be a boolean.' });
+  }
+  const parsed = systemSettingsPatchSchema.safeParse(requestedSettings);
   if (!parsed.success) {
     return res.status(400).json({
       error: 'One or more settings are invalid or unsupported.',
@@ -689,9 +820,22 @@ router.patch('/settings', async (req, res, next) => {
   }
 
   try {
-    const currentSettings = await loadSystemSettings(pool);
+    const database = getDatabase(req);
+    const currentSettings = await loadSystemSettings(database);
     const entries = Object.entries(parsed.data);
-    await inTransaction(async (db) => {
+    const changes = entries
+      .filter(([key, value]) => JSON.stringify(currentSettings[key]) !== JSON.stringify(value))
+      .map(([key, value]) => ({ key, from: currentSettings[key], to: value }));
+    if (changes.some(({ key }) => consequentialSettings.has(key)) && !confirmConsequential) {
+      return res.status(409).json({
+        error: 'Confirm consequential settings changes before saving.',
+        confirmationRequired: true,
+        keys: changes.filter(({ key }) => consequentialSettings.has(key)).map(({ key }) => key),
+      });
+    }
+    if (!changes.length) return res.json({ data: currentSettings });
+
+    await inDatabaseTransaction(database, async (db) => {
       for (const [key, value] of entries) {
         await db.execute(
           'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
@@ -702,7 +846,7 @@ router.patch('/settings', async (req, res, next) => {
         actorId: req.admin.id,
         action: 'settings.updated',
         entityType: 'system_settings',
-        details: { keys: entries.map(([key]) => key) },
+        details: { changes },
         ip: req.ip,
       });
     });
@@ -715,9 +859,14 @@ router.patch('/settings', async (req, res, next) => {
   }
 });
 
-router.post('/settings/reset', async (req, res, next) => {
+router.post('/settings/reset', requirePermission('system.settings.manage'), async (req, res, next) => {
+  if (req.body?.confirm !== true) {
+    return res.status(400).json({ error: 'Explicit confirmation is required to reset system settings.' });
+  }
   try {
-    await inTransaction(async (db) => {
+    const database = getDatabase(req);
+    const previousSettings = await loadSystemSettings(database);
+    await inDatabaseTransaction(database, async (db) => {
       for (const [key, value] of Object.entries(DEFAULT_SYSTEM_SETTINGS)) {
         await db.execute(
           'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
@@ -728,7 +877,11 @@ router.post('/settings/reset', async (req, res, next) => {
         actorId: req.admin.id,
         action: 'settings.reset',
         entityType: 'system_settings',
-        details: { keys: Object.keys(DEFAULT_SYSTEM_SETTINGS) },
+        details: {
+          changes: Object.entries(DEFAULT_SYSTEM_SETTINGS)
+            .filter(([key, value]) => JSON.stringify(previousSettings[key]) !== JSON.stringify(value))
+            .map(([key, value]) => ({ key, from: previousSettings[key], to: value })),
+        },
         ip: req.ip,
       });
     });
@@ -740,7 +893,7 @@ router.post('/settings/reset', async (req, res, next) => {
   }
 });
 
-router.put('/settings/:key', async (req, res, next) => {
+router.put('/settings/:key', requirePermission('system.settings.manage'), async (req, res, next) => {
   const key = String(req.params.key);
   const rawValue = req.body?.value;
   const value = ['maintenance_mode', 'public_registration_enabled'].includes(key) && ['true', 'false'].includes(rawValue)
@@ -752,12 +905,29 @@ router.put('/settings/:key', async (req, res, next) => {
   }
 
   try {
-    await inTransaction(async (db) => {
+    const database = getDatabase(req);
+    const current = await loadSystemSettings(database, [key]);
+    if (consequentialSettings.has(key)
+      && JSON.stringify(current[key]) !== JSON.stringify(parsed.data[key])
+      && req.body?.confirmConsequential !== true) {
+      return res.status(409).json({ error: 'Confirm this consequential setting change before saving.', confirmationRequired: true });
+    }
+    if (JSON.stringify(current[key]) === JSON.stringify(parsed.data[key])) {
+      return res.json({ data: { setting_key: key, setting_value: parsed.data[key] } });
+    }
+    await inDatabaseTransaction(database, async (db) => {
       await db.execute(
         'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
         [key, serializeSystemSettingValue(parsed.data[key]), req.admin.id]
       );
-      await writeAudit(db, { actorId: req.admin.id, action: 'settings.updated', entityType: 'system_setting', entityId: key, details: { key }, ip: req.ip });
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'settings.updated',
+        entityType: 'system_setting',
+        entityId: key,
+        details: { key, from: current[key], to: parsed.data[key] },
+        ip: req.ip,
+      });
     });
     updateSystemSettingsCache(req.app, parsed.data);
     res.json({ data: { setting_key: key, setting_value: parsed.data[key] } });
@@ -777,18 +947,166 @@ router.patch('/profile', async (req, res, next) => {
   }
 
   try {
+    const database = getDatabase(req);
     const fields = Object.keys(parsed.data);
-    await pool.execute(`UPDATE users SET ${fields.map((field) => `${field} = ?`).join(', ')} WHERE id = ?`, [...fields.map((field) => parsed.data[field]), req.admin.id]);
-    const [[profile]] = await pool.execute('SELECT id, full_name, email, phone FROM users WHERE id = ?', [req.admin.id]);
+    await inDatabaseTransaction(database, async (db) => {
+      const [[current]] = await db.execute(
+        'SELECT id, full_name, phone FROM users WHERE id = ? FOR UPDATE',
+        [req.admin.id],
+      );
+      if (!current) throw Object.assign(new Error('Administrator account not found.'), { status: 404 });
+      const changes = fields.filter((field) => current[field] !== parsed.data[field]);
+      if (!changes.length) return;
+      await db.execute(
+        `UPDATE users SET ${changes.map((field) => `${field} = ?`).join(', ')} WHERE id = ?`,
+        [...changes.map((field) => parsed.data[field]), req.admin.id],
+      );
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'admin.profile_updated',
+        entityType: 'user',
+        entityId: req.admin.id,
+        details: { fields: changes },
+        ip: req.ip,
+      });
+    });
+    const [[profile]] = await database.execute(
+      `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at,
+              GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles
+       FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.id = ?
+       GROUP BY u.id, u.full_name, u.email, u.phone, u.status, u.created_at`,
+      [req.admin.id],
+    );
+    if (!profile) return res.status(404).json({ error: 'Administrator account not found.' });
     res.json({ user: profile });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
   }
 });
 
-router.get('/profile/photo', asyncHandler(async (req, res) => getProfilePhoto(pool, req.admin.id, res)));
-router.put('/profile/photo', profilePhotoParser, asyncHandler(async (req, res) => saveProfilePhoto(pool, req.admin.id, req, res)));
-router.delete('/profile/photo', asyncHandler(async (req, res) => removeProfilePhoto(pool, req.admin.id, res)));
+router.get('/profile', asyncHandler(async (req, res) => {
+  const database = getDatabase(req);
+  const [[profile]] = await database.execute(
+    `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at,
+            (u.profile_photo IS NOT NULL) AS has_profile_photo,
+            GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles
+     FROM users u
+     JOIN user_roles ur ON ur.user_id = u.id
+     JOIN roles r ON r.id = ur.role_id
+     WHERE u.id = ?
+     GROUP BY u.id, u.full_name, u.email, u.phone, u.status, u.created_at, u.profile_photo`,
+    [req.admin.id],
+  );
+  if (!profile) return res.status(404).json({ error: 'Administrator account not found.' });
+  res.json({ data: profile });
+}));
+
+router.get('/profile/activity', asyncHandler(async (req, res) => {
+  const database = getDatabase(req);
+  const [activity] = await database.execute(
+    `SELECT id, action, entity_type, entity_id, outcome, severity, request_id, created_at
+     FROM audit_logs
+     WHERE actor_id = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT 20`,
+    [req.admin.id],
+  );
+  res.json({ data: activity });
+}));
+
+router.post('/profile/password', asyncHandler(async (req, res) => {
+  const parsed = z.object({
+    currentPassword: z.string().min(1).max(256),
+    newPassword: z.string().min(12).max(16).refine(isStrongPassword),
+  }).strict().safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'Provide your current password and a new password with 12–16 characters, including uppercase, lowercase, and a number.',
+    });
+  }
+  if (parsed.data.currentPassword === parsed.data.newPassword) {
+    return res.status(400).json({ error: 'Choose a new password different from your current password.' });
+  }
+
+  const database = getDatabase(req);
+  let newSession;
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const [[account]] = await db.execute(
+        'SELECT password_hash FROM users WHERE id = ? FOR UPDATE',
+        [req.admin.id],
+      );
+      if (!account || !await bcrypt.compare(parsed.data.currentPassword, account.password_hash)) {
+        throw Object.assign(new Error('The current password is incorrect.'), { status: 400 });
+      }
+      const nextPasswordHash = await bcrypt.hash(parsed.data.newPassword, 12);
+      await db.execute('UPDATE users SET password_hash = ? WHERE id = ?', [nextPasswordHash, req.admin.id]);
+      await db.execute('DELETE FROM admin_sessions WHERE user_id = ?', [req.admin.id]);
+      await db.execute('DELETE FROM user_sessions WHERE user_id = ?', [req.admin.id]);
+      newSession = await createSession(req.admin.id, db);
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'admin.password_changed',
+        entityType: 'user',
+        entityId: req.admin.id,
+        details: { sessions_invalidated: true },
+        ip: req.ip,
+        severity: 'critical',
+      });
+    });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
+  res.cookie('admin_session', newSession.token, {
+    httpOnly: true,
+    secure: process.env.COOKIE_SECURE === 'true',
+    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
+    path: '/',
+    expires: newSession.expiresAt,
+  });
+  res.json({ message: 'Password changed. Other account sessions have been signed out.' });
+}));
+
+router.get('/profile/photo', asyncHandler(async (req, res) => getProfilePhoto(getDatabase(req), req.admin.id, res)));
+router.put('/profile/photo', profilePhotoParser, asyncHandler(async (req, res) => {
+  const database = getDatabase(req);
+  const mimeType = req.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+  const validation = validateProfilePhoto(mimeType, req.body);
+  if (!validation.valid) return res.status(400).json({ error: validation.error });
+  await inDatabaseTransaction(database, async (db) => {
+    await db.execute('UPDATE users SET profile_photo = ?, profile_photo_mime = ? WHERE id = ?', [
+      req.body, mimeType, req.admin.id,
+    ]);
+    await writeAudit(db, {
+      actorId: req.admin.id,
+      action: 'admin.profile_photo_updated',
+      entityType: 'user',
+      entityId: req.admin.id,
+      details: { content_type: mimeType, size: req.body.length },
+      ip: req.ip,
+    });
+  });
+  res.json({ message: 'Profile photo saved.' });
+}));
+router.delete('/profile/photo', asyncHandler(async (req, res) => {
+  const database = getDatabase(req);
+  await inDatabaseTransaction(database, async (db) => {
+    await db.execute('UPDATE users SET profile_photo = NULL, profile_photo_mime = NULL WHERE id = ?', [req.admin.id]);
+    await writeAudit(db, {
+      actorId: req.admin.id,
+      action: 'admin.profile_photo_removed',
+      entityType: 'user',
+      entityId: req.admin.id,
+      ip: req.ip,
+    });
+  });
+  res.status(204).end();
+}));
 
 router.get('/users', async (req, res, next) => {
   const parsed = userListSchema.safeParse(req.query);
@@ -1093,7 +1411,15 @@ router.patch('/users/:id/role', async (req, res, next) => {
           SELECT 1 FROM user_roles current_ur
           JOIN roles current_r ON current_r.id = current_ur.role_id
           WHERE current_ur.user_id = u.id AND current_r.is_admin = TRUE
-        ) AS is_admin
+        ) AS is_admin,
+        (SELECT r.id FROM user_roles current_ur
+         JOIN roles r ON r.id = current_ur.role_id
+         WHERE current_ur.user_id = u.id AND r.is_admin = FALSE
+         ORDER BY r.id LIMIT 1) AS current_role_id,
+        (SELECT r.name FROM user_roles current_ur
+         JOIN roles r ON r.id = current_ur.role_id
+         WHERE current_ur.user_id = u.id AND r.is_admin = FALSE
+         ORDER BY r.id LIMIT 1) AS current_role_name
          FROM users u WHERE u.id = ? FOR UPDATE`,
         [userId.data],
       );
@@ -1107,7 +1433,17 @@ router.patch('/users/:id/role', async (req, res, next) => {
       await db.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [userId.data, roleId.data]);
       await db.execute('DELETE FROM user_sessions WHERE user_id = ?', [userId.data]);
       await db.execute('DELETE FROM admin_sessions WHERE user_id = ?', [userId.data]);
-      await writeAudit(db, { actorId: req.admin.id, action: 'user.role_changed', entityType: 'user', entityId: userId.data, details: { role_id: roleId.data }, ip: req.ip });
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'user.role_changed',
+        entityType: 'user',
+        entityId: userId.data,
+        details: {
+          from: target.current_role_id ? { id: Number(target.current_role_id), name: target.current_role_name } : null,
+          to: { id: roleId.data, name: role.name },
+        },
+        ip: req.ip,
+      });
     });
 
     res.json({ data: { id: userId.data, role_id: roleId.data } });
@@ -1405,43 +1741,502 @@ router.patch('/vendors/:id/verification', async (req, res, next) => {
   }
 });
 
-router.patch('/bookings/:id/moderation', async (req, res, next) => {
-  const id = idSchema.safeParse(req.params.id);
-  const parsed = z.object({ status: z.enum(['under_review', 'accepted', 'rejected', 'cancelled']), reason: z.string().trim().min(5).max(500) }).strict().safeParse(req.body);
-  if (!id.success || !parsed.success) {
-    return res.status(400).json({ error: 'A valid moderation status and reason are required.' });
-  }
+const bookingSelect = `SELECT b.id, b.event_id, b.vendor_id, b.service_id, b.service_description,
+  b.scheduled_date, b.quoted_amount, b.currency, b.status, b.moderation_reason, b.created_at,
+  COALESCE(b.scheduled_date, e.start_date) AS event_start_date, e.title AS event_title,
+  e.city AS event_city, e.venue AS event_venue, cu.id AS customer_id,
+  cu.full_name AS customer_name, cu.email AS customer_email, cu.phone AS customer_phone,
+  vp.business_name AS vendor_name, vu.id AS vendor_user_id, vu.full_name AS vendor_contact_name,
+  vu.email AS vendor_email, vu.phone AS vendor_phone, s.title AS service_title,
+  sc.id AS category_id, sc.name AS category_name,
+  (SELECT p.status FROM payments p WHERE p.booking_id = b.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS payment_status,
+  (SELECT COUNT(*) FROM payments p WHERE p.booking_id = b.id) AS payment_count
+  FROM bookings b
+  JOIN events e ON e.id = b.event_id
+  JOIN users cu ON cu.id = e.organizer_id
+  JOIN vendor_profiles vp ON vp.id = b.vendor_id
+  JOIN users vu ON vu.id = vp.user_id
+  LEFT JOIN services s ON s.id = b.service_id
+  LEFT JOIN service_categories sc ON sc.id = COALESCE(s.category_id, vp.category_id)`;
 
+function getBookingFilters(query) {
+  const clauses = [];
+  const values = [];
+  if (query.q) {
+    const term = `%${query.q}%`;
+    const id = query.q.match(/^BK-(\d+)$/i)?.[1] || (/^\d+$/.test(query.q) ? query.q : '-1');
+    clauses.push(`(b.id = ? OR CAST(b.id AS CHAR) LIKE ?
+      OR cu.full_name LIKE ? OR cu.email LIKE ? OR vp.business_name LIKE ? OR vu.full_name LIKE ?
+      OR e.title LIKE ? OR b.service_description LIKE ? OR COALESCE(s.title, '') LIKE ?)`);
+    values.push(id, term, term, term, term, term, term, term, term);
+  }
+  if (query.status) {
+    clauses.push('b.status = ?');
+    values.push(query.status);
+  }
+  if (query.paymentStatus) {
+    if (query.paymentStatus === 'unpaid') {
+      clauses.push('NOT EXISTS (SELECT 1 FROM payments pf WHERE pf.booking_id = b.id)');
+    } else {
+      clauses.push('EXISTS (SELECT 1 FROM payments pf WHERE pf.booking_id = b.id AND pf.status = ?)');
+      values.push(query.paymentStatus);
+    }
+  }
+  if (query.categoryId) {
+    clauses.push('COALESCE(s.category_id, vp.category_id) = ?');
+    values.push(query.categoryId);
+  }
+  if (query.dateFrom) {
+    clauses.push('DATE(COALESCE(b.scheduled_date, e.start_date)) >= ?');
+    values.push(query.dateFrom);
+  }
+  if (query.dateTo) {
+    clauses.push('DATE(COALESCE(b.scheduled_date, e.start_date)) <= ?');
+    values.push(query.dateTo);
+  }
+  return { where: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', values };
+}
+
+function csvCell(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  const safe = /^[\s]*[=+\-@]/.test(text) ? `'${text}` : text;
+  return `"${safe.replaceAll('"', '""')}"`;
+}
+
+async function lockBookingAndVendor(db, bookingId) {
+  const [[booking]] = await db.execute(
+    `SELECT b.id, b.event_id, b.vendor_id, b.service_id, b.status, b.scheduled_date,
+            e.start_date, e.title AS event_title, e.organizer_id, cu.full_name AS customer_name, cu.id AS customer_id,
+            vp.business_name AS vendor_name, vu.id AS vendor_user_id
+     FROM bookings b
+     JOIN events e ON e.id = b.event_id
+     JOIN users cu ON cu.id = e.organizer_id
+     JOIN vendor_profiles vp ON vp.id = b.vendor_id
+     JOIN users vu ON vu.id = vp.user_id
+     WHERE b.id = ? FOR UPDATE`,
+    [bookingId],
+  );
+  if (!booking) throw Object.assign(new Error('Booking not found.'), { status: 404 });
+  const [[vendor]] = await db.execute('SELECT id FROM vendor_profiles WHERE id = ? FOR UPDATE', [booking.vendor_id]);
+  if (!vendor) throw Object.assign(new Error('Vendor not found.'), { status: 404 });
+  return booking;
+}
+
+function effectiveBookingDate(booking) {
+  return booking.scheduled_date || booking.start_date;
+}
+
+function bookingCanComplete(booking) {
+  const scheduledDate = new Date(String(effectiveBookingDate(booking)).replace(' ', 'T'));
+  return !Number.isNaN(scheduledDate.getTime()) && scheduledDate <= new Date();
+}
+
+async function notifyBookingParties(db, booking, actorId, action, reason = '') {
+  const title = action === 'accepted'
+    ? 'Booking confirmed'
+    : action === 'cancelled'
+      ? 'Booking cancelled'
+      : action === 'rejected'
+        ? 'Booking declined'
+        : action === 'rescheduled'
+          ? 'Booking rescheduled'
+          : `Booking ${action.replaceAll('_', ' ')}`;
+  const message = `${title}: ${booking.event_title || `Booking #${booking.id}`} with ${booking.vendor_name || 'your vendor'}.${reason ? ` Reason: ${reason}` : ''}`;
+  for (const userId of new Set([Number(booking.customer_id), Number(booking.vendor_user_id)])) {
+    if (userId && userId !== Number(actorId)) {
+      await createNotification(db, {
+        userId,
+        title,
+        message,
+        type: 'booking',
+        relatedType: 'booking',
+        relatedId: booking.id,
+        idempotencyKey: action === 'rescheduled' ? null : `booking:${booking.id}:${action}:${userId}`,
+        actorId,
+      });
+    }
+  }
+}
+
+router.get('/bookings/export', requirePermission('bookings.moderate'), async (req, res, next) => {
+  const parsed = bookingExportSchema.safeParse(req.query);
+  if (!parsed.success) return sendError(res, parsed.error);
+  const database = getDatabase(req);
+  const { where, values } = getBookingFilters(parsed.data);
   try {
-    await inTransaction(async (db) => {
-      const [[booking]] = await db.execute('SELECT id, status FROM bookings WHERE id = ? FOR UPDATE', [id.data]);
-      if (!booking) throw Object.assign(new Error('Booking not found.'), { status: 404 });
-      const allowedTransition = booking.status === 'under_review' ? ['accepted', 'rejected', 'cancelled', 'under_review'] : ['under_review', 'cancelled'];
-      if (!allowedTransition.includes(parsed.data.status)) throw Object.assign(new Error('Invalid moderation transition for the current booking status.'), { status: 409 });
-      await db.execute('UPDATE bookings SET status = ?, moderation_reason = ? WHERE id = ?', [parsed.data.status, parsed.data.reason, id.data]);
-      await writeAudit(db, { actorId: req.admin.id, action: 'booking.moderated', entityType: 'booking', entityId: id.data, details: { from: booking.status, to: parsed.data.status, reason: parsed.data.reason }, ip: req.ip });
+    const [rows] = await database.execute(
+      `${bookingSelect}${where} ORDER BY b.created_at DESC, b.id DESC LIMIT 10000`,
+      values,
+    );
+    const columns = [
+      'reference', 'status', 'payment_status', 'customer_name', 'customer_email',
+      'vendor_name', 'vendor_email', 'event_title', 'service_title', 'service_description',
+      'category_name', 'scheduled_date', 'quoted_amount', 'currency', 'created_at',
+    ];
+    const lines = [
+      columns.map(csvCell).join(','),
+      ...rows.map((row) => [
+        `BK-${String(row.id).padStart(6, '0')}`,
+        row.status,
+        row.payment_status || 'unpaid',
+        row.customer_name,
+        row.customer_email,
+        row.vendor_name,
+        row.vendor_email,
+        row.event_title,
+        row.service_title,
+        row.service_description,
+        row.category_name,
+        row.event_start_date,
+        row.quoted_amount,
+        row.currency,
+        row.created_at,
+      ].map(csvCell).join(',')),
+    ];
+    res.set({
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="booking-report.csv"',
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
     });
-    res.json({ data: { id: id.data, status: parsed.data.status } });
+    return res.send(`\uFEFF${lines.join('\r\n')}`);
   } catch (error) {
-    if (error.status) return res.status(error.status).json({ error: error.message });
-    next(error);
+    return next(error);
   }
 });
 
-router.post('/payments/:id/refunds', requirePermission('payments.refund'), async (req, res, next) => {
+router.get('/bookings/:id', requirePermission('bookings.moderate'), async (req, res, next) => {
   const id = idSchema.safeParse(req.params.id);
-  const reason = z.string().trim().min(5).max(500).safeParse(req.body?.reason);
-  if (!id.success || !reason.success) {
-    return res.status(400).json({ error: 'A valid payment ID and refund reason are required.' });
-  }
-
+  if (!id.success) return res.status(400).json({ error: 'Booking ID is invalid.' });
+  const database = getDatabase(req);
   try {
-    const [[payment]] = await pool.execute('SELECT id, status FROM payments WHERE id = ?', [id.data]);
-    if (!payment) return res.status(404).json({ error: 'Payment not found.' });
-    await writeAudit(pool, { actorId: req.admin.id, action: 'payment.refund_requested_unavailable', entityType: 'payment', entityId: id.data, details: { status: payment.status, reason: reason.data, outcome: 'not_processed_provider_unconfigured' }, ip: req.ip });
-    res.status(503).json({ error: 'Refunds are unavailable: no verified payment provider is configured. No refund was initiated.' });
+    const [[booking]] = await database.execute(`${bookingSelect} WHERE b.id = ?`, [id.data]);
+    if (!booking) return res.status(404).json({ error: 'Booking not found.' });
+    const [payments] = await database.execute(
+      `SELECT id, amount, currency, provider, payment_method, provider_reference, status, verified_at, created_at
+       FROM payments WHERE booking_id = ? ORDER BY created_at DESC, id DESC`,
+      [id.data],
+    );
+    const [refunds] = await database.execute(
+      `SELECT r.id, r.payment_id, r.amount, r.currency, r.reason, r.status,
+              r.provider_refund_reference, r.created_at, r.decided_at, r.processed_at
+       FROM refund_requests r
+       JOIN payments p ON p.id = r.payment_id
+       WHERE p.booking_id = ? ORDER BY r.created_at DESC, r.id DESC`,
+      [id.data],
+    );
+    const [history] = await database.execute(
+      `SELECT id, actor_id, action, from_status, to_status, reason, details, created_at
+       FROM booking_history WHERE booking_id = ? ORDER BY id DESC`,
+      [id.data],
+    );
+    return res.json({
+      data: {
+        ...booking,
+        id: Number(booking.id),
+        reference: `BK-${String(booking.id).padStart(6, '0')}`,
+        can_complete: bookingCanComplete(booking),
+        payment_count: Number(booking.payment_count || 0),
+        payments,
+        refunds,
+        history,
+      },
+    });
   } catch (error) {
-    next(error);
+    return next(error);
+  }
+});
+
+router.get('/bookings', requirePermission('bookings.moderate'), async (req, res, next) => {
+  const parsed = bookingListSchema.safeParse(req.query);
+  if (!parsed.success) return sendError(res, parsed.error);
+  const { page, pageSize, sortBy, sortDirection } = parsed.data;
+  const database = getDatabase(req);
+  const { where, values } = getBookingFilters(parsed.data);
+  const sortColumns = {
+    id: 'b.id',
+    status: 'b.status',
+    scheduled_date: 'event_start_date',
+    created_at: 'b.created_at',
+    quoted_amount: 'b.quoted_amount',
+    event_title: 'e.title',
+    customer_name: 'cu.full_name',
+    vendor_name: 'vp.business_name',
+  };
+  try {
+    const [[count]] = await database.execute(
+      `SELECT COUNT(*) AS total FROM bookings b
+       JOIN events e ON e.id = b.event_id
+       JOIN users cu ON cu.id = e.organizer_id
+       JOIN vendor_profiles vp ON vp.id = b.vendor_id
+       JOIN users vu ON vu.id = vp.user_id
+       LEFT JOIN services s ON s.id = b.service_id${where}`,
+      values,
+    );
+    const [rows] = await database.execute(
+      `${bookingSelect}${where} ORDER BY ${sortColumns[sortBy]} ${sortDirection.toUpperCase()}, b.id DESC LIMIT ? OFFSET ?`,
+      [...values, pageSize, (page - 1) * pageSize],
+    );
+    return res.json({
+      data: rows.map((row) => ({
+        ...row,
+        id: Number(row.id),
+        reference: `BK-${String(row.id).padStart(6, '0')}`,
+        can_complete: bookingCanComplete(row),
+        quoted_amount: Number(row.quoted_amount),
+        payment_count: Number(row.payment_count || 0),
+        payment_status: row.payment_status || 'unpaid',
+      })),
+      pagination: { page, pageSize, total: Number(count.total) },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.patch('/bookings/:id/status', requirePermission('bookings.moderate'), async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = bookingActionSchema.safeParse(req.body || {});
+  if (!id.success || !parsed.success) {
+    return res.status(400).json({ error: 'A valid booking status and reason are required.' });
+  }
+  const { status, reason } = parsed.data;
+  if (['rejected', 'cancelled'].includes(status) && reason.length < 5) {
+    return res.status(400).json({ error: 'A cancellation or rejection reason of at least 5 characters is required.' });
+  }
+  const database = getDatabase(req);
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const booking = await lockBookingAndVendor(db, id.data);
+      if (status === 'cancelled') {
+        const settings = await loadSystemSettings(db, ['booking_cancellation_cutoff_hours']);
+        const [cutoffRows] = await db.execute(
+          'SELECT ? <= DATE_ADD(NOW(), INTERVAL ? HOUR) AS inside_cutoff',
+          [effectiveBookingDate(booking), settings.booking_cancellation_cutoff_hours],
+        );
+        if (cutoffRows[0]?.inside_cutoff) {
+          throw Object.assign(new Error('This booking is inside the configured cancellation cutoff.'), { status: 409 });
+        }
+      }
+      const transitions = {
+        requested: ['under_review', 'accepted', 'rejected', 'cancelled'],
+        quoted: ['under_review', 'accepted', 'rejected', 'cancelled'],
+        under_review: ['accepted', 'rejected', 'cancelled'],
+        accepted: ['cancelled', 'completed'],
+      };
+      if (!(transitions[booking.status] || []).includes(status)) {
+        throw Object.assign(new Error(`Cannot change booking from ${booking.status} to ${status}.`), { status: 409 });
+      }
+
+      if (status === 'accepted') {
+        const scheduledDate = effectiveBookingDate(booking);
+        const dateTime = new Date(String(scheduledDate).replace(' ', 'T'));
+        if (Number.isNaN(dateTime.getTime()) || dateTime <= new Date()) {
+          throw Object.assign(new Error('A booking cannot be confirmed after its scheduled date.'), { status: 409 });
+        }
+        const availability = await checkBookingDateAvailability(db, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate,
+        });
+        await reserveBookingDate(db, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate, availability,
+        });
+        await db.execute(
+          "UPDATE bookings SET status = 'accepted', scheduled_date = ?, moderation_reason = ? WHERE id = ?",
+          [scheduledDate, reason || null, id.data],
+        );
+      } else {
+        if (status === 'completed') {
+          const scheduledDate = new Date(String(effectiveBookingDate(booking)).replace(' ', 'T'));
+          if (Number.isNaN(scheduledDate.getTime()) || scheduledDate > new Date()) {
+            throw Object.assign(new Error('A booking cannot be marked completed before its scheduled date.'), { status: 409 });
+          }
+        }
+        await db.execute('UPDATE bookings SET status = ?, moderation_reason = ? WHERE id = ?', [status, reason || null, id.data]);
+        if (status === 'cancelled') await releaseBookingDate(db, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate: effectiveBookingDate(booking),
+        });
+      }
+
+      await db.execute(
+        `INSERT INTO booking_history (booking_id, actor_id, action, from_status, to_status, reason, details)
+         VALUES (?, ?, 'status_changed', ?, ?, ?, ?)`,
+        [id.data, req.admin.id, booking.status, status, reason || null, JSON.stringify({ schedule: effectiveBookingDate(booking) })],
+      );
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'booking.status_changed',
+        entityType: 'booking',
+        entityId: id.data,
+        details: { from: booking.status, to: status, reason: reason || null },
+        ip: req.ip,
+      });
+      await notifyBookingParties(db, booking, req.admin.id, status, reason);
+    });
+    return res.json({ data: { id: id.data, status } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      return sendError(res, error);
+    } catch (unhandled) {
+      return next(unhandled);
+    }
+  }
+});
+
+router.post('/bookings/:id/reschedule', requirePermission('bookings.moderate'), async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = bookingRescheduleSchema.safeParse(req.body || {});
+  if (!id.success || !parsed.success) {
+    return res.status(400).json({ error: 'Provide a valid booking date and rescheduling reason.' });
+  }
+  const normalizedDate = parsed.data.scheduled_date.length === 16
+    ? `${parsed.data.scheduled_date}:00`
+    : parsed.data.scheduled_date;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(normalizedDate)
+    || Number.isNaN(new Date(normalizedDate).getTime())) {
+    return res.status(400).json({ error: 'Enter a valid scheduled date and time.' });
+  }
+  const scheduledDate = normalizedDate.replace('T', ' ');
+  if (new Date(normalizedDate) <= new Date()) {
+    return res.status(400).json({ error: 'The new booking date must be in the future.' });
+  }
+  const database = getDatabase(req);
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const booking = await lockBookingAndVendor(db, id.data);
+      const settings = await loadSystemSettings(db, [
+        'booking_rescheduling_enabled',
+        'booking_reschedule_cutoff_hours',
+      ]);
+      if (!settings.booking_rescheduling_enabled) {
+        throw Object.assign(new Error('Booking rescheduling is disabled by the current system policy.'), { status: 409 });
+      }
+      if (!['requested', 'quoted', 'accepted'].includes(booking.status)) {
+        throw Object.assign(new Error('This booking cannot be rescheduled in its current status.'), { status: 409 });
+      }
+      const previousDate = effectiveBookingDate(booking);
+      if (new Date(String(previousDate).replace(' ', 'T')) <= new Date()) {
+        throw Object.assign(new Error('A booking cannot be rescheduled after its scheduled date.'), { status: 409 });
+      }
+      const [cutoffRows] = await db.execute(
+        'SELECT ? <= DATE_ADD(NOW(), INTERVAL ? HOUR) AS inside_cutoff',
+        [previousDate, settings.booking_reschedule_cutoff_hours],
+      );
+      if (cutoffRows[0]?.inside_cutoff) {
+        throw Object.assign(new Error('This booking is inside the configured rescheduling cutoff.'), { status: 409 });
+      }
+      if (new Date(String(previousDate).replace(' ', 'T')).getTime() === new Date(normalizedDate).getTime()) {
+        throw Object.assign(new Error('Choose a different date to reschedule this booking.'), { status: 409 });
+      }
+      const availability = await checkBookingDateAvailability(db, {
+        vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate,
+      });
+      if (booking.status === 'accepted') await reserveBookingDate(db, {
+        vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate, availability,
+      });
+      await db.execute('UPDATE bookings SET scheduled_date = ?, moderation_reason = ? WHERE id = ?', [
+        scheduledDate,
+        parsed.data.reason,
+        id.data,
+      ]);
+      if (booking.status === 'accepted') await releaseBookingDate(db, {
+        vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate: previousDate,
+      });
+      await db.execute(
+        `INSERT INTO booking_history (booking_id, actor_id, action, from_status, to_status, reason, details)
+         VALUES (?, ?, 'rescheduled', ?, ?, ?, ?)`,
+        [id.data, req.admin.id, booking.status, booking.status, parsed.data.reason, JSON.stringify({ from: previousDate, to: scheduledDate })],
+      );
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'booking.rescheduled',
+        entityType: 'booking',
+        entityId: id.data,
+        details: { from: previousDate, to: scheduledDate, reason: parsed.data.reason },
+        ip: req.ip,
+      });
+      await notifyBookingParties(db, booking, req.admin.id, 'rescheduled', parsed.data.reason);
+    });
+    return res.json({ data: { id: id.data, scheduled_date: scheduledDate } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      return sendError(res, error);
+    } catch (unhandled) {
+      return next(unhandled);
+    }
+  }
+});
+
+router.patch('/bookings/:id/moderation', requirePermission('bookings.moderate'), async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = z.object({
+    status: z.enum(['under_review', 'accepted', 'rejected', 'cancelled']),
+    reason: z.string().trim().min(5).max(500),
+  }).strict().safeParse(req.body || {});
+  if (!id.success || !parsed.success) {
+    return res.status(400).json({ error: 'A valid moderation status and reason are required.' });
+  }
+  const database = getDatabase(req);
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const booking = await lockBookingAndVendor(db, id.data);
+      const transitions = {
+        requested: ['under_review', 'accepted', 'rejected', 'cancelled'],
+        quoted: ['under_review', 'accepted', 'rejected', 'cancelled'],
+        under_review: ['accepted', 'rejected', 'cancelled'],
+      };
+      if (!(transitions[booking.status] || []).includes(parsed.data.status)) {
+        throw Object.assign(new Error(`Cannot change booking from ${booking.status} to ${parsed.data.status}.`), { status: 409 });
+      }
+      if (parsed.data.status === 'accepted') {
+        const scheduledDate = effectiveBookingDate(booking);
+        if (new Date(String(scheduledDate).replace(' ', 'T')) <= new Date()) {
+          throw Object.assign(new Error('A booking cannot be confirmed after its scheduled date.'), { status: 409 });
+        }
+        const availability = await checkBookingDateAvailability(db, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate,
+        });
+        await reserveBookingDate(db, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate, availability,
+        });
+        await db.execute(
+          "UPDATE bookings SET status = 'accepted', scheduled_date = ?, moderation_reason = ? WHERE id = ?",
+          [scheduledDate, parsed.data.reason, id.data],
+        );
+      } else {
+        await db.execute('UPDATE bookings SET status = ?, moderation_reason = ? WHERE id = ?', [
+          parsed.data.status, parsed.data.reason, id.data,
+        ]);
+        if (parsed.data.status === 'cancelled') {
+          await releaseBookingDate(db, {
+            vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate: effectiveBookingDate(booking),
+          });
+        }
+      }
+      await db.execute(
+        `INSERT INTO booking_history (booking_id, actor_id, action, from_status, to_status, reason, details)
+         VALUES (?, ?, 'status_changed', ?, ?, ?, ?)`,
+        [id.data, req.admin.id, booking.status, parsed.data.status, parsed.data.reason, JSON.stringify({ schedule: effectiveBookingDate(booking) })],
+      );
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'booking.moderated',
+        entityType: 'booking',
+        entityId: id.data,
+        details: { from: booking.status, to: parsed.data.status, reason: parsed.data.reason },
+        ip: req.ip,
+      });
+      await notifyBookingParties(db, booking, req.admin.id, parsed.data.status, parsed.data.reason);
+    });
+    return res.json({ data: { id: id.data, status: parsed.data.status } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      return sendError(res, error);
+    } catch (unhandled) {
+      return next(unhandled);
+    }
   }
 });
 
@@ -1494,9 +2289,727 @@ router.patch('/event-package-requests/:id/status', async (req, res, next) => {
   }
 });
 
+router.get('/events/options', async (req, res, next) => {
+  const database = getDatabase(req);
+  try {
+    const [organizers] = await database.execute(
+      `SELECT DISTINCT u.id, u.full_name, u.email
+       FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.status = 'active' AND r.is_active = TRUE AND LOWER(r.name) IN ('organizer', 'customer')
+       ORDER BY u.full_name, u.id`,
+    );
+    const [categories] = await database.execute(
+      'SELECT id, name FROM service_categories WHERE is_active = TRUE ORDER BY name',
+    );
+    res.json({ data: { organizers, categories } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/events', async (req, res, next) => {
+  const parsed = adminEventListSchema.safeParse(req.query);
+  if (!parsed.success) return sendError(res, parsed.error);
+  const { page, pageSize, q, status } = parsed.data;
+  const database = getDatabase(req);
+  const conditions = [];
+  const values = [];
+  if (q) {
+    const term = `%${q}%`;
+    conditions.push(`(
+      e.title LIKE ? OR CAST(e.id AS CHAR) = ? OR e.event_type LIKE ?
+      OR COALESCE(e.city, '') LIKE ? OR COALESCE(e.venue, '') LIKE ?
+      OR u.full_name LIKE ? OR COALESCE(u.email, '') LIKE ?
+      OR EXISTS (
+        SELECT 1 FROM event_ticket_bookings etb
+        JOIN users customer ON customer.id = etb.customer_id
+        WHERE etb.event_id = e.id AND (customer.full_name LIKE ? OR customer.email LIKE ?)
+      )
+      OR EXISTS (
+        SELECT 1 FROM bookings b
+        JOIN vendor_profiles vp ON vp.id = b.vendor_id
+        LEFT JOIN service_categories category ON category.id = vp.category_id
+        WHERE b.event_id = e.id
+          AND (vp.business_name LIKE ? OR COALESCE(category.name, '') LIKE ?)
+      )
+      OR EXISTS (
+        SELECT 1 FROM service_categories category
+        WHERE LOWER(category.name) = LOWER(e.event_type) AND category.name LIKE ?
+      )
+    )`);
+    values.push(
+      term, q, term, term, term, term, term, term, term, term, term, term,
+    );
+  }
+  if (status) {
+    conditions.push('e.status = ?');
+    values.push(resolveEventStatus(status));
+    if (status === 'published') {
+      conditions[conditions.length - 1] = "e.status IN ('active', 'published', 'upcoming', 'open')";
+      values.pop();
+    }
+  }
+  const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+  try {
+    const [[count]] = await database.execute(
+      `SELECT COUNT(*) AS total FROM events e JOIN users u ON u.id = e.organizer_id${where}`,
+      values,
+    );
+    const [rows] = await database.execute(
+      `SELECT e.id, e.organizer_id, e.title, e.event_type, e.description, e.city, e.venue,
+              e.cover_image_url, e.gallery_images, e.start_date, e.end_date, e.budget,
+              e.guest_count, e.capacity, e.status, e.rejection_reason, e.published_at, e.notes,
+              e.created_at, u.full_name AS organizer_name, u.email AS organizer_email,
+              COALESCE((SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.id), 0)
+                + COALESCE((SELECT COUNT(*) FROM event_ticket_bookings etb WHERE etb.event_id = e.id), 0) AS booking_count,
+              COALESCE((SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.id), 0) AS vendor_booking_count,
+              COALESCE((SELECT COUNT(*) FROM event_ticket_bookings etb WHERE etb.event_id = e.id), 0) AS ticket_booking_count,
+              (SELECT GROUP_CONCAT(DISTINCT vp.business_name ORDER BY vp.business_name SEPARATOR ', ')
+               FROM bookings b JOIN vendor_profiles vp ON vp.id = b.vendor_id
+               WHERE b.event_id = e.id) AS vendor_names
+       FROM events e JOIN users u ON u.id = e.organizer_id${where}
+       ORDER BY e.start_date DESC, e.id DESC LIMIT ? OFFSET ?`,
+      [...values, Number(pageSize), Number((page - 1) * pageSize)],
+    );
+    res.json({ data: rows, pagination: { page, pageSize, total: Number(count.total) } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/events', async (req, res, next) => {
+  const parsed = parseAdminEventInput(req.body);
+  if (!parsed.success) return sendError(res, parsed.error);
+  const event = parsed.data;
+  const database = getDatabase(req);
+  try {
+    const eventId = await inDatabaseTransaction(database, async (connection) => {
+      const [[organizer]] = await connection.execute(
+        `SELECT u.id FROM users u
+         JOIN user_roles ur ON ur.user_id = u.id
+         JOIN roles r ON r.id = ur.role_id
+         WHERE u.id = ? AND u.status = 'active' AND r.is_active = TRUE
+           AND LOWER(r.name) IN ('organizer', 'customer')
+         LIMIT 1 FOR UPDATE`,
+        [event.organizer_id],
+      );
+      if (!organizer) throw Object.assign(new Error('Choose an active organizer or customer account.'), { status: 400 });
+      const overlap = await hasScheduleOverlap(connection, {
+        organizerId: organizer.id,
+        startDate: event.start_date,
+        endDate: event.end_date,
+      });
+      if (overlap) {
+        throw Object.assign(new Error(`This organizer already has an event scheduled during that time: ${overlap.title}.`), { status: 409 });
+      }
+
+      const fields = [
+        'organizer_id', 'title', 'event_type', 'description', 'city', 'venue',
+        'cover_image_url', 'gallery_images', 'start_date', 'end_date', 'budget',
+        'capacity', 'guest_count', 'notes',
+      ];
+      const [result] = await connection.execute(
+        `INSERT INTO events (${fields.join(', ')}, status)
+         VALUES (${fields.map(() => '?').join(', ')}, 'draft')`,
+        fields.map((field) => event[field] ?? null),
+      );
+      await connection.execute(
+        `INSERT INTO event_history
+           (event_id, actor_id, action, from_status, to_status, details)
+         VALUES (?, ?, 'event.created', NULL, 'draft', ?)`,
+        [result.insertId, req.admin.id, JSON.stringify({ title: event.title })],
+      );
+      await writeAudit(connection, {
+        actorId: req.admin.id,
+        action: 'event.created',
+        entityType: 'event',
+        entityId: result.insertId,
+        details: { title: event.title, status: 'draft' },
+        ip: req.ip,
+      });
+      return Number(result.insertId);
+    });
+    res.status(201).json({ data: { id: eventId, status: 'draft' } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      sendError(res, error);
+    } catch (unhandled) {
+      next(unhandled);
+    }
+  }
+});
+
+router.get('/events/:id', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Event ID is invalid.' });
+  const database = getDatabase(req);
+  try {
+    const [[event]] = await database.execute(
+      `SELECT e.*, u.full_name AS organizer_name, u.email AS organizer_email
+       FROM events e JOIN users u ON u.id = e.organizer_id WHERE e.id = ?`,
+      [id.data],
+    );
+    if (!event) return res.status(404).json({ error: 'Event not found.' });
+    const [vendorBookings, ticketBookings, eventHistory, auditHistory] = await Promise.all([
+      database.execute(
+        `SELECT b.id, b.event_id, b.vendor_id, b.service_description, b.quoted_amount,
+                b.currency, b.status, b.moderation_reason, b.created_at,
+                vp.business_name AS vendor_name, vendor.full_name AS vendor_contact,
+                category.name AS category
+         FROM bookings b
+         JOIN vendor_profiles vp ON vp.id = b.vendor_id
+         JOIN users vendor ON vendor.id = vp.user_id
+         LEFT JOIN service_categories category ON category.id = vp.category_id
+         WHERE b.event_id = ? ORDER BY b.created_at DESC, b.id DESC`,
+        [id.data],
+      ),
+      database.execute(
+        `SELECT etb.id, etb.booking_reference, etb.customer_id, customer.full_name AS customer_name,
+                customer.email AS customer_email, tt.name AS ticket_name, etb.quantity,
+                etb.unit_price, etb.total_amount, etb.payment_status, etb.booking_status, etb.created_at
+         FROM event_ticket_bookings etb
+         JOIN users customer ON customer.id = etb.customer_id
+         JOIN event_ticket_types tt ON tt.id = etb.ticket_type_id
+         WHERE etb.event_id = ? ORDER BY etb.created_at DESC, etb.id DESC`,
+        [id.data],
+      ),
+      database.execute(
+        `SELECT h.id, h.actor_id, u.full_name AS actor_name, h.action, h.from_status,
+                h.to_status, h.reason, h.details, h.created_at
+         FROM event_history h LEFT JOIN users u ON u.id = h.actor_id
+         WHERE h.event_id = ? ORDER BY h.created_at DESC, h.id DESC`,
+        [id.data],
+      ),
+      database.execute(
+        `SELECT a.id, a.actor_id, u.full_name AS actor_name, a.action, a.details, a.created_at
+         FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id
+         WHERE a.entity_type = 'event' AND a.entity_id = ?
+         ORDER BY a.created_at DESC, a.id DESC LIMIT 100`,
+        [String(id.data)],
+      ),
+    ]);
+    const history = eventHistory[0].map((row) => ({ ...row, source: 'event_history' }));
+    const auditedActions = new Set(history.map((row) => `${row.actor_id}:${row.action}`));
+    for (const row of auditHistory[0]) {
+      if (!auditedActions.has(`${row.actor_id}:${row.action}`)) {
+        history.push({ ...row, source: 'audit_logs', from_status: null, to_status: null, reason: null });
+      }
+    }
+    history.sort((left, right) => new Date(right.created_at) - new Date(left.created_at));
+    res.json({
+      data: {
+        event: {
+          ...event,
+          status: resolveEventStatus(event.status),
+          start_date: toEventLocalDateTime(event.start_date),
+          end_date: toEventLocalDateTime(event.end_date),
+        },
+        vendorBookings: vendorBookings[0],
+        ticketBookings: ticketBookings[0],
+        history,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch('/events/:id', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = parseAdminEventInput(req.body, { partial: true });
+  if (!id.success) return res.status(400).json({ error: 'Event ID is invalid.' });
+  if (!parsed.success) return sendError(res, parsed.error);
+  const changes = parsed.data;
+  const fields = Object.keys(changes);
+  if (!fields.length) return res.status(400).json({ error: 'Provide at least one editable event field.' });
+  const database = getDatabase(req);
+
+  try {
+    await inDatabaseTransaction(database, async (connection) => {
+      const [[event]] = await connection.execute(
+        `SELECT id, organizer_id, title, status, start_date, end_date, capacity
+         FROM events WHERE id = ? FOR UPDATE`,
+        [id.data],
+      );
+      if (!event) throw Object.assign(new Error('Event not found.'), { status: 404 });
+      const nextStart = changes.start_date ?? event.start_date;
+      const nextEnd = changes.end_date === undefined ? event.end_date : changes.end_date;
+      if (nextEnd && Date.parse(nextEnd) <= Date.parse(nextStart)) {
+        throw Object.assign(new Error('Event end date must be after its start date.'), { status: 400 });
+      }
+      await connection.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [event.organizer_id]);
+      const overlap = await hasScheduleOverlap(connection, {
+        organizerId: event.organizer_id,
+        startDate: nextStart,
+        endDate: nextEnd,
+        excludingEventId: id.data,
+      });
+      if (overlap) {
+        throw Object.assign(new Error(`This organizer already has an event scheduled during that time: ${overlap.title}.`), { status: 409 });
+      }
+      if (changes.capacity !== undefined && changes.capacity !== null) {
+        const [[inventory]] = await connection.execute(
+          `SELECT COALESCE(SUM(tt.sold_quantity), 0) AS sold,
+                  COALESCE(SUM(reserved.quantity), 0) AS reserved
+           FROM event_ticket_types tt
+           LEFT JOIN (
+             SELECT ticket_type_id, SUM(quantity) AS quantity
+             FROM event_ticket_bookings
+             WHERE booking_status = 'pending_payment'
+               AND created_at >= NOW() - INTERVAL 15 MINUTE
+             GROUP BY ticket_type_id
+           ) reserved ON reserved.ticket_type_id = tt.id
+           WHERE tt.event_id = ? AND tt.status = 'active'`,
+          [id.data],
+        );
+        if (Number(inventory.sold) + Number(inventory.reserved) > changes.capacity) {
+          throw Object.assign(new Error('Capacity cannot be lower than tickets sold or reserved.'), { status: 409 });
+        }
+      }
+      await connection.execute(
+        `UPDATE events SET ${fields.map((field) => `\`${field}\` = ?`).join(', ')} WHERE id = ?`,
+        [...fields.map((field) => changes[field]), id.data],
+      );
+      const auditableFields = fields.filter((field) => !['description', 'notes', 'gallery_images', 'cover_image_url'].includes(field));
+      const details = {
+        fields,
+        before: Object.fromEntries(auditableFields.map((field) => [field, event[field] ?? null])),
+        after: Object.fromEntries(auditableFields.map((field) => [field, changes[field] ?? null])),
+      };
+      await connection.execute(
+        `INSERT INTO event_history
+           (event_id, actor_id, action, from_status, to_status, details)
+         VALUES (?, ?, 'event.updated', ?, ?, ?)`,
+        [id.data, req.admin.id, event.status, event.status, JSON.stringify(details)],
+      );
+      await writeAudit(connection, {
+        actorId: req.admin.id,
+        action: 'event.updated',
+        entityType: 'event',
+        entityId: id.data,
+        details,
+        ip: req.ip,
+      });
+    });
+    res.json({ data: { id: id.data } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      sendError(res, error);
+    } catch (unhandled) {
+      next(unhandled);
+    }
+  }
+});
+
+router.patch('/events/:id/status', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = eventStatusActionSchema.safeParse(req.body);
+  if (!id.success || !parsed.success) {
+    return res.status(400).json({ error: parsed.success ? 'Event ID is invalid.' : parsed.error.issues[0]?.message || 'Invalid event action.' });
+  }
+  const { action, reason } = parsed.data;
+  const database = getDatabase(req);
+
+  try {
+    const result = await inDatabaseTransaction(database, async (connection) => {
+      const [[event]] = await connection.execute(
+        'SELECT id, organizer_id, title, status, start_date, end_date FROM events WHERE id = ? FOR UPDATE',
+        [id.data],
+      );
+      if (!event) throw Object.assign(new Error('Event not found.'), { status: 404 });
+      const currentStatus = resolveEventStatus(event.status);
+      let nextStatus;
+      let notificationTitle;
+      let notificationMessage;
+      if (action === 'approve') {
+        if (currentStatus !== 'pending_approval') throw Object.assign(new Error('Only events pending approval can be approved.'), { status: 409 });
+        nextStatus = 'active';
+        notificationTitle = 'Your event was approved';
+        notificationMessage = `Your event "${event.title}" has been approved and published.`;
+      } else if (action === 'reject') {
+        if (currentStatus !== 'pending_approval') throw Object.assign(new Error('Only events pending approval can be rejected.'), { status: 409 });
+        nextStatus = 'rejected';
+        notificationTitle = 'Your event needs changes';
+        notificationMessage = `Your event "${event.title}" was rejected. Reason: ${reason}`;
+      } else if (action === 'publish') {
+        if (!['draft', 'rejected'].includes(currentStatus)) throw Object.assign(new Error('Only draft or rejected events can be published.'), { status: 409 });
+        nextStatus = 'active';
+        notificationTitle = 'Your event was published';
+        notificationMessage = `Your event "${event.title}" is now published.`;
+      } else if (action === 'unpublish') {
+        if (!['active', 'published', 'booked', 'upcoming', 'open'].includes(currentStatus)) {
+          throw Object.assign(new Error('Only published events can be unpublished.'), { status: 409 });
+        }
+        nextStatus = 'draft';
+        notificationTitle = 'Your event was unpublished';
+        notificationMessage = `Your event "${event.title}" is no longer available for new bookings.${reason ? ` Reason: ${reason}` : ''}`;
+      } else if (action === 'cancel') {
+        if (['cancelled', 'completed'].includes(currentStatus)) throw Object.assign(new Error('This event cannot be cancelled.'), { status: 409 });
+        nextStatus = 'cancelled';
+        notificationTitle = 'Your event was cancelled';
+        notificationMessage = `Your event "${event.title}" was cancelled. Reason: ${reason}`;
+      } else {
+        if (['cancelled', 'completed'].includes(currentStatus)) throw Object.assign(new Error('This event cannot be completed.'), { status: 409 });
+        const endDate = event.end_date || event.start_date;
+        if (new Date(endDate).getTime() > Date.now()) {
+          throw Object.assign(new Error('An event cannot be marked completed before its scheduled end.'), { status: 409 });
+        }
+        nextStatus = 'completed';
+        notificationTitle = 'Your event was completed';
+        notificationMessage = `Your event "${event.title}" has been marked completed.`;
+      }
+
+      await connection.execute(
+        `UPDATE events
+         SET status = ?, published_at = CASE WHEN ? = 'active' THEN COALESCE(published_at, NOW()) ELSE published_at END,
+             rejection_reason = CASE WHEN ? = 'rejected' THEN ? ELSE NULL END
+         WHERE id = ?`,
+        [nextStatus, nextStatus, nextStatus, reason || null, id.data],
+      );
+      await connection.execute(
+        `INSERT INTO event_history
+           (event_id, actor_id, action, from_status, to_status, reason, details)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id.data, req.admin.id, `event.${action}`, currentStatus, nextStatus, reason || null, JSON.stringify({})],
+      );
+      await writeAudit(connection, {
+        actorId: req.admin.id,
+        action: `event.${action}`,
+        entityType: 'event',
+        entityId: id.data,
+        details: { from: currentStatus, to: nextStatus, reason: reason || null },
+        ip: req.ip,
+      });
+      const recipients = new Set([Number(event.organizer_id)]);
+      if (['unpublish', 'cancel'].includes(action)) {
+        const [relatedUsers] = await connection.execute(
+          `SELECT etb.customer_id AS user_id
+           FROM event_ticket_bookings etb WHERE etb.event_id = ?
+           UNION
+           SELECT vp.user_id AS user_id
+           FROM bookings b JOIN vendor_profiles vp ON vp.id = b.vendor_id
+           WHERE b.event_id = ?`,
+          [id.data, id.data],
+        );
+        for (const recipient of relatedUsers) {
+          if (recipient.user_id !== null && recipient.user_id !== undefined) recipients.add(Number(recipient.user_id));
+        }
+      }
+      for (const recipientId of recipients) {
+        await createNotification(connection, {
+          userId: recipientId,
+          title: notificationTitle,
+          message: notificationMessage,
+          type: 'event',
+          relatedType: 'event',
+          relatedId: id.data,
+          actorId: req.admin.id,
+        });
+      }
+      return { id: id.data, status: nextStatus };
+    });
+    res.json({ data: result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      sendError(res, error);
+    } catch (unhandled) {
+      next(unhandled);
+    }
+  }
+});
+
+router.get('/categories/:id/image', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'A valid category ID is required.' });
+  const database = getDatabase(req);
+  try {
+    const [[category]] = await database.execute(
+      'SELECT image, image_mime FROM service_categories WHERE id = ?',
+      [id.data],
+    );
+    if (!category?.image) return res.status(404).json({ error: 'Category image not found.' });
+    res.set({
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Type': category.image_mime,
+      'Content-Disposition': 'inline',
+    });
+    return res.send(category.image);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/categories/:id/history', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  }).strict().safeParse(req.query);
+  if (!id.success || !parsed.success) return res.status(400).json({ error: 'Category or pagination filters are invalid.' });
+
+  const database = getDatabase(req);
+  const { page, pageSize } = parsed.data;
+  const values = [id.data];
+  try {
+    const [[count]] = await database.execute(
+      "SELECT COUNT(*) AS total FROM audit_logs WHERE entity_id = ? AND entity_type IN ('service_category', 'categories')",
+      values,
+    );
+    const [rows] = await database.execute(
+      `SELECT id, actor_id, action, entity_type, entity_id, details, created_at
+       FROM audit_logs WHERE entity_id = ? AND entity_type IN ('service_category', 'categories')
+       ORDER BY id DESC LIMIT ? OFFSET ?`,
+      [...values, pageSize, (page - 1) * pageSize],
+    );
+    return res.json({ data: rows, pagination: { page, pageSize, total: Number(count.total) } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/categories', async (req, res, next) => {
+  const parsed = categoryListSchema.safeParse(req.query);
+  if (!parsed.success) return sendError(res, parsed.error);
+  const { page, pageSize, q, status, sortBy, sortDirection } = parsed.data;
+  const database = getDatabase(req);
+  const conditions = [];
+  const values = [];
+  if (q) {
+    conditions.push('(sc.name LIKE ? OR COALESCE(sc.description, \'\') LIKE ?)');
+    values.push(`%${q}%`, `%${q}%`);
+  }
+  if (status) {
+    conditions.push('sc.is_active = ?');
+    values.push(status === 'active' || status === '1' ? 1 : 0);
+  }
+  const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
+  const sortColumns = {
+    id: 'sc.id',
+    name: 'sc.name',
+    display_order: 'sc.display_order',
+    service_count: 'service_count',
+    is_active: 'sc.is_active',
+    created_at: 'sc.created_at',
+  };
+  try {
+    const [[count]] = await database.execute(
+      `SELECT COUNT(*) AS total FROM service_categories sc${where}`,
+      values,
+    );
+    const [rows] = await database.execute(
+      `SELECT sc.id, sc.name, sc.description, sc.display_order, sc.image_mime, sc.is_active,
+              sc.created_at, sc.updated_at, COUNT(DISTINCT s.id) AS service_count
+       FROM service_categories sc
+       LEFT JOIN services s ON s.category_id = sc.id
+       ${where}
+       GROUP BY sc.id, sc.name, sc.description, sc.display_order, sc.image_mime,
+                sc.is_active, sc.created_at, sc.updated_at
+       ORDER BY ${sortColumns[sortBy]} ${sortDirection.toUpperCase()}, sc.id ASC
+       LIMIT ? OFFSET ?`,
+      [...values, pageSize, (page - 1) * pageSize],
+    );
+    return res.json({
+      data: rows.map((row) => ({
+        ...row,
+        id: Number(row.id),
+        display_order: Number(row.display_order),
+        service_count: Number(row.service_count),
+        is_active: Boolean(row.is_active),
+        image: row.image_mime ? `/api/admin/categories/${Number(row.id)}/image` : null,
+      })),
+      pagination: { page, pageSize, total: Number(count.total) },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/categories', async (req, res, next) => {
+  const parsed = categoryFieldsSchema.safeParse(req.body || {});
+  if (!parsed.success) return sendError(res, parsed.error);
+  const database = getDatabase(req);
+  const { name, description = null, display_order = 0 } = parsed.data;
+  try {
+    const createdId = await inDatabaseTransaction(database, async (db) => {
+      const [result] = await db.execute(
+        'INSERT INTO service_categories (name, description, display_order) VALUES (?, ?, ?)',
+        [name, description || null, display_order],
+      );
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'service_category.created',
+        entityType: 'service_category',
+        entityId: result.insertId,
+        details: { name, description: description || null, display_order },
+        ip: req.ip,
+      });
+      return Number(result.insertId);
+    });
+    return res.status(201).json({ data: { id: createdId } });
+  } catch (error) {
+    try {
+      return sendError(res, error);
+    } catch (unhandled) {
+      return next(unhandled);
+    }
+  }
+});
+
+router.patch('/categories/:id/status', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = categoryStatusSchema.safeParse(req.body || {});
+  if (!id.success || !parsed.success) return res.status(400).json({ error: 'Category ID or status is invalid.' });
+  const database = getDatabase(req);
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const [[category]] = await db.execute(
+        'SELECT id, name, is_active FROM service_categories WHERE id = ? FOR UPDATE',
+        [id.data],
+      );
+      if (!category) throw Object.assign(new Error('Category not found.'), { status: 404 });
+      const from = Boolean(category.is_active);
+      if (from === parsed.data.is_active) return;
+      const [[usage]] = await db.execute(
+        'SELECT COUNT(*) AS service_count FROM services WHERE category_id = ?',
+        [id.data],
+      );
+      await db.execute('UPDATE service_categories SET is_active = ? WHERE id = ?', [parsed.data.is_active, id.data]);
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'service_category.status_changed',
+        entityType: 'service_category',
+        entityId: id.data,
+        details: {
+          name: category.name,
+          from,
+          to: parsed.data.is_active,
+          service_count: Number(usage.service_count),
+        },
+        ip: req.ip,
+      });
+    });
+    return res.json({ data: { id: id.data, is_active: parsed.data.is_active } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      return sendError(res, error);
+    } catch (unhandled) {
+      return next(unhandled);
+    }
+  }
+});
+
+router.patch('/categories/:id', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = categoryFieldsSchema.partial().safeParse(req.body || {});
+  if (!id.success || !parsed.success) return res.status(400).json({ error: 'Category ID or update data is invalid.' });
+  const fields = Object.keys(parsed.data);
+  if (!fields.length) return res.status(400).json({ error: 'Provide at least one editable category field.' });
+  const database = getDatabase(req);
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const [[category]] = await db.execute(
+        'SELECT id, name, description, display_order FROM service_categories WHERE id = ? FOR UPDATE',
+        [id.data],
+      );
+      if (!category) throw Object.assign(new Error('Category not found.'), { status: 404 });
+      const before = Object.fromEntries(fields.map((field) => [field, category[field]]));
+      const after = Object.fromEntries(fields.map((field) => [
+        field,
+        field === 'description' ? (parsed.data[field] || null) : parsed.data[field],
+      ]));
+      await db.execute(
+        `UPDATE service_categories SET ${fields.map((field) => `${field} = ?`).join(', ')} WHERE id = ?`,
+        [...fields.map((field) => after[field]), id.data],
+      );
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'service_category.updated',
+        entityType: 'service_category',
+        entityId: id.data,
+        details: { before, after },
+        ip: req.ip,
+      });
+    });
+    return res.json({ data: { id: id.data } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    try {
+      return sendError(res, error);
+    } catch (unhandled) {
+      return next(unhandled);
+    }
+  }
+});
+
+router.delete('/categories/:id/image', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'A valid category ID is required.' });
+  const database = getDatabase(req);
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const [[category]] = await db.execute('SELECT id, name, image_mime FROM service_categories WHERE id = ? FOR UPDATE', [id.data]);
+      if (!category) throw Object.assign(new Error('Category not found.'), { status: 404 });
+      if (!category.image_mime) return;
+      await db.execute('UPDATE service_categories SET image = NULL, image_mime = NULL WHERE id = ?', [id.data]);
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'service_category.image_removed',
+        entityType: 'service_category',
+        entityId: id.data,
+        details: { name: category.name, from: category.image_mime, to: null },
+        ip: req.ip,
+      });
+    });
+    return res.status(204).end();
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+});
+
+router.put('/categories/:id/image', categoryImageParser, async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const mimeType = req.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+  const validation = validateProfilePhoto(mimeType, req.body);
+  if (!id.success) return res.status(400).json({ error: 'A valid category ID is required.' });
+  if (!validation.valid) return res.status(400).json({ error: validation.error.replace('Profile photos', 'Category images') });
+  const database = getDatabase(req);
+  try {
+    await inDatabaseTransaction(database, async (db) => {
+      const [[category]] = await db.execute('SELECT id, name, image_mime FROM service_categories WHERE id = ? FOR UPDATE', [id.data]);
+      if (!category) throw Object.assign(new Error('Category not found.'), { status: 404 });
+      await db.execute('UPDATE service_categories SET image = ?, image_mime = ? WHERE id = ?', [req.body, mimeType, id.data]);
+      await writeAudit(db, {
+        actorId: req.admin.id,
+        action: 'service_category.image_updated',
+        entityType: 'service_category',
+        entityId: id.data,
+        details: { name: category.name, from: category.image_mime, to: mimeType, bytes: req.body.length },
+        ip: req.ip,
+      });
+    });
+    return res.json({ data: { id: id.data, image: `/api/platform/categories/${id.data}/image` } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+});
+
+router.delete('/categories/:id', (req, res) => (
+  res.status(405).json({ error: 'Categories cannot be removed. Deactivate the category to preserve linked services.' })
+));
+
 router.post('/:resource', async (req, res, next) => {
   const resource = getResource(req.params.resource);
   if (!resource || !resource.mutable) return res.status(404).json({ error: 'Resource not found or not creatable.' });
+  if (req.params.resource === 'events') return res.status(405).json({ error: 'Use the event management endpoint.' });
 
   try {
     const body = validBody(resource, req.body, true);
@@ -1517,6 +3030,7 @@ router.patch('/:resource/:id', async (req, res, next) => {
   const resource = getResource(req.params.resource);
   const id = idSchema.safeParse(req.params.id);
   if (!resource || !resource.mutable || !id.success) return res.status(404).json({ error: 'Resource or record not found.' });
+  if (req.params.resource === 'events') return res.status(405).json({ error: 'Use the event management endpoint.' });
   if (req.params.resource === 'users') return res.status(405).json({ error: 'Use the dedicated user update endpoint.' });
 
   try {
@@ -1541,6 +3055,7 @@ router.delete('/:resource/:id', async (req, res, next) => {
   const resource = getResource(req.params.resource);
   const id = idSchema.safeParse(req.params.id);
   if (!resource || !resource.deactivate || !id.success) return res.status(405).json({ error: 'This resource cannot be deactivated through this endpoint.' });
+  if (req.params.resource === 'events') return res.status(405).json({ error: 'Use the event management endpoint.' });
   if (req.params.resource === 'users') return res.status(405).json({ error: 'Use the audited account status action.' });
 
   try {

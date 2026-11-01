@@ -42,12 +42,13 @@ function availableActions(status) {
 }
 
 export default function AdminVendorVerification() {
+  const focusId = new URLSearchParams(window.location.search).get('focus');
   const [applications, setApplications] = useState([]);
   const [counts, setCounts] = useState({});
   const [pagination, setPagination] = useState({ page: 1, total: 0, totalPages: 0 });
   const [status, setStatus] = useState('');
-  const [query, setQuery] = useState('');
-  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState(/^\d+$/.test(focusId || '') ? focusId : '');
+  const [search, setSearch] = useState(/^\d+$/.test(focusId || '') ? focusId : '');
   const [selectedId, setSelectedId] = useState(null);
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);

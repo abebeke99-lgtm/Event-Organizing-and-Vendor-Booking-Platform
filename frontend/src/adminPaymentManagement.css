@@ -1,0 +1,34 @@
+.admin-payment-management .page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.admin-payment-management .page-heading .button,
+.admin-payment-management .admin-payment-actions .button { display: inline-flex; align-items: center; gap: 6px; }
+.admin-payment-tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--border, #e4e7ec); margin: 18px 0; }
+.admin-payment-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 10px 14px; color: var(--muted, #667085); background: transparent; font: inherit; cursor: pointer; }
+.admin-payment-tabs button.active { color: var(--primary, #3b5ccc); border-color: currentColor; font-weight: 700; }
+.admin-payment-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 16px 0; }
+.admin-payment-filters label { display: grid; gap: 4px; font-size: 12px; color: var(--muted, #667085); }
+.admin-payment-filters input, .admin-payment-filters select { min-height: 40px; }
+.admin-payment-search { display: flex !important; flex: 1 1 360px; gap: 8px !important; }
+.admin-payment-search input { flex: 1; min-width: 180px; }
+.admin-payment-count { padding: 10px 4px; color: var(--muted, #667085); }
+.admin-payment-management td small { display: block; margin-top: 3px; color: var(--muted, #667085); overflow-wrap: anywhere; }
+.admin-payment-status { display: inline-flex; padding: 4px 8px; border-radius: 999px; background: #f2f4f7; color: #475467; text-transform: capitalize; white-space: nowrap; }
+.admin-payment-status.status-paid, .admin-payment-status.status-successful, .admin-payment-status.status-succeeded { background: #ecfdf3; color: #027a48; }
+.admin-payment-status.status-failed, .admin-payment-status.status-rejected, .admin-payment-status.status-cancelled { background: #fef3f2; color: #b42318; }
+.admin-payment-status.status-pending, .admin-payment-status.status-processing, .admin-payment-status.status-refund_pending { background: #fffaeb; color: #b54708; }
+.admin-payment-status.status-partially_refunded { background: #eff8ff; color: #175cd3; }
+.admin-payment-reason { min-width: 170px; max-width: 280px; white-space: normal; overflow-wrap: anywhere; }
+.admin-payment-actions { display: flex; align-items: center; gap: 5px; min-width: 140px; }
+.admin-payment-actions .button.small { padding: 5px 8px; font-size: 12px; }
+.admin-payment-overlay { z-index: 1200; }
+.admin-payment-modal { width: min(760px, calc(100vw - 32px)); max-height: min(85vh, 900px); overflow: auto; }
+.admin-payment-modal .field { display: grid; gap: 6px; margin-top: 16px; }
+.admin-payment-modal .field textarea { min-height: 100px; }
+.admin-payment-history h3 { margin: 18px 0 8px; }
+.admin-payment-history article { display: grid; gap: 4px; border-top: 1px solid var(--border, #e4e7ec); padding: 10px 0; }
+.admin-payment-history article span { color: var(--muted, #667085); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .admin-payment-management .page-heading { flex-direction: column; }
+  .admin-payment-filters { align-items: stretch; }
+  .admin-payment-filters > * { flex: 1 1 100%; }
+  .admin-payment-search { flex-wrap: wrap; }
+}

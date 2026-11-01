@@ -1,0 +1,244 @@
+import assert from 'node:assert/strict';
+import bcrypt from 'bcryptjs';
+import { after, before, test } from 'node:test';
+import { createApp } from '../src/app.js';
+import { hashToken } from '../src/lib/security.js';
+
+const initialToken = 'admin-profile-test-session';
+const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const statements = [];
+const auditRecords = [];
+const adminSessions = new Set([hashToken(initialToken)]);
+let passwordHash;
+let profile = {
+  id: 17,
+  full_name: 'Profile Administrator',
+  email: 'admin@example.test',
+  phone: '555-0101',
+  status: 'active',
+  created_at: '2024-01-02 10:00:00',
+  roles: 'Admin',
+  profile_photo: null,
+  profile_photo_mime: null,
+};
+
+async function execute(sql, values = []) {
+  statements.push({ sql, values });
+  if (sql.includes('FROM admin_sessions s')) {
+    return [adminSessions.has(values[0]) ? [{
+      id: profile.id,
+      full_name: profile.full_name,
+      email: profile.email,
+      phone: profile.phone,
+      status: profile.status,
+      roles: profile.roles,
+    }] : []];
+  }
+  if (sql.startsWith('SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at')) {
+    return [[{
+      id: profile.id,
+      full_name: profile.full_name,
+      email: profile.email,
+      phone: profile.phone,
+      status: profile.status,
+      created_at: profile.created_at,
+      roles: profile.roles,
+      has_profile_photo: Boolean(profile.profile_photo),
+    }]];
+  }
+  if (sql.startsWith('SELECT id, action, entity_type, entity_id, outcome, severity, request_id')) {
+    return [[{
+      id: 92,
+      action: 'admin.profile_updated',
+      entity_type: 'user',
+      entity_id: String(profile.id),
+      outcome: 'success',
+      severity: 'info',
+      request_id: 'cf49e334-fb13-46fb-9819-952c19c2690a',
+      created_at: '2026-10-30 10:00:00',
+    }]];
+  }
+  if (sql.startsWith('SELECT profile_photo, profile_photo_mime FROM users')) {
+    return [[{
+      profile_photo: profile.profile_photo,
+      profile_photo_mime: profile.profile_photo_mime,
+    }]];
+  }
+  if (sql.startsWith('SELECT id, full_name, phone FROM users')) {
+    return [[{ id: profile.id, full_name: profile.full_name, phone: profile.phone }]];
+  }
+  if (sql.startsWith('UPDATE users SET full_name') || sql.startsWith('UPDATE users SET phone')) {
+    const fields = sql.match(/SET (.+) WHERE/)[1].split(', ').map((field) => field.split(' =')[0]);
+    fields.forEach((field, index) => { profile[field] = values[index]; });
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('SELECT password_hash FROM users')) return [[{ password_hash: passwordHash }]];
+  if (sql.startsWith('UPDATE users SET password_hash')) {
+    passwordHash = values[0];
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('INSERT INTO admin_sessions')) {
+    adminSessions.add(values[0]);
+    return [{ insertId: 99, affectedRows: 1 }];
+  }
+  if (sql.startsWith('DELETE FROM admin_sessions WHERE user_id')) {
+    adminSessions.clear();
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('DELETE FROM user_sessions WHERE user_id')) return [{ affectedRows: 1 }];
+  if (sql.startsWith('UPDATE users SET profile_photo = ?')) {
+    profile.profile_photo = values[0];
+    profile.profile_photo_mime = values[1];
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('UPDATE users SET profile_photo = NULL')) {
+    profile.profile_photo = null;
+    profile.profile_photo_mime = null;
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('INSERT INTO audit_logs')) {
+    auditRecords.push({ sql, values });
+    return [{ insertId: auditRecords.length, affectedRows: 1 }];
+  }
+  return [{ affectedRows: 1 }];
+}
+
+const database = {
+  execute,
+  async query() { return [[], []]; },
+  async getConnection() {
+    return {
+      execute,
+      async beginTransaction() {},
+      async commit() {},
+      async rollback() {},
+      release() {},
+    };
+  },
+};
+const app = createApp({ database });
+const server = app.listen(0, '127.0.0.1');
+let baseUrl;
+
+before(async () => {
+  if (!server.listening) await new Promise((resolve) => server.once('listening', resolve));
+  passwordHash = await bcrypt.hash('CurrentAdmin123', 4);
+  baseUrl = `http://127.0.0.1:${server.address().port}`;
+});
+
+after(async () => {
+  await new Promise((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+    server.closeAllConnections();
+  });
+});
+
+function adminRequest(path, options = {}, token = initialToken) {
+  const headers = new Headers(options.headers || {});
+  headers.set('Cookie', `admin_session=${token}`);
+  return fetch(`${baseUrl}${path}`, { ...options, headers, signal: AbortSignal.timeout(8000) });
+}
+
+test('administrator profile is scoped to the authenticated session and omits secrets', async () => {
+  statements.length = 0;
+  const response = await adminRequest('/api/admin/profile?id=999');
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.data.id, profile.id);
+  assert.equal(result.data.roles, 'Admin');
+  assert.equal(result.data.status, 'active');
+  assert.equal('password_hash' in result.data, false);
+  assert.equal('profile_photo' in result.data, false);
+  const profileQuery = statements.find(({ sql }) => sql.includes('has_profile_photo'));
+  assert.deepEqual(profileQuery.values, [profile.id]);
+});
+
+test('administrator profile activity only queries the authenticated actor', async () => {
+  statements.length = 0;
+  const response = await adminRequest('/api/admin/profile/activity');
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.data[0].action, 'admin.profile_updated');
+  const activityQuery = statements.find(({ sql }) => sql.startsWith('SELECT id, action, entity_type'));
+  assert.deepEqual(activityQuery.values, [profile.id]);
+  assert.match(activityQuery.sql, /WHERE actor_id = \?/);
+});
+
+test('administrator can update only permitted profile fields and changes are audited', async () => {
+  const changed = await adminRequest('/api/admin/profile', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ full_name: 'Updated Admin', phone: '555-0199' }),
+  });
+  assert.equal(changed.status, 200);
+  const result = await changed.json();
+  assert.equal(result.user.full_name, 'Updated Admin');
+  assert.equal(result.user.phone, '555-0199');
+  assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.profile_updated'));
+
+  const roleChange = await adminRequest('/api/admin/profile', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role_id: 3 }),
+  });
+  assert.equal(roleChange.status, 400);
+});
+
+test('administrator profile image validates content and audits successful upload/removal', async () => {
+  const invalid = await adminRequest('/api/admin/profile/photo', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'image/png' },
+    body: Buffer.from('not-an-image'),
+  });
+  assert.equal(invalid.status, 400);
+
+  const uploaded = await adminRequest('/api/admin/profile/photo', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'image/png' },
+    body: imageBytes,
+  });
+  assert.equal(uploaded.status, 200);
+  assert.equal(profile.profile_photo_mime, 'image/png');
+  assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.profile_photo_updated'));
+
+  const removed = await adminRequest('/api/admin/profile/photo', { method: 'DELETE' });
+  assert.equal(removed.status, 204);
+  assert.equal(profile.profile_photo, null);
+  assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.profile_photo_removed'));
+});
+
+test('password change requires the current password and rotates administrator sessions', async () => {
+  const wrongPassword = await adminRequest('/api/admin/profile/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'wrong-password', newPassword: 'NewAdminPass123' }),
+  });
+  assert.equal(wrongPassword.status, 400);
+
+  const invalidPassword = await adminRequest('/api/admin/profile/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'CurrentAdmin123', newPassword: 'weak' }),
+  });
+  assert.equal(invalidPassword.status, 400);
+
+  const changed = await adminRequest('/api/admin/profile/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'CurrentAdmin123', newPassword: 'NewAdminPass123' }),
+  });
+  assert.equal(changed.status, 200);
+  const renewedCookie = changed.headers.get('set-cookie');
+  assert.match(renewedCookie, /admin_session=/);
+  assert.match(renewedCookie, /HttpOnly/i);
+  assert.equal(adminSessions.has(hashToken(initialToken)), false);
+  const rotatedToken = decodeURIComponent(renewedCookie.match(/admin_session=([^;]+)/)[1]);
+  assert.equal(adminSessions.has(hashToken(rotatedToken)), true);
+  assert.equal(await bcrypt.compare('NewAdminPass123', passwordHash), true);
+
+  const oldSession = await adminRequest('/api/admin/profile', {}, initialToken);
+  assert.equal(oldSession.status, 401);
+  const newSession = await adminRequest('/api/admin/profile', {}, rotatedToken);
+  assert.equal(newSession.status, 200);
+  assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.password_changed'));
+});

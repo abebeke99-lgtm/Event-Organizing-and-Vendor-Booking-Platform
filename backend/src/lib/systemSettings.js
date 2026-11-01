@@ -21,6 +21,8 @@ const socialLinksSchema = z.string().superRefine((value, context) => {
 export const DEFAULT_SYSTEM_SETTINGS = Object.freeze({
   platform_name: 'EventHub',
   platform_description: 'Event organizing and vendor booking platform.',
+  branding_logo_url: '',
+  platform_locale: 'en',
   support_email: '',
   support_phone: '',
   support_address: '',
@@ -31,11 +33,32 @@ export const DEFAULT_SYSTEM_SETTINGS = Object.freeze({
   platform_status: 'open',
   maintenance_mode: false,
   maintenance_message: 'We are performing scheduled maintenance. Please check back soon.',
+  platform_currency: 'ETB',
+  report_timezone: 'Africa/Addis_Ababa',
+  booking_cancellation_cutoff_hours: 24,
+  booking_rescheduling_enabled: true,
+  booking_reschedule_cutoff_hours: 24,
+  booking_confirmation_workflow: 'vendor_acceptance',
+  vendor_require_category: true,
+  vendor_require_city: false,
+  vendor_require_description: false,
+  notify_admin_user_registrations: true,
+  notify_admin_vendor_applications: true,
+  notify_admin_complaints: true,
+  refund_request_window_days: 30,
 });
+
+const optionalHttpsUrlSchema = z.union([
+  z.literal(''),
+  z.string().trim().url().max(500).refine((value) => /^https:\/\//i.test(value), 'Use an HTTPS logo URL.'),
+]);
+const integerSetting = (maximum) => z.coerce.number().int().min(0).max(maximum);
 
 export const SYSTEM_SETTING_SCHEMAS = Object.freeze({
   platform_name: z.string().trim().min(1).max(100),
   platform_description: z.string().trim().max(500),
+  branding_logo_url: optionalHttpsUrlSchema,
+  platform_locale: z.enum(['en', 'am']),
   support_email: z.union([z.literal(''), z.string().trim().email().max(254)]),
   support_phone: z.string().trim().max(40).regex(/^[+\d().\-\s]*$/, 'Enter a valid phone number.'),
   support_address: z.string().trim().max(255),
@@ -46,6 +69,26 @@ export const SYSTEM_SETTING_SCHEMAS = Object.freeze({
   platform_status: z.enum(['open', 'locked', 'maintenance']),
   maintenance_mode: z.boolean(),
   maintenance_message: z.string().trim().min(1).max(1000),
+  platform_currency: z.string().trim().regex(/^[A-Z]{3}$/, 'Use a three-letter ISO currency code.'),
+  report_timezone: z.string().trim().min(1).max(64).refine((value) => {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Enter a valid IANA timezone.'),
+  booking_cancellation_cutoff_hours: integerSetting(8760),
+  booking_rescheduling_enabled: z.boolean(),
+  booking_reschedule_cutoff_hours: integerSetting(8760),
+  booking_confirmation_workflow: z.enum(['vendor_acceptance', 'administrator_approval']),
+  vendor_require_category: z.boolean(),
+  vendor_require_city: z.boolean(),
+  vendor_require_description: z.boolean(),
+  notify_admin_user_registrations: z.boolean(),
+  notify_admin_vendor_applications: z.boolean(),
+  notify_admin_complaints: z.boolean(),
+  refund_request_window_days: integerSetting(365),
 });
 
 export const systemSettingsPatchSchema = z.object(
@@ -60,7 +103,17 @@ export function parseStoredSystemSetting(key, value) {
   const schema = SYSTEM_SETTING_SCHEMAS[key];
   if (!schema) return undefined;
   let candidate = String(value ?? '');
-  if (key === 'maintenance_mode' || key === 'public_registration_enabled') {
+  if ([
+    'maintenance_mode',
+    'public_registration_enabled',
+    'booking_rescheduling_enabled',
+    'vendor_require_category',
+    'vendor_require_city',
+    'vendor_require_description',
+    'notify_admin_user_registrations',
+    'notify_admin_vendor_applications',
+    'notify_admin_complaints',
+  ].includes(key)) {
     if ([true, 1, 'true', '1'].includes(value)) candidate = true;
     else if ([false, 0, 'false', '0'].includes(value)) candidate = false;
     else throw new Error(`Stored system setting "${key}" is invalid.`);

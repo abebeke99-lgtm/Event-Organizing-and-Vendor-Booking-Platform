@@ -117,6 +117,8 @@ function UserDetails({ user, details, loading, error, onClose }) {
 }
 
 export default function AdminUserManagement() {
+  const focusId = new URLSearchParams(window.location.search).get('focus');
+  const openedFocus = useRef('');
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [filterRoles, setFilterRoles] = useState([]);
@@ -125,8 +127,8 @@ export default function AdminUserManagement() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [searchInput, setSearchInput] = useState('');
-  const [filters, setFilters] = useState({ q: '', status: '', role: '', dateFrom: '', dateTo: '', sortBy: 'created_at', sortDirection: 'desc' });
+  const [searchInput, setSearchInput] = useState(/^\d+$/.test(focusId || '') ? focusId : '');
+  const [filters, setFilters] = useState({ q: /^\d+$/.test(focusId || '') ? focusId : '', status: '', role: '', dateFrom: '', dateTo: '', sortBy: 'created_at', sortDirection: 'desc' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [actionModal, setActionModal] = useState(null);
@@ -157,6 +159,15 @@ export default function AdminUserManagement() {
   useEffect(() => {
     loadUsers(pagination.page, filters, pagination.pageSize);
   }, [filters, loadUsers, pagination.page, pagination.pageSize]);
+
+  useEffect(() => {
+    if (!focusId || loading || openedFocus.current === focusId) return;
+    const user = users.find((row) => Number(row.id) === Number(focusId));
+    if (user) {
+      openedFocus.current = focusId;
+      openUserDetails(user);
+    }
+  }, [focusId, loading, users]);
 
   useEffect(() => {
     apiClient.get('/admin/roles', { params: { pageSize: 100 } })

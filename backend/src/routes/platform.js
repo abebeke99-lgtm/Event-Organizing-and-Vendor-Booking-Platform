@@ -8,6 +8,7 @@ import { optionalPlatformUser, requirePlatformUser } from '../middleware/require
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { getProfilePhoto, profilePhotoUploadParser, removeProfilePhoto, saveProfilePhoto } from '../lib/profilePhoto.js';
 import { createUserSession, hashToken, writeAudit } from '../lib/security.js';
+import { createNotification, notifyAdministrators } from '../lib/notificationService.js';
 import {
   MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
   sanitizeVendorDocumentName,
@@ -20,6 +21,13 @@ import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } fro
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
 import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
 import { createEventSchema, dateTimeSchema, toMysqlDateTime } from '../lib/eventInput.js';
+import { isEventOpenForBookings } from '../lib/adminEvents.js';
+import {
+  checkBookingDateAvailability,
+  lockBookingVendor,
+  releaseBookingDate,
+  reserveBookingDate,
+} from '../lib/bookingAvailability.js';
 import {
   ensureVendorProfile as ensureVendorProfileRecord,
   loadPublicMarketplace,
@@ -33,6 +41,45 @@ const vendorVerificationDocumentParser = express.raw({
   limit: MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
 });
 const databaseFor = (req) => req.app?.locals?.database || pool;
+async function inDatabaseTransaction(database, work) {
+  const connection = await database.getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await work(connection);
+    await connection.commit();
+    return result;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
+
+async function notifyBookingParties(database, booking, actorId, status, reason = '') {
+  const title = status === 'accepted'
+    ? 'Booking confirmed'
+    : status === 'cancelled'
+      ? 'Booking cancelled'
+      : status === 'rejected'
+        ? 'Booking declined'
+        : `Booking ${status.replaceAll('_', ' ')}`;
+  const message = `${title}: ${booking.event_title || `Booking #${booking.id}`} with ${booking.vendor_name || 'your vendor'}.${reason ? ` Reason: ${reason}` : ''}`;
+  for (const userId of new Set([Number(booking.customer_id), Number(booking.vendor_user_id)])) {
+    if (userId && userId !== Number(actorId)) {
+      await createNotification(database, {
+        userId,
+        title,
+        message,
+        type: 'booking',
+        relatedType: 'booking',
+        relatedId: booking.id,
+        idempotencyKey: status === 'rescheduled' ? null : `booking:${booking.id}:${status}:${userId}`,
+        actorId,
+      });
+    }
+  }
+}
 const emailSchema = z.string().trim().email().max(190);
 const sessionCheckLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -169,7 +216,7 @@ async function listAllPublicEvents() {
 }
 
 router.get('/categories', async (req, res) => {
-  const marketplace = await loadPublicMarketplace();
+  const marketplace = await loadPublicMarketplace(req.app?.locals?.database || pool);
   const search = sanitizeText(req.query.search, '').toLowerCase();
   const categories = search
     ? marketplace.categories.filter((category) => `${category.name} ${category.description}`.toLowerCase().includes(search))
@@ -177,9 +224,27 @@ router.get('/categories', async (req, res) => {
   return res.json({ data: categories });
 });
 
+router.get('/categories/:id/image', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'A valid category ID is required.' });
+  const database = req.app?.locals?.database || pool;
+  const [[category]] = await database.execute(
+    'SELECT image, image_mime FROM service_categories WHERE id = ? AND is_active = TRUE',
+    [id.data],
+  );
+  if (!category?.image) return res.status(404).json({ error: 'Category image not found.' });
+  res.set({
+    'Cache-Control': 'public, max-age=300',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Type': category.image_mime,
+    'Content-Disposition': 'inline',
+  });
+  return res.send(category.image);
+});
+
 router.get('/categories/:slug', async (req, res) => {
   const slug = sanitizeText(req.params.slug, '').toLowerCase();
-  const marketplace = await loadPublicMarketplace();
+  const marketplace = await loadPublicMarketplace(req.app?.locals?.database || pool);
   const category = marketplace.categories.find((item) => item.slug === slug);
   if (!category) return res.status(404).json({ error: 'Category not found.' });
 
@@ -940,8 +1005,7 @@ router.post('/ticket-bookings', requirePlatformUser, async (req, res) => {
         error.status = 404;
         throw error;
       }
-      if (!['active', 'published', 'upcoming', 'open'].includes(String(event.status).toLowerCase())
-        || !Number(event.is_future)) {
+      if (!isEventOpenForBookings(event.status) || !Number(event.is_future)) {
         const error = new Error('This event is not accepting ticket bookings.');
         error.status = 409;
         throw error;
@@ -1088,6 +1152,11 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
   if (!['customer', 'organizer'].includes(req.platformUser.role)) {
     return res.status(403).json({ error: 'Vendor applications are available to customer and organizer accounts.' });
   }
+  const applicationSettings = await loadSystemSettings(databaseFor(req), [
+    'vendor_require_category',
+    'vendor_require_city',
+    'vendor_require_description',
+  ]);
   const parsed = z.object({
     businessName: z.string().trim().min(2).max(160),
     categoryId: z.preprocess(
@@ -1100,8 +1169,13 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid vendor application.' });
   }
+  if ((applicationSettings.vendor_require_category && parsed.data.categoryId === null)
+    || (applicationSettings.vendor_require_city && !parsed.data.city.trim())
+    || (applicationSettings.vendor_require_description && !parsed.data.description.trim())) {
+    return res.status(400).json({ error: 'Complete all business information required by the current vendor policy.' });
+  }
 
-  const application = await inTransaction(async (connection) => {
+  const application = await inDatabaseTransaction(databaseFor(req), async (connection) => {
     await connection.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [req.platformUser.id]);
     if (parsed.data.categoryId !== null) {
       const [categoryRows] = await connection.execute(
@@ -1134,11 +1208,20 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
          WHERE id = ?`,
         [parsed.data.businessName, parsed.data.categoryId, parsed.data.city || null, parsed.data.description || null, existing.id]
       );
-      await connection.execute(
+      const [history] = await connection.execute(
         `INSERT INTO vendor_verification_history (vendor_id, actor_id, from_status, to_status, reason)
          VALUES (?, ?, ?, 'pending', ?)`,
         [existing.id, req.platformUser.id, existing.verification_status, 'Vendor application resubmitted.'],
       );
+      await notifyAdministrators(connection, {
+        title: 'Vendor verification request',
+        message: `${parsed.data.businessName} submitted a vendor application for review.`,
+        type: 'vendor_verification',
+        relatedType: 'vendor',
+        relatedId: existing.id,
+        idempotencyKey: `vendor-application:${existing.id}:pending:${history.insertId}`,
+        actorId: req.platformUser.id,
+      });
       return { id: existing.id, verificationStatus: 'pending', created: false };
     }
 
@@ -1148,11 +1231,20 @@ router.post('/vendor-application', requirePlatformUser, async (req, res) => {
        ) VALUES (?, ?, ?, ?, ?, 'pending')`,
       [req.platformUser.id, parsed.data.businessName, parsed.data.categoryId, parsed.data.city || null, parsed.data.description || null]
     );
-    await connection.execute(
+    const [history] = await connection.execute(
        `INSERT INTO vendor_verification_history (vendor_id, actor_id, from_status, to_status, reason)
         VALUES (?, ?, NULL, 'pending', ?)`,
        [result.insertId, req.platformUser.id, 'Vendor application submitted.'],
     );
+    await notifyAdministrators(connection, {
+      title: 'Vendor verification request',
+      message: `${parsed.data.businessName} submitted a vendor application for review.`,
+      type: 'vendor_verification',
+      relatedType: 'vendor',
+      relatedId: result.insertId,
+      idempotencyKey: `vendor-application:${result.insertId}:pending:${history.insertId}`,
+      actorId: req.platformUser.id,
+    });
     return { id: result.insertId, verificationStatus: 'pending', created: true };
   });
 
@@ -1226,7 +1318,7 @@ router.post('/vendor-application/documents', requirePlatformUser, vendorVerifica
   });
 });
 
-router.post('/bookings', requirePlatformUser, async (req, res) => {
+router.post('/bookings', requirePlatformUser, async (req, res, next) => {
   if (!['customer', 'organizer'].includes(req.platformUser.role)) {
     return res.status(403).json({ error: 'Only customers and organizers can create bookings.' });
   }
@@ -1239,36 +1331,82 @@ router.post('/bookings', requirePlatformUser, async (req, res) => {
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid booking request.' });
 
-  const [eventRows] = await pool.execute('SELECT id, organizer_id, status FROM events WHERE id = ? LIMIT 1', [parsed.data.eventId]);
-  const event = eventRows[0];
-  if (!event || event.organizer_id !== req.platformUser.id) return res.status(404).json({ error: 'Event not found.' });
-  if (['cancelled', 'completed'].includes(event.status)) return res.status(409).json({ error: 'This event is not accepting bookings.' });
+  const database = databaseFor(req);
+  let bookingResult;
+  try {
+    bookingResult = await inDatabaseTransaction(database, async (connection) => {
+    const [[event]] = await connection.execute(
+      'SELECT id, organizer_id, status, start_date, title FROM events WHERE id = ? LIMIT 1 FOR UPDATE',
+      [parsed.data.eventId],
+    );
+    if (!event || Number(event.organizer_id) !== Number(req.platformUser.id)) {
+      throw Object.assign(new Error('Event not found.'), { status: 404 });
+    }
+    if (!isEventOpenForBookings(event.status)) {
+      throw Object.assign(new Error('This event is not accepting bookings.'), { status: 409 });
+    }
 
-  const [serviceRows] = await pool.execute(
-    `SELECT s.id, s.vendor_id, s.title, s.price, s.currency
-     FROM services s
-     JOIN vendor_profiles vp ON vp.id = s.vendor_id
-     WHERE s.id = ? AND s.status = 'active' AND vp.verification_status = 'verified'
-     LIMIT 1`,
-    [parsed.data.serviceId]
-  );
-  const service = serviceRows[0];
-  if (!service) return res.status(404).json({ error: 'Service not found.' });
-  if (Number(service.price) <= 0) return res.status(409).json({ error: 'This service requires a custom quote.' });
-
-  const bookingId = await inTransaction(async (connection) => {
+    const [[service]] = await connection.execute(
+      `SELECT s.id, s.vendor_id, s.title, s.price, s.currency, vp.user_id AS vendor_user_id,
+              vp.business_name AS vendor_name
+       FROM services s
+       JOIN vendor_profiles vp ON vp.id = s.vendor_id
+       WHERE s.id = ? AND s.status = 'active' AND vp.verification_status = 'verified'
+       LIMIT 1 FOR UPDATE`,
+      [parsed.data.serviceId],
+    );
+    if (!service) throw Object.assign(new Error('Service not found.'), { status: 404 });
+    if (Number(service.price) <= 0) {
+      throw Object.assign(new Error('This service requires a custom quote.'), { status: 409 });
+    }
+    await lockBookingVendor(connection, service.vendor_id);
+    const scheduledDate = event.start_date;
+    if (!scheduledDate || new Date(String(scheduledDate).replace(' ', 'T')) <= new Date()) {
+      throw Object.assign(new Error('The event must have a future scheduled date.'), { status: 409 });
+    }
+    const [[availability]] = await connection.execute(
+      'SELECT status FROM vendor_availability WHERE vendor_id = ? AND available_date = DATE(?) FOR UPDATE',
+      [service.vendor_id, scheduledDate],
+    );
+    if (availability && availability.status !== 'available') {
+      throw Object.assign(new Error('This vendor is not available on the event date.'), { status: 409 });
+    }
+    const [[duplicate]] = await connection.execute(
+      `SELECT id FROM bookings
+       WHERE event_id = ? AND service_id = ?
+         AND status IN ('requested', 'under_review', 'quoted', 'accepted', 'confirmed', 'in_progress')
+       LIMIT 1 FOR UPDATE`,
+      [event.id, service.id],
+    );
+    if (duplicate) {
+      throw Object.assign(new Error('A booking request for this service already exists for the event.'), { status: 409 });
+    }
     const [result] = await connection.execute(
-      `INSERT INTO bookings (event_id, vendor_id, service_id, service_description, quoted_amount, currency, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'requested')`,
+      `INSERT INTO bookings (event_id, vendor_id, service_id, scheduled_date, service_description, quoted_amount, currency, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'requested')`,
       [
         event.id,
         service.vendor_id,
         service.id,
+        scheduledDate,
         parsed.data.notes ? `${service.title} - ${parsed.data.notes}`.slice(0, 255) : service.title,
         service.price,
         service.currency || 'ETB',
-      ]
+      ],
     );
+    await connection.execute(
+      `INSERT INTO booking_history (booking_id, actor_id, action, from_status, to_status, details)
+       VALUES (?, ?, 'created', NULL, 'requested', ?)`,
+      [result.insertId, req.platformUser.id, JSON.stringify({ eventId: event.id, serviceId: service.id })],
+    );
+    const booking = {
+      id: result.insertId,
+      customer_id: event.organizer_id,
+      vendor_user_id: service.vendor_user_id,
+      vendor_name: service.vendor_name,
+      event_title: event.title,
+    };
+    await notifyBookingParties(connection, booking, req.platformUser.id, 'requested');
     await writeAudit(connection, {
       actorId: req.platformUser.id,
       action: 'booking.requested',
@@ -1277,8 +1415,13 @@ router.post('/bookings', requirePlatformUser, async (req, res) => {
       details: { eventId: event.id, serviceId: service.id, vendorId: service.vendor_id },
       ip: req.ip,
     });
-    return result.insertId;
-  });
+    return { id: result.insertId, event, service };
+    });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+  const { id: bookingId, event, service } = bookingResult;
 
   return res.status(201).json({
     data: {
@@ -1296,7 +1439,7 @@ router.post('/bookings', requirePlatformUser, async (req, res) => {
   });
 });
 
-router.patch('/bookings/:id/status', requirePlatformUser, async (req, res) => {
+router.patch('/bookings/:id/status', requirePlatformUser, async (req, res, next) => {
   const schema = z.object({
     status: z.enum(['under_review', 'quoted', 'accepted', 'rejected', 'cancelled', 'completed']),
     reason: z.string().trim().max(500).optional().default(''),
@@ -1304,61 +1447,117 @@ router.patch('/bookings/:id/status', requirePlatformUser, async (req, res) => {
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: 'Invalid booking status.' });
 
-  const [rows] = await pool.execute(
-    `SELECT b.id, b.status, b.vendor_id, e.organizer_id, vp.user_id AS vendor_user_id,
-            vp.verification_status AS vendor_verification_status
-     FROM bookings b
-     JOIN events e ON e.id = b.event_id
-     JOIN vendor_profiles vp ON vp.id = b.vendor_id
-     WHERE b.id = ? LIMIT 1`,
-    [req.params.id]
-  );
-  const booking = rows[0];
-  if (!booking) return res.status(404).json({ error: 'Booking not found.' });
-
+  const bookingId = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!bookingId.success) return res.status(400).json({ error: 'Booking ID is invalid.' });
+  const database = databaseFor(req);
   const userId = req.platformUser.id;
-  const isVendor = booking.vendor_user_id === userId;
-  const isOrganizer = booking.organizer_id === userId;
-  if (!isVendor && !isOrganizer) return res.status(403).json({ error: 'Access denied.' });
-  if (isVendor && booking.vendor_verification_status !== 'verified') {
-    return res.status(403).json({ error: 'Vendor verification is required to respond to bookings.' });
-  }
-
   const nextStatus = parsed.data.status;
-  const vendorTransitions = {
-    requested: ['under_review', 'accepted', 'rejected'],
-    under_review: ['quoted', 'accepted', 'rejected'],
-    quoted: ['accepted', 'rejected'],
-    accepted: ['completed'],
-  };
-  const customerTransitions = {
-    requested: ['cancelled'],
-    under_review: ['cancelled'],
-    quoted: ['cancelled'],
-    accepted: ['cancelled'],
-  };
-  const allowed = (isVendor ? vendorTransitions[booking.status] : customerTransitions[booking.status]) || [];
-  if (!allowed.includes(nextStatus)) {
-    return res.status(409).json({ error: `Cannot change booking from ${booking.status} to ${nextStatus}.` });
-  }
+  try {
+    await inDatabaseTransaction(database, async (connection) => {
+      const settings = await loadSystemSettings(connection, [
+        'booking_cancellation_cutoff_hours',
+        'booking_confirmation_workflow',
+      ]);
+      const [[booking]] = await connection.execute(
+        `SELECT b.id, b.status, b.vendor_id, b.scheduled_date, e.start_date, e.title AS event_title,
+                e.organizer_id, vp.user_id AS vendor_user_id, vp.business_name AS vendor_name,
+                vp.verification_status AS vendor_verification_status
+         FROM bookings b
+         JOIN events e ON e.id = b.event_id
+         JOIN vendor_profiles vp ON vp.id = b.vendor_id
+         WHERE b.id = ? LIMIT 1 FOR UPDATE`,
+        [bookingId.data],
+      );
+      if (!booking) throw Object.assign(new Error('Booking not found.'), { status: 404 });
+      await lockBookingVendor(connection, booking.vendor_id);
+      const isVendor = Number(booking.vendor_user_id) === Number(userId);
+      const isOrganizer = Number(booking.organizer_id) === Number(userId);
+      if (!isVendor && !isOrganizer) throw Object.assign(new Error('Access denied.'), { status: 403 });
+      if (isVendor && booking.vendor_verification_status !== 'verified') {
+        throw Object.assign(new Error('Vendor verification is required to respond to bookings.'), { status: 403 });
+      }
 
-  await inTransaction(async (connection) => {
-    await connection.execute('UPDATE bookings SET status = ?, moderation_reason = ? WHERE id = ?', [
-      nextStatus,
-      parsed.data.reason || null,
-      booking.id,
-    ]);
-    await writeAudit(connection, {
-      actorId: userId,
-      action: `booking.${nextStatus}`,
-      entityType: 'booking',
-      entityId: booking.id,
-      details: { previousStatus: booking.status, reason: parsed.data.reason || null },
-      ip: req.ip,
+      const vendorTransitions = {
+        requested: ['under_review', 'accepted', 'rejected'],
+        under_review: ['quoted', 'accepted', 'rejected'],
+        quoted: ['accepted', 'rejected'],
+        accepted: ['completed'],
+      };
+      if (isVendor && nextStatus === 'accepted'
+        && settings.booking_confirmation_workflow === 'administrator_approval') {
+        throw Object.assign(new Error('Bookings require administrator approval before confirmation.'), { status: 409 });
+      }
+      const customerTransitions = {
+        requested: ['cancelled'],
+        under_review: ['cancelled'],
+        quoted: ['cancelled'],
+        accepted: ['cancelled'],
+      };
+      const allowed = (isVendor ? vendorTransitions[booking.status] : customerTransitions[booking.status]) || [];
+      if (!allowed.includes(nextStatus)) {
+        throw Object.assign(new Error(`Cannot change booking from ${booking.status} to ${nextStatus}.`), { status: 409 });
+      }
+
+      const scheduledDate = booking.scheduled_date || booking.start_date;
+      if (isOrganizer && nextStatus === 'cancelled') {
+        const [cutoffRows] = await connection.execute(
+          'SELECT ? <= DATE_ADD(NOW(), INTERVAL ? HOUR) AS inside_cutoff',
+          [scheduledDate, settings.booking_cancellation_cutoff_hours],
+        );
+        if (cutoffRows[0]?.inside_cutoff) {
+          throw Object.assign(new Error('This booking is inside the configured cancellation cutoff.'), { status: 409 });
+        }
+      }
+      if (nextStatus === 'accepted') {
+        if (!scheduledDate || new Date(String(scheduledDate).replace(' ', 'T')) <= new Date()) {
+          throw Object.assign(new Error('A booking cannot be confirmed after its scheduled date.'), { status: 409 });
+        }
+        const availability = await checkBookingDateAvailability(connection, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate,
+        });
+        await reserveBookingDate(connection, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate, availability,
+        });
+      }
+      if (nextStatus === 'completed') {
+        const date = scheduledDate ? new Date(String(scheduledDate).replace(' ', 'T')) : null;
+        if (!date || Number.isNaN(date.getTime()) || date > new Date()) {
+          throw Object.assign(new Error('A booking cannot be marked completed before its scheduled date.'), { status: 409 });
+        }
+      }
+
+      await connection.execute(
+        'UPDATE bookings SET status = ?, scheduled_date = COALESCE(scheduled_date, ?), moderation_reason = ? WHERE id = ?',
+        [nextStatus, scheduledDate, parsed.data.reason || null, booking.id],
+      );
+      if (nextStatus === 'cancelled') {
+        await releaseBookingDate(connection, {
+          vendorId: booking.vendor_id, bookingId: booking.id, scheduledDate,
+        });
+      }
+      await connection.execute(
+        `INSERT INTO booking_history (booking_id, actor_id, action, from_status, to_status, reason)
+         VALUES (?, ?, 'status_changed', ?, ?, ?)`,
+        [booking.id, userId, booking.status, nextStatus, parsed.data.reason || null],
+      );
+      await notifyBookingParties(connection, {
+        ...booking,
+        customer_id: booking.organizer_id,
+      }, userId, nextStatus, parsed.data.reason);
+      await writeAudit(connection, {
+        actorId: userId,
+        action: `booking.${nextStatus}`,
+        entityType: 'booking',
+        entityId: booking.id,
+        details: { previousStatus: booking.status, reason: parsed.data.reason || null },
+        ip: req.ip,
+      });
     });
-  });
-
-  return res.json({ data: { id: Number(booking.id), status: nextStatus } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
+  }
+  return res.json({ data: { id: bookingId.data, status: nextStatus } });
 });
 
 router.post(['/event-package-requests', '/package-requests'], async (req, res) => {
@@ -1567,6 +1766,15 @@ router.post('/register', registrationLimiter, async (req, res) => {
       entityId: result.insertId,
       details: { role: roleName, city: parsed.data.city || null },
       ip: req.ip,
+    });
+    await notifyAdministrators(connection, {
+      title: 'New user registration',
+      message: `${parsed.data.name} registered as a ${roleName.toLowerCase()}.`,
+      type: 'user_registration',
+      relatedType: 'user',
+      relatedId: result.insertId,
+      idempotencyKey: `user-registration:${result.insertId}`,
+      actorId: result.insertId,
     });
     return { id: result.insertId, token };
   });

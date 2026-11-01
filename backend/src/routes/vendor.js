@@ -6,6 +6,7 @@ import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { ensureVendorProfile, loadVendorProfileForUser } from '../lib/marketplace.js';
 import { writeAudit } from '../lib/security.js';
+import { loadSystemSettings } from '../lib/systemSettings.js';
 import {
   MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
   sanitizeVendorDocumentName,
@@ -65,7 +66,7 @@ const serviceFieldsSchema = z.object({
   description: z.string().trim().max(10000).optional().default(''),
   categoryId: categoryIdSchema,
   price: priceSchema,
-  currency: z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase()).optional().default('ETB'),
+  currency: z.string().trim().regex(/^[A-Za-z]{3}$/).transform((value) => value.toUpperCase()).optional(),
   status: z.enum(['draft', 'active']).optional().default('draft'),
 }).strict();
 const servicePatchSchema = serviceFieldsSchema.partial();
@@ -316,17 +317,20 @@ getPermissionRoute('/services', 'services.manage_own', async (req, res) => {
 postPermissionRoute('/services', 'services.manage_own', async (req, res) => {
   const parsed = serviceFieldsSchema.safeParse(req.body || {});
   if (!parsed.success) return sendValidationError(res, parsed.error);
-  if (!await validateCategory(databaseFor(req), parsed.data.categoryId)) {
+  const database = databaseFor(req);
+  const settings = await loadSystemSettings(database, ['platform_currency']);
+  const currency = parsed.data.currency || settings.platform_currency;
+  if (!await validateCategory(database, parsed.data.categoryId)) {
     return res.status(400).json({ error: 'Select an active service category.' });
   }
   if (parsed.data.status === 'active' && req.vendor.verification_status !== 'verified') {
     return res.status(409).json({ error: 'Vendor verification is required before publishing a service.' });
   }
 
-  const [result] = await databaseFor(req).execute(
+  const [result] = await database.execute(
     `INSERT INTO services (vendor_id, category_id, title, description, price, currency, status)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [req.vendor.id, parsed.data.categoryId ?? null, parsed.data.title, parsed.data.description, parsed.data.price ?? null, parsed.data.currency, parsed.data.status]
+    [req.vendor.id, parsed.data.categoryId ?? null, parsed.data.title, parsed.data.description, parsed.data.price ?? null, currency, parsed.data.status]
   );
   return res.status(201).json({
     success: true,
@@ -337,7 +341,7 @@ postPermissionRoute('/services', 'services.manage_own', async (req, res) => {
       description: parsed.data.description,
       categoryId: parsed.data.categoryId ?? null,
       price: parsed.data.price ?? null,
-      currency: parsed.data.currency,
+      currency,
       status: statusLabel(parsed.data.status),
     },
   });
@@ -401,21 +405,25 @@ deletePermissionRoute('/services/:id', 'services.manage_own', async (req, res) =
 });
 
 getRoute('/categories', async (req, res) => {
-  const [rows] = await pool.query('SELECT id, name, description, is_active FROM service_categories ORDER BY name ASC');
+  const [rows] = await databaseFor(req).query(
+    'SELECT id, name, description, display_order, is_active FROM service_categories WHERE is_active = TRUE ORDER BY display_order ASC, name ASC',
+  );
   return ok(res, rows.map((row) => ({ id: Number(row.id), name: row.name, description: row.description || '', active: Boolean(row.is_active) })));
 });
 
 getRoute('/pricing', async (req, res) => {
-  const [rows] = await pool.execute(
+  const database = databaseFor(req);
+  const [rows] = await database.execute(
     `SELECT id, title, description, price, currency
      FROM services
      WHERE vendor_id = ? AND status = 'active'
      ORDER BY price ASC`,
     [req.vendor.id]
   );
+  const settings = await loadSystemSettings(database, ['platform_currency']);
   const prices = rows.map((row) => Number(row.price || 0)).filter((price) => price > 0);
   return ok(res, {
-    currency: rows[0]?.currency || 'ETB',
+    currency: rows[0]?.currency || settings.platform_currency,
     basePrice: prices.length ? Math.min(...prices) : 0,
     packages: rows.map((row) => ({
       id: Number(row.id),

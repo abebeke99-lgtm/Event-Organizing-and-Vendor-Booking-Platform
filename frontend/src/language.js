@@ -68,6 +68,8 @@ const messages = {
     search: "Search",
     notifications: "Notifications",
     logout: "Logout",
+    confirmLogout: "Are you sure you want to log out?",
+    logoutFailed: "Logout could not be completed. Please try again.",
     languageEnglish: "English",
     homeHeroEyebrow: "EVENT ORGANIZING & VENDOR BOOKING",
     homeHeroTitle: "Design unforgettable events with trusted partners.",
@@ -394,6 +396,8 @@ const messages = {
     followUs: "Follow us",
     office: "Office",
     supportHours: "Support hours",
+    platformCurrency: "Platform currency (ISO 4217)",
+    reportTimezone: "Reporting timezone (IANA)",
     emailSent: "Your message has been sent successfully.",
     unableToSendMessage: "Unable to send your message right now.",
     contactLoadError: "Unable to load the Contact page.",
@@ -522,13 +526,53 @@ const messages = {
     generalSettings: "General Settings",
     securitySettings: "Security Settings",
     notificationSettings: "Notification Settings",
-    systemSettingsDescription: "Manage platform details, registration access, and maintenance using saved database settings.",
+    systemSettingsDescription: "Manage saved platform, booking, vendor, notification, payment, security, and maintenance settings.",
     platformName: "Platform name",
     platformDescription: "Platform description",
     supportEmail: "Support email",
     supportPhone: "Contact phone",
     supportAddress: "Support address",
     socialLinks: "Social links (JSON)",
+    brandingLogoUrl: "Brand logo URL (HTTPS)",
+    platformLocale: "Platform default language",
+    bookingSettings: "Booking Settings",
+    bookingConfirmationWorkflow: "Booking confirmation workflow",
+    vendorAcceptance: "Vendor acceptance",
+    administratorApproval: "Administrator approval",
+    cancellationCutoffHours: "Cancellation cutoff (hours before booking)",
+    bookingReschedulingEnabled: "Allow administrator rescheduling",
+    bookingRulesHelp: "When disabled, administrators cannot reschedule bookings.",
+    rescheduleCutoffHours: "Rescheduling cutoff (hours before booking)",
+    bookingTimeLimitNote: "Changes apply to new cancellation and rescheduling requests. Existing booking records are unchanged.",
+    vendorSettings: "Vendor Settings",
+    requireVendorCategory: "Require a service category",
+    vendorInformationHelp: "Applies when a vendor submits or updates an application.",
+    requireVendorCity: "Require a business city",
+    requireVendorDescription: "Require a business description",
+    vendorVerificationStatus: "Vendor verification",
+    alwaysRequired: "Always required",
+    servicePublicationRuleNote: "Service publication remains restricted to verified vendors.",
+    notifyUserRegistrations: "Notify administrators about new registrations",
+    notifyVendorApplications: "Notify administrators about vendor applications",
+    notifyComplaints: "Notify administrators about customer complaints",
+    notificationChannel_inApp: "In-app notifications",
+    notificationChannel_email: "Email delivery",
+    notificationChannel_sms: "SMS delivery",
+    configured: "Configured",
+    notConfigured: "Not configured",
+    emailSecretsNote: "Email credentials are managed outside System Settings and are never shown here.",
+    paymentSettings: "Payment Settings",
+    refundRequestWindowDays: "Refund request window (days; 0 means no limit)",
+    paymentProviderStatus: "Payment provider",
+    pendingIntegration: "Pending integration",
+    supportedCurrencies: "Currencies in use",
+    paymentSecretsNote: "Provider credentials are managed outside System Settings and are never shown here.",
+    administratorSession: "Administrator session",
+    userSession: "User session",
+    hours: "hours",
+    passwordPolicy: "Password policy",
+    charactersStrongPassword: "characters; strong password required",
+    securityPolicyReadonlyNote: "Authentication policies are fixed by the current application architecture.",
     publicRegistration: "Allow public registration",
     publicRegistrationHelp: "When disabled, new public account registrations are rejected by the server.",
     defaultRegistrationRole: "Default registration role",
@@ -823,6 +867,8 @@ const messages = {
     search: "ፈልግ",
     notifications: "ማሳወቂያዎች",
     logout: "ውጣ",
+    confirmLogout: "ከመለያዎ መውጣት ይፈልጋሉ?",
+    logoutFailed: "መውጣት አልተቻለም። እባክዎ እንደገና ይሞክሩ።",
     languageEnglish: "እንግሊዝኛ",
     homeHeroEyebrow: "የዝግጅት አደረጃጀት እና የአገልግሎት ሰጪ ቦታ ማስያዝ",
     homeHeroTitle: "ከታመኑ አጋሮች ጋር የማይረሱ ዝግጅቶችን ያዘጋጁ።",
@@ -1143,6 +1189,8 @@ const messages = {
     followUs: "ይከተሉን",
     office: "ቢሮ",
     supportHours: "የድጋፍ ሰዓት",
+    platformCurrency: "የመድረክ ገንዘብ (ISO 4217)",
+    reportTimezone: "የሪፖርት የሰዓት ዞን (IANA)",
     emailSent: "መልዕክትዎ በተሳካ ሁኔታ ተልኳል።",
     unableToSendMessage: "መልዕክትዎን መላክ አልተቻለም።",
     contactLoadError: "የመገኛ ገጹን መጫን አልተቻለም።",
@@ -1271,13 +1319,53 @@ const messages = {
     generalSettings: "አጠቃላይ ቅንብሮች",
     securitySettings: "የደህንነት ቅንብሮች",
     notificationSettings: "የማሳወቂያ ቅንብሮች",
-    systemSettingsDescription: "የመድረክ መረጃን፣ የምዝገባ ፈቃድን እና የጥገና ሁኔታን በዳታቤዝ ውስጥ ያስተዳድሩ።",
+    systemSettingsDescription: "የመድረክ፣ የቦታ ማስያዣ፣ የአገልግሎት ሰጪ፣ የማሳወቂያ፣ የክፍያ፣ የደህንነት እና የጥገና ቅንብሮችን ያስተዳድሩ።",
     platformName: "የመድረክ ስም",
     platformDescription: "የመድረክ መግለጫ",
     supportEmail: "የድጋፍ ኢሜይል",
     supportPhone: "የመገኛ ስልክ",
     supportAddress: "የድጋፍ አድራሻ",
     socialLinks: "የማህበራዊ ሚዲያ አገናኞች (JSON)",
+    brandingLogoUrl: "የብራንድ አርማ አገናኝ (HTTPS)",
+    platformLocale: "የመድረክ ነባሪ ቋንቋ",
+    bookingSettings: "የቦታ ማስያዣ ቅንብሮች",
+    bookingConfirmationWorkflow: "የቦታ ማስያዣ ማረጋገጫ ሂደት",
+    vendorAcceptance: "በአገልግሎት ሰጪ ማጽደቅ",
+    administratorApproval: "በአስተዳዳሪ ማጽደቅ",
+    cancellationCutoffHours: "ከቦታ ማስያዣው በፊት የመሰረዣ ገደብ (ሰዓት)",
+    bookingReschedulingEnabled: "አስተዳዳሪዎች ቀን እንዲቀይሩ ፍቀድ",
+    bookingRulesHelp: "ሲያጠፉት አስተዳዳሪዎች ቦታ ማስያዣን ማስተካከል አይችሉም።",
+    rescheduleCutoffHours: "ከቦታ ማስያዣው በፊት የቀን ለውጥ ገደብ (ሰዓት)",
+    bookingTimeLimitNote: "ለውጦቹ በአዲስ የመሰረዝ እና የቀን ለውጥ ጥያቄዎች ላይ ይተገበራሉ። ነባር መዝገቦች አይቀየሩም።",
+    vendorSettings: "የአገልግሎት ሰጪ ቅንብሮች",
+    requireVendorCategory: "የአገልግሎት ምድብ ያስፈልጋል",
+    vendorInformationHelp: "አገልግሎት ሰጪው ሲያመለክት ወይም ሲያዘምን ይተገበራል።",
+    requireVendorCity: "የንግድ ከተማ ያስፈልጋል",
+    requireVendorDescription: "የንግድ መግለጫ ያስፈልጋል",
+    vendorVerificationStatus: "የአገልግሎት ሰጪ ማረጋገጫ",
+    alwaysRequired: "ሁልጊዜ ያስፈልጋል",
+    servicePublicationRuleNote: "አገልግሎት ማተም በተረጋገጡ አገልግሎት ሰጪዎች ብቻ ይፈቀዳል።",
+    notifyUserRegistrations: "ስለ አዲስ ምዝገባ አስተዳዳሪዎችን አሳውቅ",
+    notifyVendorApplications: "ስለ አገልግሎት ሰጪ ማመልከቻ አስተዳዳሪዎችን አሳውቅ",
+    notifyComplaints: "ስለ ደንበኛ ቅሬታ አስተዳዳሪዎችን አሳውቅ",
+    notificationChannel_inApp: "የውስጥ ማሳወቂያ",
+    notificationChannel_email: "የኢሜይል ማድረስ",
+    notificationChannel_sms: "የSMS ማድረስ",
+    configured: "ተዋቅሯል",
+    notConfigured: "አልተዋቀረም",
+    emailSecretsNote: "የኢሜይል ምስክርነቶች ከስርዓት ቅንብሮች ውጭ ይተዳደራሉ፤ እዚህ አይታዩም።",
+    paymentSettings: "የክፍያ ቅንብሮች",
+    refundRequestWindowDays: "የተመላሽ ጥያቄ ጊዜ (ቀናት፤ 0 ማለት ያለ ገደብ)",
+    paymentProviderStatus: "የክፍያ አቅራቢ",
+    pendingIntegration: "ውህደት በመጠባበቅ ላይ",
+    supportedCurrencies: "በመድረኩ የሚጠቀሙ ገንዘቦች",
+    paymentSecretsNote: "የአቅራቢ ምስጢሮች ከስርዓት ቅንብሮች ውጭ ይተዳደራሉ፤ እዚህ አይታዩም።",
+    administratorSession: "የአስተዳዳሪ ክፍለ ጊዜ",
+    userSession: "የተጠቃሚ ክፍለ ጊዜ",
+    hours: "ሰዓት",
+    passwordPolicy: "የይለፍ ቃል ፖሊሲ",
+    charactersStrongPassword: "ቁምፊዎች፤ ጠንካራ የይለፍ ቃል ያስፈልጋል",
+    securityPolicyReadonlyNote: "የማረጋገጫ ፖሊሲዎች በአሁኑ የመተግበሪያ አሠራር የተወሰኑ ናቸው።",
     publicRegistration: "የህዝብ ምዝገባን ፍቀድ",
     publicRegistrationHelp: "ሲያጠፉት አዲስ የህዝብ መለያ ምዝገባዎች በሰርቨሩ ይከለከላሉ።",
     defaultRegistrationRole: "ነባሪ የምዝገባ ሚና",
@@ -1523,6 +1611,12 @@ function readSavedLanguage() {
 }
 
 let language = readSavedLanguage();
+let hasExplicitLanguage = false;
+try {
+  hasExplicitLanguage = typeof window !== 'undefined' && ['en', 'am'].includes(window.localStorage.getItem('eventhub-language'));
+} catch {
+  hasExplicitLanguage = false;
+}
 
 export function getLanguage() {
   return language;
@@ -1531,6 +1625,7 @@ export function getLanguage() {
 export function setLanguage(nextLanguage) {
   if (nextLanguage !== 'en' && nextLanguage !== 'am') return;
   language = nextLanguage;
+  hasExplicitLanguage = true;
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem('eventhub-language', language);
@@ -1538,6 +1633,13 @@ export function setLanguage(nextLanguage) {
       // Keep the in-session language switch functional when storage is blocked.
     }
   }
+  listeners.forEach((listener) => listener());
+}
+
+export function setPlatformDefaultLanguage(nextLanguage) {
+  if (nextLanguage !== 'en' && nextLanguage !== 'am') return;
+  if (hasExplicitLanguage || language === nextLanguage) return;
+  language = nextLanguage;
   listeners.forEach((listener) => listener());
 }
 

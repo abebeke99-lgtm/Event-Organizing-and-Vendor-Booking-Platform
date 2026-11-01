@@ -7,6 +7,14 @@ import { requirePermission } from '../middleware/rbac.js';
 import { loadPublicMarketplace, mapBookingRecord } from '../lib/marketplace.js';
 import { listPublicServices } from '../lib/serviceCatalog.js';
 import { listPublicVendors } from '../lib/vendorCatalog.js';
+import { createRefundRequest, isSafeFinancialNote } from '../lib/paymentManagement.js';
+import { writeAudit } from '../lib/security.js';
+import { notifyAdministrators } from '../lib/notificationService.js';
+import {
+  complaintAttachmentParser,
+  sanitizeComplaintAttachmentName,
+  validateComplaintAttachment,
+} from '../lib/complaintAttachments.js';
 
 const router = Router();
 
@@ -21,6 +29,20 @@ const deleteRoute = (path, handler) => router.delete(path, asyncHandler(handler)
 const getPermissionRoute = (path, permission, handler) => router.get(path, requirePermission(permission), asyncHandler(handler));
 const postPermissionRoute = (path, permission, handler) => router.post(path, requirePermission(permission), asyncHandler(handler));
 const deletePermissionRoute = (path, permission, handler) => router.delete(path, requirePermission(permission), asyncHandler(handler));
+async function transaction(database, work) {
+  const connection = await database.getConnection();
+  try {
+    await connection.beginTransaction();
+    const result = await work(connection);
+    await connection.commit();
+    return result;
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+}
 const catalogQueryFields = {
   search: z.string().trim().max(120).optional(),
   category: z.string().trim().max(80).optional(),
@@ -292,6 +314,25 @@ getRoute('/payments', async (req, res) => {
   })));
 });
 
+postRoute('/payments/:id/refunds', async (req, res) => {
+  const paymentId = z.coerce.number().int().positive().safeParse(req.params.id);
+  const parsed = z.object({
+    amount: z.union([z.string().trim().max(13), z.number().finite()]),
+    reason: z.string().trim().min(5).max(500).refine(isSafeFinancialNote, 'Do not include card data or payment credentials.'),
+    idempotencyKey: z.string().uuid(),
+  }).strict().safeParse(req.body);
+  if (!paymentId.success || !parsed.success) {
+    return res.status(400).json({ error: 'A valid payment ID, refund amount, reason, and idempotency key are required.' });
+  }
+  const result = await createRefundRequest(databaseFor(req), {
+    paymentId: paymentId.data,
+    requesterId: req.platformUser.id,
+    ...parsed.data,
+    ip: req.ip,
+  });
+  return res.status(result.duplicate ? 200 : 201).json({ success: true, data: result });
+});
+
 getRoute('/messages', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
     `SELECT m.id, m.subject, m.body, m.read_at, m.created_at, u.full_name AS sender
@@ -333,6 +374,207 @@ getRoute('/reviews', async (req, res) => {
     status: row.status,
     createdAt: row.created_at,
   })));
+});
+
+postRoute('/reviews', async (req, res) => {
+  const schema = z.object({
+    bookingId: z.coerce.number().int().positive(),
+    rating: z.coerce.number().int().min(1).max(5),
+    comment: z.string().trim().max(2000).optional().default(''),
+  }).strict();
+  const parsed = schema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Review details are invalid.' });
+  const database = databaseFor(req);
+  try {
+    const result = await transaction(database, async (db) => {
+      const [[booking]] = await db.execute(
+        `SELECT b.id, b.status, e.organizer_id
+         FROM bookings b JOIN events e ON e.id = b.event_id
+         WHERE b.id = ? FOR UPDATE`,
+        [parsed.data.bookingId],
+      );
+      if (!booking || Number(booking.organizer_id) !== Number(req.platformUser.id)) {
+        throw Object.assign(new Error('Booking not found.'), { status: 404 });
+      }
+      if (booking.status !== 'completed') {
+        throw Object.assign(new Error('Reviews can only be submitted for completed bookings.'), { status: 409 });
+      }
+      const [[existing]] = await db.execute('SELECT id FROM reviews WHERE booking_id = ? LIMIT 1', [booking.id]);
+      if (existing) throw Object.assign(new Error('A review has already been submitted for this booking.'), { status: 409 });
+      const [created] = await db.execute(
+        "INSERT INTO reviews (booking_id, rating, comment, status) VALUES (?, ?, ?, 'published')",
+        [booking.id, parsed.data.rating, parsed.data.comment || null],
+      );
+      await db.execute(
+        `INSERT INTO review_history (review_id, actor_id, action, to_status)
+         VALUES (?, ?, 'created', 'published')`,
+        [created.insertId, req.platformUser.id],
+      );
+      await writeAudit(db, {
+        actorId: req.platformUser.id,
+        action: 'review.created',
+        entityType: 'review',
+        entityId: created.insertId,
+        details: { bookingId: Number(booking.id), rating: parsed.data.rating },
+        ip: req.ip,
+      });
+      return { id: created.insertId, bookingId: Number(booking.id), rating: parsed.data.rating, status: 'published' };
+    });
+    return res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
+});
+
+getRoute('/complaints', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
+    `SELECT c.id, c.booking_id, c.subject, c.details, c.status, c.resolution, c.created_at,
+            vp.business_name AS vendor_name
+     FROM complaints c LEFT JOIN bookings b ON b.id = c.booking_id
+     LEFT JOIN vendor_profiles vp ON vp.id = b.vendor_id
+     WHERE c.user_id = ? ORDER BY c.created_at DESC LIMIT 100`,
+    [req.platformUser.id],
+  );
+  return ok(res, rows.map((row) => ({ ...row, reference: `CMP-${String(row.id).padStart(6, '0')}` })));
+});
+
+postRoute('/complaints', async (req, res) => {
+  const schema = z.object({
+    bookingId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
+    subject: z.string().trim().min(3).max(180),
+    details: z.string().trim().min(10).max(10000),
+  }).strict();
+  const parsed = schema.safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Complaint details are invalid.' });
+  const database = databaseFor(req);
+  try {
+    const complaintId = await transaction(database, async (db) => {
+      if (parsed.data.bookingId) {
+        const [[booking]] = await db.execute(
+          `SELECT b.id FROM bookings b JOIN events e ON e.id = b.event_id
+           WHERE b.id = ? AND e.organizer_id = ?`,
+          [parsed.data.bookingId, req.platformUser.id],
+        );
+        if (!booking) throw Object.assign(new Error('Booking not found.'), { status: 404 });
+      }
+      const [created] = await db.execute(
+        `INSERT INTO complaints (user_id, booking_id, subject, details, status)
+         VALUES (?, ?, ?, ?, 'open')`,
+        [req.platformUser.id, parsed.data.bookingId || null, parsed.data.subject, parsed.data.details],
+      );
+      await db.execute(
+        `INSERT INTO complaint_history (complaint_id, actor_id, action, to_status)
+         VALUES (?, ?, 'created', 'open')`,
+        [created.insertId, req.platformUser.id],
+      );
+      await writeAudit(db, {
+        actorId: req.platformUser.id,
+        action: 'complaint.created',
+        entityType: 'complaint',
+        entityId: created.insertId,
+        details: { bookingId: parsed.data.bookingId || null },
+        ip: req.ip,
+      });
+      await notifyAdministrators(db, {
+        title: 'New customer complaint',
+        message: `Complaint CMP-${String(created.insertId).padStart(6, '0')} requires review.`,
+        type: 'complaint',
+        relatedType: 'complaint',
+        relatedId: created.insertId,
+        idempotencyKey: `complaint:${created.insertId}:created`,
+        actorId: req.platformUser.id,
+      });
+      return created.insertId;
+    });
+    return res.status(201).json({ success: true, data: { id: complaintId, reference: `CMP-${String(complaintId).padStart(6, '0')}`, status: 'open' } });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
+});
+
+getRoute('/complaints/:id', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Complaint ID is invalid.' });
+  const database = databaseFor(req);
+  const [[complaint]] = await database.execute(
+    `SELECT c.id, c.booking_id, c.subject, c.details, c.status, c.resolution, c.created_at
+     FROM complaints c WHERE c.id = ? AND c.user_id = ?`,
+    [id.data, req.platformUser.id],
+  );
+  if (!complaint) return res.status(404).json({ error: 'Complaint not found.' });
+  const [[attachments], [history]] = await Promise.all([
+    database.execute(
+      'SELECT id, original_name, content_type, file_size, created_at FROM complaint_attachments WHERE complaint_id = ? ORDER BY id DESC',
+      [id.data],
+    ),
+    database.execute(
+      `SELECT action, from_status, to_status, reason, created_at
+       FROM complaint_history WHERE complaint_id = ? ORDER BY id DESC`,
+      [id.data],
+    ),
+  ]);
+  return ok(res, { ...complaint, reference: `CMP-${String(id.data).padStart(6, '0')}`, attachments, history });
+});
+
+router.post('/complaints/:id/attachments', complaintAttachmentParser, asyncHandler(async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Complaint ID is invalid.' });
+  if (!Buffer.isBuffer(req.body)) return res.status(415).json({ error: 'Upload a PDF, JPEG, PNG, or WebP attachment.' });
+  const contentType = req.headers['content-type']?.split(';')[0]?.trim().toLowerCase();
+  const validation = validateComplaintAttachment(req.body, contentType);
+  if (!validation.valid) return res.status(400).json({ error: validation.error });
+  const database = databaseFor(req);
+  const [[complaint]] = await database.execute(
+    'SELECT id, status FROM complaints WHERE id = ? AND user_id = ?',
+    [id.data, req.platformUser.id],
+  );
+  if (!complaint) return res.status(404).json({ error: 'Complaint not found.' });
+  const [result] = await database.execute(
+    `INSERT INTO complaint_attachments
+     (complaint_id, uploaded_by, original_name, content_type, file_size, sha256, file_data)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      id.data, req.platformUser.id, sanitizeComplaintAttachmentName(req.query.filename),
+      contentType, validation.fileSize, validation.sha256, req.body,
+    ],
+  );
+  await database.execute(
+    `INSERT INTO complaint_history (complaint_id, actor_id, action, from_status, to_status, details)
+     VALUES (?, ?, 'attachment_added', ?, ?, ?)`,
+    [id.data, req.platformUser.id, complaint.status, complaint.status, JSON.stringify({ attachmentId: result.insertId, contentType, fileSize: validation.fileSize })],
+  );
+  await writeAudit(database, {
+    actorId: req.platformUser.id,
+    action: 'complaint.attachment_added',
+    entityType: 'complaint',
+    entityId: id.data,
+    details: { attachmentId: result.insertId, contentType, fileSize: validation.fileSize },
+    ip: req.ip,
+  });
+  return res.status(201).json({ success: true, data: { id: result.insertId } });
+}));
+
+getRoute('/complaints/:id/attachments/:attachmentId', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  const attachmentId = z.coerce.number().int().positive().safeParse(req.params.attachmentId);
+  if (!id.success || !attachmentId.success) return res.status(400).json({ error: 'Attachment ID is invalid.' });
+  const [[file]] = await databaseFor(req).execute(
+    `SELECT a.original_name, a.content_type, a.file_size, a.file_data
+     FROM complaint_attachments a JOIN complaints c ON c.id = a.complaint_id
+     WHERE a.id = ? AND c.id = ? AND c.user_id = ?`,
+    [attachmentId.data, id.data, req.platformUser.id],
+  );
+  if (!file) return res.status(404).json({ error: 'Attachment not found.' });
+  res.set({
+    'Content-Type': file.content_type,
+    'Content-Length': file.file_size,
+    'Content-Disposition': `attachment; filename="${sanitizeComplaintAttachmentName(file.original_name)}"`,
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  return res.send(file.file_data);
 });
 
 getRoute('/notifications', async (req, res) => {

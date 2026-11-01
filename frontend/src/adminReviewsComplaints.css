@@ -1,0 +1,24 @@
+.admin-reviews-complaints .page-heading { margin-bottom: 16px; }
+.admin-rc-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin: 18px 0; }
+.admin-rc-filters label { display: grid; gap: 4px; min-width: 130px; font-size: 12px; color: var(--muted, #667085); }
+.admin-rc-filters .admin-rc-search { flex: 1 1 260px; }
+.admin-rc-filters input, .admin-rc-filters select { min-height: 40px; }
+.admin-reviews-complaints th button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.admin-reviews-complaints td small { display: block; margin-top: 3px; color: var(--muted, #667085); }
+.admin-reviews-complaints td p { margin: 8px 0 0; }
+.admin-rc-comment { max-width: 420px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; color: var(--muted, #667085); overflow-wrap: anywhere; }
+.admin-rc-rating { color: #d97706; letter-spacing: 1px; white-space: nowrap; }
+.admin-rc-actions { display: flex; align-items: center; gap: 6px; min-width: 110px; }
+.admin-rc-actions .button.small { padding: 6px 9px; font-size: 12px; }
+.admin-review-modal-backdrop { z-index: 1200; }
+.admin-review-modal { width: min(760px, calc(100vw - 32px)); max-height: min(88vh, 960px); overflow: auto; }
+.admin-rc-detail h3 { margin: 20px 0 8px; }
+.admin-rc-detail p { overflow-wrap: anywhere; }
+.admin-rc-detail blockquote { margin: 12px 0; padding: 14px; border-left: 3px solid var(--primary, #6246ea); background: var(--surface-muted, #f8fafc); white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-rc-detail .admin-rc-attachment { display: flex; align-items: center; gap: 8px; padding: 8px 0; border: 0; background: transparent; color: var(--primary, #6246ea); cursor: pointer; text-align: left; }
+.admin-rc-update { display: grid; gap: 12px; margin-top: 20px; }
+.admin-rc-update label { display: grid; gap: 5px; }
+@media (max-width: 760px) {
+  .admin-rc-filters { align-items: stretch; }
+  .admin-rc-filters > * { flex: 1 1 100%; }
+}

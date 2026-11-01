@@ -125,7 +125,7 @@ export async function loadPublicVendors(db = pool, providedServices = null) {
 
 export async function loadPublicCategories(db = pool, providedVendors = null, providedServices = null) {
   const [rows] = await db.query(
-    'SELECT id, name, description, is_active FROM service_categories WHERE is_active = TRUE ORDER BY name ASC'
+    'SELECT id, name, description, display_order, image_mime, is_active FROM service_categories WHERE is_active = TRUE ORDER BY display_order ASC, name ASC'
   );
   const vendors = providedVendors || await loadPublicVendors(db);
   const services = providedServices || await loadPublicServices(db);
@@ -140,8 +140,11 @@ export async function loadPublicCategories(db = pool, providedVendors = null, pr
       name: String(row.name || '').trim(),
       slug,
       description: String(row.description || '').trim(),
-      image: categoryImages[slug] || defaultCategoryImage,
+      image: row.image_mime
+        ? `/api/platform/categories/${toNumber(row.id)}/image`
+        : categoryImages[slug] || defaultCategoryImage,
       isActive: Boolean(row.is_active),
+      displayOrder: Number(row.display_order || 0),
       vendorCount,
       serviceCount,
     };

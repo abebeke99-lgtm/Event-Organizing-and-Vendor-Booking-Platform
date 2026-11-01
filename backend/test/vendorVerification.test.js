@@ -13,6 +13,7 @@ function createDatabase() {
   const statements = [];
   const auditRecords = [];
   const notifications = [];
+  const notificationHistory = [];
   const history = [];
   const documentContent = Buffer.from('%PDF-1.7 verification document');
   const documents = [{
@@ -181,6 +182,15 @@ function createDatabase() {
       notifications.push({ user_id: values[0], title: values[1], message: values[2] });
       return [{ insertId: notifications.length, affectedRows: 1 }, []];
     }
+    if (sql.includes('INSERT INTO notification_history')) {
+      notificationHistory.push({
+        notification_id: values[0],
+        actor_id: values[1],
+        action: 'created',
+        details: JSON.parse(values[2]),
+      });
+      return [{ insertId: notificationHistory.length, affectedRows: 1 }, []];
+    }
     if (sql.includes('INSERT INTO vendor_verification_documents')) {
       const [vendorId, uploadedBy, originalName, contentType, fileSize, content] = values;
       const document = {
@@ -207,6 +217,7 @@ function createDatabase() {
     statements,
     auditRecords,
     notifications,
+    notificationHistory,
     history,
     documents,
     vendors,

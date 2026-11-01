@@ -26,7 +26,7 @@ The Event Organizing and Vendor Booking Platform is a web-based solution that co
 - Search, filtering, and comparison tools
 - Booking requests with approval and status transitions
 - Availability validation and double-booking prevention
-- Payment tracking and refund workflow support
+- Payment transaction reporting, refund review, audit history, and provider-gated processing
 - Review and rating management for completed bookings
 - Notifications, messages, and administrative reporting
 - Audit logging and protected access controls
@@ -114,7 +114,7 @@ The platform includes the requested features for:
 - Event management module
 - Booking and review workflow module
 - Admin dashboard and reporting foundation
-- Payment and refund workflow placeholders for production providers
+- Payment and refund management with verified provider callbacks, idempotent refund requests, and a pending integration state when no provider is configured
 - Notification and audit trail support
 
 ## 8. Project Structure
@@ -217,6 +217,36 @@ The public contact form submits to `POST /api/contact`; `GET /api/contact` retur
 
 Apply `007_contact_inquiry_types.sql` with `npm run migrate` to enable the full inquiry type list and resolved status. Configure actual support contact details in `system_settings` (`support_email`, `support_phone`, `support_address`, `support_hours`, and `social_links`); unconfigured details are not shown publicly.
 
+### Payment and refund management
+
+Apply `017_payment_refund_management.sql` with `npm run migrate`. Administrators can search and filter real payment records at `GET /api/admin/payments`, inspect financial history at `GET /api/admin/payments/:id`, and review requests at `GET /api/admin/refunds`. CSV reports are available from `/api/admin/payments/export` and `/api/admin/refunds/export`; `/api/admin/payments/report` returns grouped payment and refund totals. These routes require an administrator session and the corresponding payment/report permissions. Payment records cannot be created or have their statuses edited through generic admin CRUD.
+
+An authenticated customer or organizer can submit a refund request with `POST /api/customer/payments/:id/refunds` using `{ "amount": "25.00", "reason": "...", "idempotencyKey": "<UUID>" }`. The service reserves pending/processing refunds when checking eligibility, only accepts verified successful payments, and prevents requests from exceeding the amount remaining after previous refunds. A rejection requires a reason. The administrator-configured refund request window applies to new requests; `0` means no deadline.
+
+No payment provider is configured by default. In that state, records remain read-only and an approval cannot be completed. To enable provider operations, set `PAYMENT_PROVIDER_ADAPTER` to a trusted module name under `backend/src/providers/`; the module must export `createPaymentProvider()` returning `name`, `verifyWebhook({ headers, rawBody })`, and `refundPayment({ amount, currency, transactionReference, idempotencyKey })`. `verifyWebhook` must verify the provider signature against the raw body and return a normalized event with `eventId`, `type`, `transactionReference`, `amount`, and `currency`; refund events also include `refundIdempotencyKey` and, on success, `refundReference`. `refundPayment` returns `{ status: "succeeded" | "pending" | "failed", refundReference? }`. Keep all provider credentials in environment variables. The webhook endpoint `POST /api/payments/webhook` accepts only provider-verified normalized payment success/failure/cancellation and refund result events; the server additionally matches the provider, stored transaction reference, amount, and currency before recording success. Payment success and refund success are recorded only after confirmation, and provider event/refund idempotency keys protect retries. Do not implement adapter verification using frontend-supplied status or unverified webhook fields.
+
+### Administrator reports and analytics
+
+Apply `019_reports_analytics.sql` with `npm run migrate`. The administrator Reports page and `GET /api/admin/reports?report=...` provide filtered, paginated database reports for users, vendors, events, bookings, payments, refunds, revenue, service categories, reviews, complaints, vendor performance, and booking outcomes. Use `period=today|last7|last30|monthly|yearly|custom`; custom ranges require `startDate` and `endDate` in `YYYY-MM-DD` form and may span up to 366 calendar days. Optional filters include `q`, `status`, `currency`, `categoryId`, `vendorId`, and `customerId`. Results include summary data, chart data, applied filters, timezone, and a generation timestamp.
+
+Set `platform_currency` to the platform's three-letter ISO 4217 currency code and `report_timezone` to an IANA timezone in Administrator > System Settings. Date boundaries are calculated in that timezone, including daylight-saving transitions. Ensure MySQL timezone conversion is available; revenue reporting returns an explicit service error if the configured timezone cannot be resolved by MySQL. Financial reports exclude failed and cancelled payments, count provider-confirmed captured payments as gross payments, deduct succeeded refunds, and keep each currency separate rather than applying an undocumented exchange rate. CSV exports use the same report filters and sort order as the page, are available at `GET /api/admin/reports/export`, and are capped at 10,000 rows; narrow the filters for larger reports. Both report viewing and financial-report exports are permission-protected. Export actions are written to the administrator audit log. PDF export is not provided because the existing stack has no PDF reporting dependency.
+
+### Administrator system settings
+
+Apply `023_system_settings_module.sql` with `npm run migrate`. Administrator > System Settings reads and writes allowlisted values in `system_settings`; changes are backend-validated and audited. Consequential changes require confirmation, and reset-to-default requires an explicit confirmation. Logo URLs must use HTTPS. The configured currency and reporting timezone feed platform availability and reports. Booking cancellation/rescheduling limits and confirmation workflow, vendor application requirements, administrator notification preferences, and the refund request window are enforced by the corresponding server workflows. Settings do not rewrite existing transactions, bookings, or applications.
+
+Payment provider, email, SMS, and security configuration are status-only where the application does not support safe runtime configuration. Credentials remain in environment variables or the provider's secret-management configuration and are never returned by settings APIs. Vendor verification remains required, and service publication remains restricted to verified vendors; unsupported service-approval customization is not exposed as an editable setting.
+
+### Administrator audit logs
+
+Apply `022_audit_log_management.sql` with `npm run migrate --prefix backend`. The read-only Audit Logs screen and `GET /api/admin/audit-logs` support actor, action, module, entity, request ID, severity, outcome, and date filters with pagination. `GET /api/admin/audit-logs/export` exports filtered results to CSV, capped at 10,000 rows. Viewing and exporting require `audit_logs.view` and `audit_logs.export`; the application exposes no audit-record create, update, or delete endpoints.
+
+Audit entries are generated server-side by the existing audit writer. Requests receive a server-generated `X-Request-Id`, which is attached to audit records. The writer strips credential-like fields, excludes free-text event descriptions from change snapshots, and rejects oversized metadata. Critical changes remain part of the same transaction as their audit record where supported, so audit-write failure rolls back the operation.
+
+### Administrator profile and security
+
+The Administrator > Profile screen reads profile and recent account activity from the authenticated administrator session. Name and phone changes, validated profile-image uploads/removals, and password changes are persisted and audited; role, status, and email are displayed read-only. Password changes require the current password and the existing 12–16 character password policy, rotate the current administrator session, and invalidate other administrator and platform sessions for that account. The profile endpoints accept no client-supplied user ID.
+
 ## 12. Deployment Considerations
 
 For a production deployment, use:
@@ -233,9 +263,8 @@ Deployment settings and troubleshooting are maintained in the Deployment checkli
 
 - dedicated customer dashboard and organizer dashboard
 - vendor verification workflow UI and document upload
-- real payment integration and webhook verification
+- integration of a specific payment provider adapter and policy-specific refund terms
 - notification and messaging modules
-- advanced reports and analytics
 - multi-language and multi-currency support
 
 ## 14. Conclusion
@@ -360,11 +389,15 @@ This codebase provides a working foundation for the Event Organizing and Vendor 
 
 - id
 - user_id
-- type
-- subject
-- body
-- status
-- sent_at
+- title
+- message
+- notification_type
+- related_entity_type and related_entity_id
+- status and read_at
+- delivery_channel and delivery_status
+- delivery_attempts and last_delivery_error
+- idempotency_key
+- created_at
 
 ## 9. Database Relationships
 
@@ -425,9 +458,13 @@ This codebase provides a working foundation for the Event Organizing and Vendor 
 
 ### Notification APIs
 
-- GET /api/notifications
-- PATCH /api/notifications/:id/read
-- POST /api/notifications/send
+- GET /api/admin/notifications (recipient-scoped list, filters, pagination, unread count)
+- GET /api/admin/notifications/options (configured delivery channels)
+- POST /api/admin/notifications/:id/read
+- POST /api/admin/notifications/read-all
+- GET /api/admin/notifications/:id/history
+- POST /api/admin/notifications/announcements (idempotency key required)
+- POST /api/admin/notifications/:id/retry (failed email deliveries only)
 
 ## 11. Example API Response
 

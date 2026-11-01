@@ -13,11 +13,13 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   console.error('Required configuration is incomplete or invalid:', configurationErrors.join(', '));
   process.exitCode = 1;
 } else {
-  const [{ formatDatabaseError, pool, verifyDatabaseConnection }, { createApp }] = await Promise.all([
+  const [{ formatDatabaseError, pool, verifyDatabaseConnection }, { createApp }, { loadPaymentProvider }] = await Promise.all([
     import('./db.js'),
     import('./app.js'),
+    import('./lib/paymentProvider.js'),
   ]);
-  const app = createApp();
+  const paymentProvider = await loadPaymentProvider();
+  const app = createApp({ paymentProvider });
   const server = app.listen(PORT, HOST, () => {
     console.log(`Admin API listening on ${HOST}:${PORT}`);
 
