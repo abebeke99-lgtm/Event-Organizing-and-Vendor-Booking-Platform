@@ -1,9 +1,10 @@
 import { rateLimit } from 'express-rate-limit';
 
-export function createAuthRateLimiter({ windowMs, limit, message }) {
+export function createAuthRateLimiter({ windowMs, limit, message, skipSuccessfulRequests = false }) {
   return rateLimit({
     windowMs,
     limit,
+    skipSuccessfulRequests,
     standardHeaders: true,
     legacyHeaders: false,
     handler(req, res) {

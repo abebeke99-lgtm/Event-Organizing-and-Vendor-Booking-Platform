@@ -4,13 +4,17 @@ import apiClient from './api/axios.js';
 import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, Mail, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, PanelLeftClose, PanelLeftOpen, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate } from './eventUtils.js';
-import { setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
+import { getLanguage, setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
 import { setTheme, useTheme } from './theme.js';
 import { getDashboardDateRange } from './dashboardUtils.js';
 import { summarizeOrganizerDashboard } from './organizerDashboardUtils.js';
 import { createAuthSessionLoader } from './authSession.js';
 import { adminPathForSlug, adminSlugFromPath } from './adminNavigation.js';
 import { withStableKeys } from './listKeys.js';
+import { getFooterSocialLinks } from './socialLinks.js';
+import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageStatistics } from './homepageUtils.js';
+import SocialMediaLink from './SocialMediaLink.js';
+import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { createDemoDataService } from './demoData.js';
@@ -90,6 +94,14 @@ const dashboardMenuIcons = {
   reports: ChartNoAxesCombined,
 };
 
+function AuthBrand({ showEventHubLogo = true, showInstitutionLogo = true }) {
+  if (!showEventHubLogo && !showInstitutionLogo) return null;
+  return <div className="auth-brand" aria-label="EventHub">
+    {showEventHubLogo && <img className="auth-brand-logo" src="/eventhub-logo.png" alt="EventHub" />}
+    {showInstitutionLogo && <img className="auth-institution-logo" src="/institution-logo.png" alt="Institutional logo" />}
+  </div>;
+}
+
 function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileOpen, onCloseMobile, language, className = '' }) {
   const sidebarRef = useRef(null);
   const [expandedGroups, setExpandedGroups] = useState(() => Object.fromEntries(groups.map((group) => [group.id, true])));
@@ -138,7 +150,7 @@ function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, collapsed
   }
 
   return <aside ref={sidebarRef} className={`sidebar role-dashboard-sidebar ${className} ${mobileOpen ? 'open' : ''}`} aria-label={`${roleTitle} navigation`}>
-    <div className="sidebar-brand"><div className="brand-mark small" aria-label="EventFlow">EF</div><div className="sidebar-brand-copy"><strong>EventFlow</strong><span>{roleTitle}</span></div></div>
+    <div className="sidebar-brand"><img className="sidebar-brand-logo" src="/eventhub-logo.png" alt="EventHub"/><img className="sidebar-brand-symbol" src="/eventhub-symbol.png" alt="" aria-hidden="true"/><div className="sidebar-brand-copy"><span>{roleTitle}</span></div></div>
     <nav aria-label="Dashboard sections">{groups.map((group) => <div className={`nav-group ${group.flyoutWhenCollapsed ? 'has-collapsed-flyout' : 'nav-group-flat'}`} key={group.id}>
       <button className="nav-group-toggle" type="button" title={group.label} data-tooltip={group.label} aria-label={`${group.label} navigation section`} aria-expanded={collapsed && !mobileOpen ? flyout?.groupId === group.id : Boolean(expandedGroups[group.id])} onClick={(event) => toggleGroup(event, group)}><span>{group.label}</span><span className="nav-group-indicator" aria-hidden="true">{collapsed && !mobileOpen ? <ChevronRight size={15}/> : expandedGroups[group.id] ? '−' : '+'}</span></button>
       {expandedGroups[group.id] && <div className="sidebar-group-items">{renderItems(group.items)}</div>}
@@ -349,6 +361,7 @@ function SessionStatusNotice({ sessionState }) {
 
 function SessionRecoveryPage({ sessionState }) {
   return <main className="login-wrap"><section className="login-card">
+    <AuthBrand />
     <h1>Session verification unavailable</h1>
     <p className="muted">We could not verify your account. Your public browsing remains available; retry before opening a protected workspace.</p>
     <SessionStatusNotice sessionState={sessionState}/>
@@ -426,7 +439,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   }, []);
 
   return <><header className="site-header"><div className="site-header-inner">
-    <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}>{platformLogo ? <img className="site-brand-logo" src={platformLogo} alt="" /> : <span className="brand-mark small">EH</span>}<div><strong>{platformName}</strong><small>{translate('platform', language)}</small></div></a>
+    <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}><img className="site-brand-logo" src={platformLogo || '/eventhub-logo.png'} alt={platformName} /></a>
     <button type="button" className="mobile-nav-toggle" aria-label={translate(mobileMenuOpen ? 'closeMenu' : 'openMenu', language)} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X size={20}/> : <Menu size={20}/>}</button>
     <nav className={`site-nav ${mobileMenuOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}>{PUBLIC_NAV_ITEMS.map((item) => <a key={item.path} href={item.path} className={`nav-link ${routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'active' : ''}`} aria-current={routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'page' : undefined} onClick={(event) => { event.preventDefault(); setMobileMenuOpen(false); onNavigate(item.path); }}>{translateText(item.label, language)}</a>)}</nav>
     <div className="header-actions">
@@ -445,7 +458,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
           </section>}
         </div>
       </div>}
-      <LanguageSelector/><ThemeToggle/>
+      <LanguageSelector user={user}/><ThemeToggle/>
       {isAuthenticated ? <details className="public-account" ref={accountMenuRef}>
       <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
       <div className="public-account-menu"><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
@@ -453,15 +466,41 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   </div></header>{['error', 'rate-limited'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
 }
 
-function LanguageSelector() {
+function LanguageSelector({ user, isAdmin = false }) {
   const language = useLanguage();
-  return <label className="language-picker">
-    <span className="visually-hidden">{translate('languageLabel', language)}</span>
-    <select value={language} aria-label={translate('languageLabel', language)} onChange={(event) => setLanguage(event.target.value)}>
-      <option value="en">English</option>
-      <option value="am">አማርኛ</option>
-    </select>
-  </label>;
+  const [preferenceError, setPreferenceError] = useState('');
+  const [savingPreference, setSavingPreference] = useState(false);
+  async function changeLanguage(event) {
+    const nextLanguage = event.target.value;
+    setLanguage(nextLanguage);
+    setPreferenceError('');
+    if (!user || DEMO_AUTH_ENABLED) return;
+    const roles = Array.isArray(user.roles) ? user.roles : String(user.roles || '').split(',');
+    const adminAccount = isAdmin || user.role === 'admin' || roles.some((roleName) => roleName.trim().toLowerCase() === 'admin');
+    const endpoint = adminAccount ? '/admin/profile/language' : '/platform/preferences/language';
+    setSavingPreference(true);
+    try {
+      await api(endpoint, {
+        method: 'PATCH',
+        body: JSON.stringify({ language: nextLanguage }),
+      });
+    } catch {
+      setPreferenceError(translate('languagePreferenceSaveFailed', nextLanguage));
+    } finally {
+      setSavingPreference(false);
+    }
+  }
+
+  return <span className="language-picker-wrap">
+    <label className="language-picker">
+      <span className="visually-hidden">{translate('languageLabel', language)}</span>
+      <select value={language} aria-label={translate('languageLabel', language)} onChange={changeLanguage} disabled={savingPreference}>
+        <option value="en">English</option>
+        <option value="am">አማርኛ</option>
+      </select>
+    </label>
+    {preferenceError && <span className="language-preference-error" role="alert">{preferenceError}</span>}
+  </span>;
 }
 
 function ThemeToggle() {
@@ -480,7 +519,7 @@ function ProfilePhotoDisplay({ user, isAdmin = false }) {
   const endpoint = isAdmin || user.role === 'admin' || /admin/i.test(roleNames)
     ? '/admin/profile/photo'
     : '/platform/profile/photo';
-  const name = user.name || user.full_name || 'EventFlow User';
+  const name = user.name || user.full_name || 'EventHub User';
 
   useEffect(() => {
     let active = true;
@@ -768,7 +807,7 @@ function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, onNavi
   return <header className={`dashboard-header ${sidebarExpanded ? 'sidebar-expanded' : ''}`} ref={headerRef}>
     <button className="icon-button dashboard-sidebar-toggle" type="button" onClick={onToggleSidebar} aria-label={sidebarExpanded ? 'Collapse dashboard navigation' : 'Expand dashboard navigation'} aria-expanded={sidebarExpanded} title={sidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}>{sidebarExpanded ? <PanelLeftClose size={19}/> : <PanelLeftOpen size={19}/>}</button>
     <div className="dashboard-header-actions">
-      <LanguageSelector/>
+      <LanguageSelector user={user} isAdmin={isAdmin}/>
       <ThemeToggle/>
       <div className="dashboard-popover-anchor">
         <button className="icon-button notification-toggle" type="button" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} aria-expanded={activePanel === 'notifications'} onClick={() => { const opening = activePanel !== 'notifications'; setActivePanel(opening ? 'notifications' : ''); if (opening && hasServerNotifications) loadAdminNotifications(); }}><Bell size={19}/>{unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}</button>
@@ -857,9 +896,13 @@ function AppFooter() {
   const language = useLanguage();
   const platformName = document.documentElement.dataset.platformName || 'EventHub';
   const platformDescription = document.documentElement.dataset.platformDescription || '';
-  const supportEmail = document.documentElement.dataset.supportEmail || '';
+  const platformLogo = document.documentElement.dataset.brandingLogoUrl || '';
+  const supportEmail = 'abebeke99@gmail.com';
   const supportPhone = document.documentElement.dataset.supportPhone || '';
-  return <footer className="site-footer"><div className="site-footer-inner"><div className="footer-column"><div className="brand-pill"><div className="brand-mark small">EH</div><div><strong>{platformName}</strong><small>{translate('platform', language)}</small></div></div><p>{platformDescription || translate('footerDescription', language)}</p></div><div className="footer-column"><h4>{translate('explore', language)}</h4><a href="/events">{translate('browseEvents', language)}</a><a href="/vendors">{translate('findVendorsNav', language)}</a><a href="/services">{translate('browseServices', language)}</a><a href="/categories">{translate('serviceCategories', language)}</a></div><div className="footer-column"><h4>{translate('support', language)}</h4><a href="/help">{translate('helpCenter', language)}</a><a href="/help">{translate('frequentlyAskedQuestions', language)}</a><a href="/help">{translate('bookingGuide', language)}</a><a href="/contact">{translate('contactSupport', language)}</a></div><div className="footer-column"><h4>{translate('legal', language)}</h4><a href="/terms">{translate('termsConditions', language)}</a><a href="/privacy">{translate('privacyPolicy', language)}</a><a href="/help">{translate('cookiePolicy', language)}</a><a href="/terms">{translate('refundPolicy', language)}</a></div></div><div className="site-footer-bottom"><span>© {new Date().getFullYear()} {platformName}</span>{supportEmail && <a href={`mailto:${supportEmail}`}>{supportEmail}</a>}{supportPhone && <a href={`tel:${supportPhone.replace(/[^\d+]/g, '')}`}>{supportPhone}</a>}</div></footer>;
+  const socialLinks = getFooterSocialLinks();
+  const socialIcons = (className = 'footer-social-links') => <div className={className}>{socialLinks.map((social) => <SocialMediaLink key={social.id} platform={social.id} label={translate(social.labelKey, language)} url={social.url} unconfiguredLabel={translate('socialProfileUnconfigured', language)}/>)}</div>;
+  const hasUnconfiguredSocialLinks = socialLinks.some((social) => !social.url);
+  return <footer className="site-footer"><div className="site-footer-inner"><div className="footer-column"><div className="brand-pill"><img className="footer-brand-logo" src={platformLogo || '/eventhub-logo.png'} alt={platformName}/></div><p>{platformDescription || translate('footerDescription', language)}</p></div><div className="footer-column"><h4>{translate('explore', language)}</h4><a href="/events">{translate('browseEvents', language)}</a><a href="/vendors">{translate('findVendorsNav', language)}</a><a href="/services">{translate('browseServices', language)}</a><a href="/categories">{translate('serviceCategories', language)}</a></div><div className="footer-column"><h4>{translate('support', language)}</h4><a href="/help">{translate('helpCenter', language)}</a><a href="/help">{translate('frequentlyAskedQuestions', language)}</a><a href="/help">{translate('bookingGuide', language)}</a><a href="/contact">{translate('contactSupport', language)}</a></div><div className="footer-column"><h4>{translate('legal', language)}</h4><a href="/terms">{translate('termsConditions', language)}</a><a href="/privacy">{translate('privacyPolicy', language)}</a><a href="/help">{translate('cookiePolicy', language)}</a><a href="/terms">{translate('refundPolicy', language)}</a></div><div className="footer-column footer-contact-column"><h4>{translate('contactUsNav', language)}</h4><a className="footer-contact-email" href={`mailto:${supportEmail}`} aria-label={`${translate('emailAddress', language)}: ${supportEmail}`}><Mail size={16} aria-hidden="true"/><span>{supportEmail}</span></a>{socialIcons('footer-social-links footer-contact-social-links')}{hasUnconfiguredSocialLinks && <p className="footer-social-notice">{translate('socialLinksUnconfigured', language)}</p>}</div></div><div className="site-footer-bottom"><div className="footer-attribution"><span>{translate('footerCopyright', language)}</span><span>{translate('footerDeveloper', language)}</span><span>{translate('footerDesignCredit', language)}</span></div>{supportPhone && <a href={`tel:${supportPhone.replace(/[^\d+]/g, '')}`}>{supportPhone}</a>}</div></footer>;
 }
 
 function EmptyState({ title, message }) {
@@ -1004,7 +1047,7 @@ function SearchResultsPage({ initialQuery, initialCategory = '', initialLocation
   const hasSearch = Boolean(initialQuery || initialCategory || initialLocation);
 
   return <main className="page-shell"><div className="content-stack">
-    <div className="section-header"><div><p className="eyebrow">DISCOVERY</p><h1>Search EventFlow</h1><p className="muted">Search events, vendors, services, categories, and locations.</p></div></div>
+    <div className="section-header"><div><p className="eyebrow">DISCOVERY</p><h1>Search EventHub</h1><p className="muted">Search events, vendors, services, categories, and locations.</p></div></div>
     <form className="panel home-global-search" role="search" onSubmit={submitSearch}>
       <label className="search-box"><Search size={16}/><input autoFocus type="search" maxLength="120" value={query} onChange={(event) => { setQuery(event.target.value); setSearchError(''); }} aria-label="Search events, vendors, services, categories, and locations" placeholder="Try a service, city, or category" /></label>
       <label className="field"><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categoryOptions.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
@@ -1149,13 +1192,13 @@ function VendorApplicationPage({ user, onNavigate }) {
     setSelectedDocuments(files);
   }
 
-  if (!user) return <main className="page-shell"><div className="content-stack"><div className="empty panel"><strong>Sign in to apply as a vendor</strong><span>Vendor applications are linked to your EventFlow account and reviewed before approval.</span><button className="button" type="button" onClick={() => { sessionStorage.setItem('eventhub_after_login', '/vendor-application'); onNavigate('/login'); }}>Sign in</button><button className="button secondary" type="button" onClick={() => onNavigate('/register?role=vendor')}>Create a vendor account</button></div></div></main>;
+  if (!user) return <main className="page-shell"><div className="content-stack"><div className="empty panel"><strong>Sign in to apply as a vendor</strong><span>Vendor applications are linked to your EventHub account and reviewed before approval.</span><button className="button" type="button" onClick={() => { sessionStorage.setItem('eventhub_after_login', '/vendor-application'); onNavigate('/login'); }}>Sign in</button><button className="button secondary" type="button" onClick={() => onNavigate('/register')}>{translate('publicCreateVendorAccount', language)}</button></div></div></main>;
   if (user.role === 'vendor') return <main className="page-shell"><div className="empty panel"><strong>Vendor account</strong><span>Manage your vendor profile and application status from your dashboard.</span><button className="button" type="button" onClick={() => onNavigate('/vendor/dashboard')}>Open vendor dashboard</button></div></main>;
   if (user.role === 'admin') return <main className="page-shell"><div className="empty panel"><strong>Admin account</strong><span>Vendor approval and role management remain with the admin dashboard.</span><button className="button" type="button" onClick={() => onNavigate('/admin')}>Open admin dashboard</button></div></main>;
   if (!['customer', 'organizer'].includes(user.role)) return <main className="page-shell"><div className="alert error">This account is not eligible to submit a vendor application.</div></main>;
 
   return <main className="page-shell"><div className="content-stack vendor-application-page">
-    <div className="section-header"><div><p className="eyebrow">VENDOR ONBOARDING</p><h1>Apply to become a vendor</h1><p className="muted">Applications are reviewed by the EventFlow team. Submitting this form does not grant vendor access.</p></div></div>
+    <div className="section-header"><div><p className="eyebrow">VENDOR ONBOARDING</p><h1>Apply to become a vendor</h1><p className="muted">Applications are reviewed by the EventHub team. Submitting this form does not grant vendor access.</p></div></div>
     {error && <div className="alert error" role="alert">{error}</div>}
     {categoryError && <div className="alert warning" role="status">{categoryError} You may submit without selecting a category.</div>}
     {notice && <div className="alert success" role="status">{notice}</div>}
@@ -1176,6 +1219,19 @@ function VendorApplicationPage({ user, onNavigate }) {
   </div></main>;
 }
 
+function HomepageImage({ src, alt, fallbackLabel, className = '', loading = 'lazy' }) {
+  const [failed, setFailed] = useState(false);
+  const resolvedSrc = typeof src === 'string' ? resolveApiAssetUrl(src) : '';
+
+  useEffect(() => setFailed(false), [resolvedSrc]);
+
+  if (!resolvedSrc || failed) {
+    return <div className={`homepage-image-fallback ${className}`} role="img" aria-label={fallbackLabel || alt} />;
+  }
+
+  return <img className={className} src={resolvedSrc} alt={alt} loading={loading} onError={() => setFailed(true)} />;
+}
+
 function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
@@ -1188,13 +1244,21 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   const [loadErrors, setLoadErrors] = useState({});
   const [retryKey, setRetryKey] = useState(0);
   const [activeSlide, setActiveSlide] = useState(0);
+  const [slideTransition, setSlideTransition] = useState(null);
   const [carouselPaused, setCarouselPaused] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [searchCategory, setSearchCategory] = useState('');
-  const [searchLocation, setSearchLocation] = useState('');
   const [searchError, setSearchError] = useState('');
   const [requestService, setRequestService] = useState(null);
   const touchStartX = useRef(null);
+  const activeSlideRef = useRef(0);
+  const slideTransitionLock = useRef(false);
+  const slideTransitionStartTimer = useRef(null);
+  const slideTransitionTimer = useRef(null);
+
+  const translateCategoryName = (name) => {
+    const key = getHomepageCategoryTranslationKey(name);
+    return key ? t(key) : translateText(name, language);
+  };
 
   const featureSlides = useMemo(() => [
     { title: t('weddingPlanning'), image: 'https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=1200&q=80', description: t('weddingPlanningCopy') },
@@ -1202,18 +1266,24 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
     { title: t('birthdayCelebrations'), image: 'https://images.unsplash.com/photo-1469371670807-013ccf25f16a?auto=format&fit=crop&w=1200&q=80', description: t('birthdayCelebrationsCopy') },
   ], [language]);
 
-  const categoryCards = categories.slice(0, 4).map((category) => ({
+  const categoryCards = categories.map((category) => ({
     ...category,
     path: `/categories/${encodeURIComponent(category.slug || category.name)}`,
   }));
-  const searchLocations = [...new Set([...vendors.map((vendor) => vendor.city), ...events.map((event) => event.location || event.city)].filter(Boolean))].sort();
-  const categoryChips = ['Weddings', 'Corporate', 'Graduations', 'Catering', 'Decor', 'Photography'].map((name) => {
-    const category = categories.find((item) => `${item.name} ${item.slug}`.toLowerCase().includes(name.toLowerCase()));
+  const categoryChips = [
+    { key: 'publicHomeWeddingVenues', aliases: ['wedding'], search: 'Wedding' },
+    { key: 'publicHomeCorporate', aliases: ['corporate'], search: 'Corporate' },
+    { key: 'publicHomeGraduations', aliases: ['graduation'], search: 'Graduation' },
+    { key: 'catering', aliases: ['catering'], search: 'Catering' },
+    { key: 'publicHomeDecor', aliases: ['decor'], search: 'Decor' },
+    { key: 'publicHomePhotographer', aliases: ['photography'], search: 'Photography' },
+  ].map(({ key, aliases, search }) => {
+    const category = categories.find((item) => aliases.some((alias) => `${item.name || ''} ${item.slug || ''}`.toLowerCase().includes(alias)));
     return {
-      name: category?.name || name,
+      name: t(key),
       path: category
         ? `/categories/${encodeURIComponent(category.slug || category.name)}`
-        : `/categories?search=${encodeURIComponent(name)}`,
+        : `/categories?search=${encodeURIComponent(search)}`,
     };
   });
 
@@ -1234,7 +1304,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
       const nextErrors = {};
       const getData = (result, key) => {
         if (result.status === 'rejected') {
-          nextErrors[key] = result.reason?.message || `Unable to load ${key}.`;
+          nextErrors[key] = true;
           return null;
         }
         return result.value?.data;
@@ -1259,46 +1329,72 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
 
   useEffect(() => {
     const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReducedMotion || carouselPaused) return undefined;
+    if (prefersReducedMotion || carouselPaused || slideTransition) return undefined;
     const timer = window.setInterval(() => {
-      setActiveSlide((current) => (current + 1) % featureSlides.length);
+      moveSlide(1);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [featureSlides.length, carouselPaused]);
+  }, [featureSlides.length, carouselPaused, slideTransition]);
+
+  useEffect(() => () => {
+    if (slideTransitionStartTimer.current !== null) window.clearTimeout(slideTransitionStartTimer.current);
+    if (slideTransitionTimer.current !== null) window.clearTimeout(slideTransitionTimer.current);
+  }, []);
 
   const displayVendors = vendors.slice(0, 4);
   const displayServices = services.slice(0, 4);
   const displayEvents = events.slice(0, 3);
-  const stats = summary ? [
-    { label: 'Average vendor rating', value: summary.averageVendorRating },
-    { label: 'Confirmed or completed bookings', value: summary.confirmedOrCompletedBookingCount },
-    { label: 'Approved active vendors', value: summary.activeVendorCount },
-    { label: 'Published or completed events', value: summary.publishedEventCount },
-    { label: 'Completed bookings', value: summary.completedBookingCount },
-  ].filter((stat) => stat.value !== null && stat.value !== undefined) : [];
+  const stats = getHomepageStatistics(summary);
 
   function submitSearch(event) {
     event.preventDefault();
     const query = searchTerm.trim();
-    if (!query && !searchCategory && !searchLocation) {
-      setSearchError('Enter a search term or choose a category or location.');
+    if (!query) {
+      setSearchError(t('publicHomeSearchError'));
       return;
     }
     setSearchError('');
-    const params = new URLSearchParams();
-    if (query) params.set('q', query);
-    if (searchCategory) params.set('category', searchCategory);
-    if (searchLocation) params.set('location', searchLocation);
-    onNavigate(`/search?${params.toString()}`);
+    onNavigate(`/search?q=${encodeURIComponent(query)}`);
+  }
+
+  function transitionToSlide(next, direction) {
+    const current = activeSlideRef.current;
+    if (next === current || slideTransitionLock.current) return;
+
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      activeSlideRef.current = next;
+      setActiveSlide(next);
+      return;
+    }
+
+    slideTransitionLock.current = true;
+    setSlideTransition({ from: current, to: next, direction, phase: 'prepare' });
+    slideTransitionStartTimer.current = window.setTimeout(() => {
+      slideTransitionStartTimer.current = null;
+      setSlideTransition({ from: current, to: next, direction, phase: 'animate' });
+      slideTransitionTimer.current = window.setTimeout(() => {
+        slideTransitionTimer.current = null;
+        activeSlideRef.current = next;
+        setActiveSlide(next);
+        setSlideTransition(null);
+        slideTransitionLock.current = false;
+      }, 700);
+    }, 20);
   }
 
   function moveSlide(direction) {
-    setActiveSlide((current) => (current + direction + featureSlides.length) % featureSlides.length);
+    transitionToSlide((activeSlideRef.current + direction + featureSlides.length) % featureSlides.length, direction);
+  }
+
+  function selectSlide(index) {
+    const current = activeSlideRef.current;
+    if (index === current || slideTransitionLock.current) return;
+    transitionToSlide(index, index > current ? 1 : -1);
   }
 
   function becomeVendor() {
     if (!user) {
-      onNavigate('/register?role=vendor');
+      onNavigate('/vendor-application');
     } else if (user.role === 'vendor') {
       onNavigate('/vendor/dashboard');
     } else if (user.role === 'admin') {
@@ -1322,8 +1418,6 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           </div>
           <form className="hero-search" role="search" onSubmit={submitSearch}>
             <input type="search" maxLength="120" value={searchTerm} onChange={(event) => { setSearchTerm(event.target.value); setSearchError(''); }} placeholder={t('searchAll')} aria-label={t('searchAll')} />
-            <select aria-label="Event category" value={searchCategory} onChange={(event) => setSearchCategory(event.target.value)}><option value="">All categories</option>{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select>
-            <select aria-label="Location" value={searchLocation} onChange={(event) => setSearchLocation(event.target.value)}><option value="">All locations</option>{searchLocations.map((location) => <option key={location} value={location}>{location}</option>)}</select>
             <button type="submit">{t('search')}</button>
           </form>
           {searchError && <p className="hero-search-error" role="alert">{searchError}</p>}
@@ -1333,22 +1427,22 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
         </div>
 
         <div className="hero-visual reveal reveal-right is-visible">
-          <div className="hero-visual-card hero-card-main" role="group" aria-label="Venue inspiration">
-            <img src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt="Decorated event venue inspiration" loading="eager" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+          <div className="hero-visual-card hero-card-main" role="group" aria-label={t('publicVenueInspiration')}>
+            <HomepageImage className="hero-venue-image" src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt={t('publicHomeVenueImageAlt')} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', t('publicVenueInspiration'))} loading="eager" />
             <div className="hero-overlay-card">
-              <span>VENUE INSPIRATION</span>
-              <strong>Explore event venues</strong>
-              <small>Browse real, verified venue vendors and services.</small>
-              <button type="button" className="button small" onClick={() => onNavigate('/vendors?search=venue')}>Browse venues</button>
+              <span>{t('publicVenueEyebrow')}</span>
+              <strong>{t('publicExploreVenues')}</strong>
+              <small>{t('publicVerifiedVenueDescription')}</small>
+              <button type="button" className="button small" onClick={() => onNavigate('/vendors?search=venue')}>{t('publicBrowseVenues')}</button>
             </div>
           </div>
         </div>
       </section>
 
       <Reveal className="stat-strip" direction="up">
-        {loading ? <div className="home-stat-skeletons" role="status" aria-label="Loading homepage statistics"><span/><span/><span/><span/></div>
-          : loadErrors.statistics ? <div className="home-data-error" role="alert"><span>Statistics are temporarily unavailable.</span><button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>
-            : stats.map(({ label, value }) => <div key={label} className="stat-pill"><strong>{label.toLowerCase().includes('rating') ? `${Number(value).toFixed(1)}/5` : Number(value).toLocaleString()}</strong><span>{label}</span></div>)}
+        {loading ? <div className="home-stat-skeletons" role="status" aria-label={t('publicHomeStatisticsLoading')}><span/><span/><span/><span/></div>
+          : loadErrors.statistics ? <div className="home-data-error" role="alert"><span>{t('publicStatisticsUnavailable')}</span><button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>
+            : stats.map(({ label, value, rating }) => <div key={label} className="stat-pill"><strong>{rating ? `${value.toLocaleString(language === 'am' ? 'am-ET' : 'en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}/5` : value.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}</strong><span>{t(label)}</span></div>)}
       </Reveal>
 
       <Reveal className="section-block" direction="up">
@@ -1359,26 +1453,34 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/categories')}>{t('browseAll')}</button>
         </div>
-        {loadErrors.categories && <div className="home-data-error" role="alert">{loadErrors.categories}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
-        <div className="category-grid">
-          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading popular categories"><span/><span/><span/><span/></div>
+        {loadErrors.categories && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
+        <HorizontalCarousel label={t('popularCategories')}>
+          {loading ? <div className="home-card-skeletons" role="status" aria-label={t('publicHomeCategoriesLoading')}><span/><span/><span/><span/></div>
             : !loadErrors.categories && !categories.length
-            ? <div className="empty-card">No public categories are available right now. <button type="button" className="button secondary small" onClick={() => onNavigate('/categories')}>Browse categories</button></div>
+            ? <div className="empty-card">{t('publicNoCategories')} <button type="button" className="button secondary small" onClick={() => onNavigate('/categories')}>{t('publicBrowseCategories')}</button></div>
             : categoryCards.map((category) => (
             <button key={category.name} type="button" className="category-card" onClick={() => onNavigate(category.path)}>
-              {category.image ? <img src={resolveApiAssetUrl(category.image)} alt={category.name} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} /> : <span className="media-placeholder" role="img" aria-label={`${category.name} image unavailable`} />}
-              <span className="category-card-name">{category.name}</span>
-              <span className="category-card-description">{category.description || t('availableServiceCategory')}</span>
-              <span className="category-card-counts">{category.vendorCount} vendors · {category.serviceCount} services</span>
+              <HomepageImage className="category-card-image" src={category.image} alt={translateCategoryName(category.name)} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', translateCategoryName(category.name))} />
+              <span className="category-card-copy">
+                <span className="category-card-name">{translateCategoryName(category.name)}</span>
+                <span className="category-card-description">{category.description ? translateText(category.description, language) : t('availableServiceCategory')}</span>
+                {(() => {
+                  const counts = getHomepageCategoryCounts(category);
+                  const labels = [];
+                  if (counts.vendorCount !== null) labels.push(`${counts.vendorCount.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')} ${t('publicHomeVendorCount')}`);
+                  if (counts.serviceCount !== null) labels.push(`${counts.serviceCount.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')} ${t('publicHomeServiceCount')}`);
+                  return labels.length ? <span className="category-card-counts">{labels.join(' · ')}</span> : null;
+                })()}
+              </span>
             </button>
           ))}
-        </div>
+        </HorizontalCarousel>
       </Reveal>
 
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-              <p className="eyebrow">EVENT INSPIRATION</p>
+              <p className="eyebrow">{t('publicEventInspiration')}</p>
             <h2>{t('eventInspiration')}</h2>
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewAll')}</button>
@@ -1392,24 +1494,33 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
         }} onKeyDown={(event) => {
           if (event.key === 'ArrowLeft') { event.preventDefault(); moveSlide(-1); }
           if (event.key === 'ArrowRight') { event.preventDefault(); moveSlide(1); }
-        }} tabIndex="0" aria-label="Event inspiration carousel. Use the arrow keys to change slides.">
-          <button type="button" className="carousel-control" aria-label="Previous slide" onClick={() => moveSlide(-1)}>{'‹'}</button>
+        }} tabIndex="0" aria-label={t('publicHomeCarouselLabel')}>
+          <button type="button" className="carousel-control" aria-label={t('publicHomePreviousSlide')} onClick={() => moveSlide(-1)}>{'‹'}</button>
           <div className="carousel-stage" aria-live="polite">
             {featureSlides.map((slide, index) => (
-              <article key={slide.title} className={`slideshow-card ${index === activeSlide ? 'active' : ''}`}>
-                <img src={slide.image} alt={slide.title} loading={index === activeSlide ? 'eager' : 'lazy'} onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+              <article
+                key={slide.title}
+                className={[
+                  'slideshow-card',
+                  !slideTransition && index === activeSlide ? 'active' : '',
+                  slideTransition?.from === index ? `is-exiting ${slideTransition.phase === 'prepare' ? 'is-preparing' : ''} ${slideTransition.direction > 0 ? 'is-exiting-left' : 'is-exiting-right'}` : '',
+                  slideTransition?.to === index ? `is-incoming ${slideTransition.phase === 'prepare' ? 'is-preparing' : 'is-moving'} ${slideTransition.direction > 0 ? 'is-entering-from-right' : 'is-entering-from-left'}` : '',
+                ].filter(Boolean).join(' ')}
+                aria-hidden={slideTransition ? index !== slideTransition.from && index !== slideTransition.to : index !== activeSlide}
+              >
+                <HomepageImage className="slide-image" src={slide.image} alt={slide.title} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', slide.title)} loading={index === activeSlide ? 'eager' : 'lazy'} />
                 <div className="slideshow-content">
                   <p>{slide.title}</p>
                   <span>{slide.description}</span>
-                  {index === activeSlide && <button type="button" className="button small" onClick={() => onNavigate('/events')}>Explore published events</button>}
+                  {index === activeSlide && <button type="button" className="button small" onClick={() => onNavigate('/events')}>{t('publicHomeExplorePublishedEvents')}</button>}
                 </div>
               </article>
             ))}
           </div>
-          <button type="button" className="carousel-control" aria-label="Next slide" onClick={() => moveSlide(1)}>{'›'}</button>
+          <button type="button" className="carousel-control" aria-label={t('publicHomeNextSlide')} onClick={() => moveSlide(1)}>{'›'}</button>
         </div>
-        <div className="carousel-dots" aria-label="slide navigation">
-          {featureSlides.map((slide, index) => <button key={slide.title} type="button" className={index === activeSlide ? 'dot active' : 'dot'} aria-label={`Go to slide ${index + 1}`} aria-pressed={index === activeSlide} onClick={() => setActiveSlide(index)} />)}
+        <div className="carousel-dots" aria-label={t('publicHomeSlideNavigation')}>
+          {featureSlides.map((slide, index) => <button key={slide.title} type="button" className={index === activeSlide ? 'dot active' : 'dot'} aria-label={t('publicHomeGoToSlide').replace('{number}', String(index + 1))} aria-pressed={index === activeSlide} onClick={() => selectSlide(index)} />)}
         </div>
       </Reveal>
 
@@ -1421,32 +1532,31 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/vendors')}>{t('seeAllVendors')}</button>
         </div>
-        {loadErrors.vendors && <div className="home-data-error" role="alert">{loadErrors.vendors}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
+        {loadErrors.vendors && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
         <div className="card-grid">
-          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading featured vendors"><span/><span/><span/><span/></div>
+          {loading ? <div className="home-card-skeletons" role="status" aria-label={t('publicHomeVendorsLoading')}><span/><span/><span/><span/></div>
             : displayVendors.length ? displayVendors.map((vendor) => {
-              const vendorName = vendor.business_name || vendor.name || 'Vendor';
+              const vendorName = vendor.business_name || vendor.name || t('publicHomeVendorFallback');
+              const vendorImage = vendor.coverImageUrl || vendor.logoUrl || vendor.image || vendor.logo;
               const quoteService = Array.isArray(vendor.services) ? vendor.services.find((service) => service && service.published !== false && service.visibility !== 'private') : null;
               return (
             <article key={vendor.id} className="vendor-card">
               <div className="card-image-wrap">
-                {vendor.coverImageUrl || vendor.logoUrl || vendor.image || vendor.logo
-                  ? <img src={resolveApiAssetUrl(vendor.coverImageUrl || vendor.logoUrl || vendor.image || vendor.logo)} alt={vendorName} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
-                  : <div className="media-placeholder" role="img" aria-label={`${vendorName} image unavailable`} />}
+                <HomepageImage className="card-media-image" src={vendorImage} alt={translateText(vendorName, language)} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', translateText(vendorName, language))} />
                 {vendor.verified && <span className="verify-badge">{t('verified')}</span>}
               </div>
               <div className="card-body">
-                <div className="meta-row"><span>{vendor.category || 'Event Services'}</span>{vendor.reviewCount > 0 && Number.isFinite(Number(vendor.rating)) && <span>★ {Number(vendor.rating).toFixed(1)} ({vendor.reviewCount})</span>}</div>
+                <div className="meta-row"><span>{vendor.category ? translateCategoryName(vendor.category) : t('publicHomeEventServices')}</span>{vendor.reviewCount > 0 && Number.isFinite(Number(vendor.rating)) && <span>★ {Number(vendor.rating).toFixed(1)} ({vendor.reviewCount})</span>}</div>
                 <h3>{vendorName}</h3>
-                <p>{vendor.description || vendor.city || vendor.location || translateText('Service area available', language)}</p>
-                {vendor.priceFrom > 0 && <p className="muted">From ETB {Number(vendor.priceFrom).toLocaleString()}</p>}
+                <p>{vendor.description || vendor.city || vendor.location || t('publicHomeServiceAreaAvailable')}</p>
+                {Number.isFinite(Number(vendor.priceFrom)) && Number(vendor.priceFrom) > 0 && <p className="muted">{t('publicHomeFromPrice').replace('{amount}', Number(vendor.priceFrom).toLocaleString(language === 'am' ? 'am-ET' : 'en-US'))}</p>}
                 <div className="card-actions">
                   <button className="button secondary small" type="button" onClick={() => onNavigate(vendor.id ? `/vendors/${encodeURIComponent(vendor.id)}` : '/vendors')}>{t('viewProfile')}</button>
-                  <button className="button small" type="button" onClick={() => quoteService ? setRequestService(quoteService) : onNavigate(`/vendors/${encodeURIComponent(vendor.id)}`)}>Request Quote</button>
+                  <button className="button small" type="button" onClick={() => quoteService ? setRequestService(quoteService) : onNavigate(vendor.id ? `/vendors/${encodeURIComponent(vendor.id)}` : '/vendors')}>{t('publicRequestQuoteButton')}</button>
                 </div>
               </div>
             </article>
-          );}) : loadErrors.vendors ? null : <div className="empty-card">{t('noVendorProfiles')} <button type="button" className="button secondary small" onClick={() => onNavigate('/vendors')}>Browse vendors</button></div>}
+          );}) : loadErrors.vendors ? null : <div className="empty-card">{t('noVendorProfiles')} <button type="button" className="button secondary small" onClick={() => onNavigate('/vendors')}>{t('seeAllVendors')}</button></div>}
         </div>
       </Reveal>
 
@@ -1458,28 +1568,28 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/services')}>{t('browseServices')}</button>
         </div>
-        {loadErrors.services && <div className="home-data-error" role="alert">{loadErrors.services}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
+        {loadErrors.services && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
         <div className="card-grid">
-          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading popular services"><span/><span/><span/><span/></div>
-            : displayServices.length ? displayServices.map((service) => (
+          {loading ? <div className="home-card-skeletons" role="status" aria-label={t('publicHomeServicesLoading')}><span/><span/><span/><span/></div>
+            : displayServices.length ? displayServices.map((service) => {
+              const serviceImage = service.images?.[0]?.url || service.image || service.coverImage;
+              return (
             <article key={service.id} className="service-card">
               <div className="card-image-wrap">
-                {service.images?.[0]?.url || service.image || service.coverImage
-                  ? <img src={resolveApiAssetUrl(service.images?.[0]?.url || service.image || service.coverImage)} alt={service.title} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
-                  : <div className="media-placeholder" role="img" aria-label={`${service.title} image unavailable`} />}
+                <HomepageImage className="card-media-image" src={serviceImage} alt={service.title} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', service.title || t('publicHomeEventService'))} />
               </div>
               <div className="card-body">
-                <div className="meta-row"><span>{service.category || 'Event service'}</span>{service.reviewCount > 0 && Number.isFinite(Number(service.rating)) && <span>★ {Number(service.rating).toFixed(1)}</span>}</div>
+                <div className="meta-row"><span>{service.category ? translateCategoryName(service.category) : t('publicHomeEventService')}</span>{service.reviewCount > 0 && Number.isFinite(Number(service.rating)) && <span>★ {Number(service.rating).toFixed(1)}</span>}</div>
                 <h3>{service.title}</h3>
-                <p>{service.description || service.vendorName || 'Service details available on request.'}</p>
+                <p>{service.description || service.vendorName || t('publicHomeServiceDetailsAvailable')}</p>
                 <div className="pricing-row">
-                  <strong>{service.price !== null && service.price !== undefined ? `${service.currency || 'ETB'} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>
-                  <button type="button" className="button small" onClick={() => setRequestService(service)}>Request Service</button>
+                  <strong>{service.price !== null && service.price !== undefined && service.price !== '' && Number.isFinite(Number(service.price)) && Number(service.price) >= 0 ? `${service.currency || 'ETB'} ${Number(service.price).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}` : t('requestQuote')}</strong>
+                  <button type="button" className="button small" onClick={() => setRequestService(service)}>{t('publicRequestService')}</button>
                 </div>
-                <button type="button" className="button secondary small" onClick={() => onNavigate(`/services/${encodeURIComponent(service.id)}`)}>View Details</button>
+                <button type="button" className="button secondary small" onClick={() => onNavigate(`/services/${encodeURIComponent(service.id)}`)}>{t('publicHomeViewDetails')}</button>
               </div>
             </article>
-          )) : loadErrors.services ? null : <div className="empty-card">{t('noServicesPublished')} <button type="button" className="button secondary small" onClick={() => onNavigate('/services')}>Browse services</button></div>}
+          );}) : loadErrors.services ? null : <div className="empty-card">{t('noServicesPublished')} <button type="button" className="button secondary small" onClick={() => onNavigate('/services')}>{t('browseServices')}</button></div>}
         </div>
       </Reveal>
 
@@ -1491,26 +1601,24 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           </div>
           <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewAll')}</button>
         </div>
-        {loadErrors.events && <div className="home-data-error" role="alert">{loadErrors.events}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry</button></div>}
+        {loadErrors.events && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
         <div className="event-grid">
-          {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading public events"><span/><span/><span/><span/></div>
+          {loading ? <div className="home-card-skeletons" role="status" aria-label={t('publicHomeEventsLoading')}><span/><span/><span/><span/></div>
             : displayEvents.length ? displayEvents.map((event) => (
             <article key={event.id} className="event-card">
-              {event.coverImage || event.image
-                ? <img src={event.coverImage || event.image} alt={event.title} loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />
-                : <div className="media-placeholder event-image-placeholder" role="img" aria-label={`${event.title} image unavailable`} />}
+              <HomepageImage className="event-card-image" src={event.coverImage || event.image} alt={event.title} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', event.title || t('publicHomeEventService'))} />
               <div className="event-content">
-                <span className="event-tag">{event.type || 'Event'}</span>
+                <span className="event-tag">{event.type ? translateText(event.type, language) : t('publicHomeEventType')}</span>
                 <h3>{event.title}</h3>
-                <p>{formatEventDate(event.startDate || event.date, language) || translateText('Date available', language)}</p>
+                <p>{formatEventDate(event.startDate || event.date, language) || t('dateTbd')}</p>
                 <small>{[event.venue, event.location || event.city].filter(Boolean).join(' · ') || t('locationAvailable')}</small>
                 <div className="card-actions">
                   <button type="button" className="button secondary small" onClick={() => onNavigate(`/events/${encodeURIComponent(event.id)}`)}>{t('viewDetails')}</button>
-                  <button type="button" className="button small" onClick={() => onNavigate(`/events/${encodeURIComponent(event.id)}`)}>Book Now</button>
+                  <button type="button" className="button small" onClick={() => onNavigate(`/events/${encodeURIComponent(event.id)}`)}>{t('publicHomeBookNow')}</button>
                 </div>
               </div>
             </article>
-          )) : loadErrors.events ? null : <div className="empty-card">{t('noPublicEvents')} <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>Explore events</button></div>}
+          )) : loadErrors.events ? null : <div className="empty-card">{t('noPublicEvents')} <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button></div>}
         </div>
       </Reveal>
 
@@ -1525,7 +1633,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
               <span className="process-number">{step}</span>
               <h3>{title}</h3>
               <p>{copy}</p>
-              <span className="process-card-action">{step === '1' ? 'Explore vendors' : step === '2' ? 'Browse services' : 'Find events'}</span>
+              <span className="process-card-action">{step === '1' ? t('publicHomeVendorAction') : step === '2' ? t('publicHomeServiceAction') : t('publicHomeEventAction')}</span>
             </button>
           ))}
         </div>
@@ -1539,7 +1647,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           </div>
           <div className="cta-banner-actions">
             <button className="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
-            <button className="button pale" onClick={becomeVendor}>{user?.role === 'vendor' ? 'Open vendor dashboard' : t('becomeVendor')}</button>
+            <button className="button pale" onClick={becomeVendor}>{user?.role === 'vendor' ? t('publicHomeOpenVendorDashboard') : t('becomeVendor')}</button>
           </div>
         </div>
       </Reveal>
@@ -2023,7 +2131,7 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
     <section className="info-card wide"><p className="eyebrow">{service.category}</p><h1>{service.title}</h1><p>{service.description}</p><div className="detail-meta-grid">
       <div><span>Provider</span><strong>{service.vendorName}</strong></div>
       <div><span>Location</span><strong>{service.city || t('locationAvailable')}</strong></div>
-      <div><span>Starting price</span><strong>{service.price ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('priceOnRequest')}</strong></div>
+      <div><span>Starting price</span><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('priceOnRequest')}</strong></div>
       {service.reviewCount > 0 && <div><span>Customer rating</span><strong>{Number(service.rating).toFixed(1)} / 5 ({service.reviewCount})</strong></div>}
     </div><button className="button" type="button" onClick={() => setRequestOpen(true)}>Request Service</button></section>
     <section className="panel"><div className="panel-header"><h2>Service packages</h2></div>
@@ -2149,6 +2257,7 @@ function VendorsPage({ onNavigate, user }) {
   const [vendors, setVendors] = useState([]);
   const [categoryOptions, setCategoryOptions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [searchInput, setSearchInput] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
   const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
   const [category, setCategory] = useState(() => new URLSearchParams(window.location.search).get('category') || 'all');
   const [location, setLocation] = useState(() => new URLSearchParams(window.location.search).get('location') || '');
@@ -2227,6 +2336,14 @@ function VendorsPage({ onNavigate, user }) {
     return () => controller.abort();
   }, [fetchVendors, page, search, category, location, minPrice, maxPrice, minRating, verifiedOnly, availableOnly, sort, reloadToken]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
   const categories = Array.from(new Set(vendors.map((vendor) => vendor.category).filter(Boolean))).sort();
 
   const handleQuoteRequest = (vendorRecord) => {
@@ -2234,12 +2351,17 @@ function VendorsPage({ onNavigate, user }) {
     if (services.length) setRequestVendor(vendorRecord);
   };
 
+  const handleContactVendor = (vendorRecord) => {
+    const vendorName = vendorRecord?.business_name || vendorRecord?.name || 'vendor';
+    onNavigate(`/contact?vendor=${encodeURIComponent(vendorName)}`);
+  };
+
   return <main className="page-shell vendor-directory-page"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div></div>
     {categoryError && <div className="alert error" role="alert">{categoryError}</div>}
     {filterError && <div className="alert error" role="alert">{filterError}</div>}
     <div className="panel" style={{ padding: '18px 20px' }}>
       <div className="toolbar vendor-directory-toolbar">
-        <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder={t('searchVendors')} /></div>
+        <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={searchInput} onChange={(event) => { setPage(1); setSearchInput(event.target.value); }} placeholder={t('searchVendors')} /></div>
         <select className="filter-select" aria-label={t('allCategories')} value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
           <option value="all">{t('allCategories')}</option>
           {(categoryOptions.length ? categoryOptions.map((item) => item.name) : categories).map((item) => <option key={item} value={item}>{item}</option>)}
@@ -2258,7 +2380,7 @@ function VendorsPage({ onNavigate, user }) {
           <option value="price-high">{t('priceHighLow')}</option>
           <option value="recently-added">Recently added</option>
         </select>
-        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearch(''); setCategory('all'); setLocation(''); setMinPrice(''); setMaxPrice(''); setMinRating(''); setVerifiedOnly(false); setAvailableOnly(false); setSort('recommended'); }}>{t('reset')}</button>
+        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearchInput(''); setSearch(''); setCategory('all'); setLocation(''); setMinPrice(''); setMaxPrice(''); setMinRating(''); setVerifiedOnly(false); setAvailableOnly(false); setSort('recommended'); }}>{t('reset')}</button>
       </div>
     </div>
 
@@ -2288,7 +2410,11 @@ function VendorsPage({ onNavigate, user }) {
         <span>{t('page')} {pagination.page || 1} {t('of')} {Math.max(1, pagination.totalPages || 1)}</span>
         <button className="icon-button" type="button" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage((value) => Math.min(pagination.totalPages || 1, value + 1))}><ChevronRight size={18}/></button>
       </div></div>
-    </> : <EmptyState title={t('noVendorMatches')} message={t('tryDifferentFilters')} />}
+    </> : <div className="vendor-directory-empty" role="status">
+      <span className="vendor-directory-empty-icon"><Search size={20} aria-hidden="true" /></span>
+      <h3>{t('noVendorMatches')}</h3>
+      <p>{t('tryDifferentFilters')}</p>
+    </div>}
   </div>{requestVendor && <QuoteRequestModal service={requestVendor.services?.find((service) => service && service.published !== false && service.visibility !== 'private')} services={requestVendor.services} vendorId={requestVendor.id} user={user} onNavigate={onNavigate} onClose={() => setRequestVendor(null)}/>}</main>;
 }
 
@@ -2298,9 +2424,10 @@ function ServicesPage({ onNavigate, user }) {
   const [services, setServices] = useState([]);
   const [categories, setCategories] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
+  const serviceRequestController = useRef(null);
   const [filters, setFilters] = useState(() => {
     const params = new URLSearchParams(window.location.search);
-    return { search: params.get('search') || '', category: params.get('category') || 'all', location: 'all', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
+    return { search: params.get('search') || '', category: params.get('category') || 'all', location: params.get('location') || '', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -2308,10 +2435,13 @@ function ServicesPage({ onNavigate, user }) {
   const [requestService, setRequestService] = useState(null);
 
   async function loadServices(nextFilters = filters, page = 1) {
+    serviceRequestController.current?.abort();
+    const controller = new AbortController();
+    serviceRequestController.current = controller;
     setLoading(true);
     setError('');
     if (nextFilters.minPrice && nextFilters.maxPrice && Number(nextFilters.maxPrice) < Number(nextFilters.minPrice)) {
-      setError('Maximum price must be greater than or equal to minimum price.');
+      setError(t('publicServicePriceRangeError'));
       setLoading(false);
       return;
     }
@@ -2324,14 +2454,17 @@ function ServicesPage({ onNavigate, user }) {
       if (nextFilters.maxPrice) params.set('maxPrice', nextFilters.maxPrice);
       if (nextFilters.minRating) params.set('minRating', nextFilters.minRating);
       if (nextFilters.availableOnly) params.set('availableOnly', nextFilters.availableOnly);
-      const response = await api(`/platform/services?${params.toString()}`);
+      const response = await api(`/platform/services?${params.toString()}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setServices(Array.isArray(response.data) ? response.data : []);
       setPagination(response.pagination || { page: 1, totalPages: 1, total: 0 });
     } catch (issue) {
-      setServices([]);
-      setError(issue.message || 'Unable to load services.');
+      if (!controller.signal.aborted) {
+        setServices([]);
+        setError(issue.message || 'Unable to load services.');
+      }
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   }
 
@@ -2350,14 +2483,16 @@ function ServicesPage({ onNavigate, user }) {
     }
     loadCategories();
     loadServices(filters, 1);
-    return () => { active = false; };
+    return () => {
+      active = false;
+      serviceRequestController.current?.abort();
+    };
   }, []);
 
-  const locations = Array.from(new Set(services.map((service) => service.city).filter(Boolean))).sort();
   const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
   const applyFilters = () => loadServices(filters, 1);
   const resetFilters = () => {
-    const emptyFilters = { search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
+    const emptyFilters = { search: '', category: 'all', location: '', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
     setFilters(emptyFilters);
     loadServices(emptyFilters, 1);
   };
@@ -2368,26 +2503,26 @@ function ServicesPage({ onNavigate, user }) {
     <div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar">
       <input className="field-input" aria-label={t('searchServices')} value={filters.search} onChange={(event) => updateFilter('search', event.target.value)} placeholder={t('searchServices')} />
       <select className="filter-select" aria-label={t('allCategories')} value={filters.category} onChange={(event) => updateFilter('category', event.target.value)}><option value="all">{t('allCategories')}</option>{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select>
-      <select className="filter-select" aria-label={t('allLocations')} value={filters.location} onChange={(event) => updateFilter('location', event.target.value)}><option value="all">{t('allLocations')}</option>{locations.map((location) => <option key={location} value={location}>{location}</option>)}</select>
-      <input className="filter-select" aria-label="Minimum price" type="number" min="0" value={filters.minPrice} onChange={(event) => updateFilter('minPrice', event.target.value)} placeholder="Min price" />
-      <input className="filter-select" aria-label="Maximum price" type="number" min="0" value={filters.maxPrice} onChange={(event) => updateFilter('maxPrice', event.target.value)} placeholder="Max price" />
-      <select className="filter-select" aria-label="Minimum service rating" value={filters.minRating} onChange={(event) => updateFilter('minRating', event.target.value)}><option value="">Any rating</option><option value="3">3+ stars</option><option value="4">4+ stars</option><option value="4.5">4.5+ stars</option></select>
-      <select className="filter-select" aria-label="Service availability" value={filters.availableOnly} onChange={(event) => updateFilter('availableOnly', event.target.value)}><option value="">Any availability</option><option value="true">Available now</option></select>
-      <select className="filter-select" aria-label="Sort services" value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)}><option value="recommended">{t('recommended')}</option><option value="highest-rated">{t('highestRated')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option><option value="alphabetical">{t('alphabetical')}</option></select>
+      <input className="filter-select" aria-label={t('publicServiceLocation')} value={filters.location} onChange={(event) => updateFilter('location', event.target.value)} placeholder={t('publicServiceLocation')} />
+      <input className="filter-select" aria-label={t('publicMinPrice')} type="number" min="0" value={filters.minPrice} onChange={(event) => updateFilter('minPrice', event.target.value)} placeholder={t('publicMinPrice')} />
+      <input className="filter-select" aria-label={t('publicMaxPrice')} type="number" min="0" value={filters.maxPrice} onChange={(event) => updateFilter('maxPrice', event.target.value)} placeholder={t('publicMaxPrice')} />
+      <select className="filter-select" aria-label={t('publicMinimumServiceRating')} value={filters.minRating} onChange={(event) => updateFilter('minRating', event.target.value)}><option value="">{t('publicAnyServiceRating')}</option><option value="3">{t('publicThreeStars')}</option><option value="4">{t('publicFourStars')}</option><option value="4.5">{t('publicFourHalfStars')}</option></select>
+      <select className="filter-select" aria-label={t('publicServiceAvailability')} value={filters.availableOnly} onChange={(event) => updateFilter('availableOnly', event.target.value)}><option value="">{t('publicAnyAvailability')}</option><option value="true">{t('publicAvailableNow')}</option></select>
+      <select className="filter-select" aria-label={t('publicSortServices')} value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)}><option value="recommended">{t('recommended')}</option><option value="highest-rated">{t('highestRated')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option><option value="alphabetical">{t('alphabetical')}</option></select>
       <button type="button" className="button secondary small" onClick={resetFilters}>{t('reset')}</button><button type="button" className="button small" onClick={applyFilters}>{t('applyFilters')}</button>
     </div></div>
-    {!loading && !error && <p role="status">{pagination.total || services.length} services found</p>}
+    {!loading && !error && <p role="status">{pagination.total ?? services.length} {t('publicServicesFound')}</p>}
     {loading ? <div className="loading" role="status"><span className="spinner"/>{t('loadingServices')}</div>
       : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => loadServices(filters, pagination.page || 1)}>{t('retry')}</button></div>
         : services.length ? <>
           <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card">
-            {service.images?.[0] ? <img className="public-service-image" src={resolveApiAssetUrl(service.images[0].url)} alt={service.images[0].name || service.title} loading="lazy" /> : <div className="media-placeholder public-service-image" role="img" aria-label={`${service.title} image unavailable`} />}
+            {service.images?.[0] ? <img className="public-service-image" src={resolveApiAssetUrl(service.images[0].url)} alt={service.images[0].name || service.title} loading="lazy" /> : <div className="media-placeholder public-service-image" role="img" aria-label={t('publicServiceImageUnavailable')} />}
             <p className="eyebrow">{service.category}</p><h3>{service.title}</h3><p>{service.description || ''}</p>
             <p>{service.vendorName} · {service.city}</p>
-            <div className="pricing-row compact-row"><strong>{service.price ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>{service.reviewCount > 0 && <span>{Number(service.rating).toFixed(1)}★ ({service.reviewCount})</span>}</div>
-            <div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${service.id}`)}>View Details</button><button className="button small" type="button" onClick={() => setRequestService(service)}>Request Service</button></div>
+            <div className="pricing-row compact-row"><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>{service.reviewCount > 0 && <span>{Number(service.rating).toFixed(1)}★ ({service.reviewCount})</span>}</div>
+            <div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${service.id}`)}>{t('publicViewServiceDetails')}</button><button className="button small" type="button" onClick={() => setRequestService(service)}>{t('publicRequestService')}</button></div>
           </article>)}</div>
-          <div className="pagination-row" aria-label="Service pages"><button className="button secondary small" type="button" disabled={(pagination.page || 1) <= 1} onClick={() => loadServices(filters, (pagination.page || 1) - 1)}>{t('previous')}</button><span>{t('page')} {pagination.page || 1} {t('of')} {pagination.totalPages || 1}</span><button className="button secondary small" type="button" disabled={(pagination.page || 1) >= (pagination.totalPages || 1)} onClick={() => loadServices(filters, (pagination.page || 1) + 1)}>{t('next')}</button></div>
+          <div className="pagination-row" aria-label={t('publicServicePages')}><button className="button secondary small" type="button" disabled={(pagination.page || 1) <= 1 || loading} onClick={() => loadServices(filters, (pagination.page || 1) - 1)}>{t('previous')}</button><span>{t('page')} {pagination.page || 1} {t('of')} {pagination.totalPages || 1}</span><button className="button secondary small" type="button" disabled={(pagination.page || 1) >= (pagination.totalPages || 1) || loading} onClick={() => loadServices(filters, (pagination.page || 1) + 1)}>{t('next')}</button></div>
         </> : <EmptyState title={t('noServicesMatch')} message={t('emptyMessage')} />}
   </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
 }
@@ -2540,7 +2675,7 @@ function AboutPage({ onNavigate }) {
   ];
   const audiences = [
     { title: 'aboutAudienceCustomersTitle', description: 'aboutAudienceCustomersCopy', action: 'aboutAudienceCustomersAction', destination: '/services', icon: UserRound },
-    { title: 'aboutAudienceVendorsTitle', description: 'aboutAudienceVendorsCopy', action: 'aboutAudienceVendorsAction', destination: '/register?role=vendor', icon: BriefcaseBusiness },
+    { title: 'aboutAudienceVendorsTitle', description: 'aboutAudienceVendorsCopy', action: 'aboutAudienceVendorsAction', destination: '/vendor-application', icon: BriefcaseBusiness },
     { title: 'aboutAudienceOrganizersTitle', description: 'aboutAudienceOrganizersCopy', action: 'aboutAudienceOrganizersAction', destination: '/events', icon: CalendarDays },
     { title: 'aboutAudienceAdminsTitle', description: 'aboutAudienceAdminsCopy', action: 'aboutAudienceAdminsAction', destination: '/login', icon: Shield },
   ];
@@ -2848,6 +2983,7 @@ function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
   }
 
   return <main className="login-wrap"><div className="login-card">
+    <AuthBrand showEventHubLogo={false} showInstitutionLogo={false} />
     <h1>{t('signIn')}</h1>
     <p className="muted">{t('accessWorkspace')}</p>
     {error && <div className="alert error" role="alert">{error}</div>}
@@ -2882,23 +3018,15 @@ function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
   </div></main>;
 }
 
-function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false, registrationEnabled = true, defaultRegistrationRole = 'customer' }) {
+function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled = true }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [form, setForm] = useState(() => {
-    const requestedRole = new URLSearchParams(window.location.search).get('role');
-    return { name: '', email: '', password: '', confirmPassword: '', role: ['customer', 'organizer', 'vendor'].includes(requestedRole) ? requestedRole : defaultRegistrationRole };
-  });
+  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const redirectTimer = useRef(null);
-  useEffect(() => {
-    const requestedRole = new URLSearchParams(window.location.search).get('role');
-    if (!['customer', 'organizer', 'vendor'].includes(requestedRole)) {
-      setForm((current) => ({ ...current, role: defaultRegistrationRole }));
-    }
-  }, [defaultRegistrationRole]);
+  useEffect(() => () => window.clearTimeout(redirectTimer.current), []);
   const passwordValid = form.password.length >= 12
     && form.password.length <= 16
     && /[A-Z]/.test(form.password)
@@ -2915,13 +3043,9 @@ function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false
     if (form.password !== form.confirmPassword) return;
     setBusy(true);
     try {
-      const result = await onRegister(form.name.trim(), form.email.trim(), form.password, form.role);
+      const result = await onRegister(form.name.trim(), form.email.trim(), form.password);
       setSuccess(translateText(result?.message, language) || t('registrationSuccess'));
-      if (result?.demo && result.dashboardPath) {
-        redirectTimer.current = window.setTimeout(() => {
-          onDemoRegistrationComplete(result.profile, result.dashboardPath);
-        }, 800);
-      }
+      redirectTimer.current = window.setTimeout(() => onRegistrationComplete(result), 1200);
     } catch (issue) {
       setError(translateText(issue.message, language));
     } finally {
@@ -2929,6 +3053,7 @@ function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false
     }
   }
   return <main className="login-wrap"><div className="login-card registration-card">
+    <AuthBrand showEventHubLogo={false} showInstitutionLogo={false} />
     <h1>{t('createAccountHeading')}</h1>
     <p className="muted">{t('registerAsRole')}</p>
     {!registrationEnabled && <div className="alert warning" role="status">{t('publicRegistrationDisabled')}</div>}
@@ -2971,23 +3096,6 @@ function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false
           {confirmMismatch ? t('passwordMismatch') : t('passwordsMatch')}
         </p>}
       </div>
-      <fieldset className="account-type-group">
-        <legend>{t('accountType')}</legend>
-        <div className="account-type-options">
-          <label className="account-type-card" htmlFor="account-customer">
-            <input id="account-customer" type="radio" name="accountType" value="customer" checked={form.role === 'customer'} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))} />
-            <span>{t('customerDashboard')}</span>
-          </label>
-          <label className="account-type-card" htmlFor="account-organizer">
-            <input id="account-organizer" type="radio" name="accountType" value="organizer" checked={form.role === 'organizer'} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))} />
-            <span>{t('organizerDashboard')}</span>
-          </label>
-          <label className="account-type-card" htmlFor="account-vendor">
-            <input id="account-vendor" type="radio" name="accountType" value="vendor" checked={form.role === 'vendor'} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))} />
-            <span>{t('vendorDashboard')}</span>
-          </label>
-        </div>
-      </fieldset>
       <button className="button login-button" disabled={busy || Boolean(success) || !registrationEnabled}>{busy ? t('creatingAccount') : t('registerNow')}</button>
     </form>
     <div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div>
@@ -3001,13 +3109,17 @@ function ForgotPasswordPage({ onSubmit }) {
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const redirectTimer = useRef(null);
+  useEffect(() => () => window.clearTimeout(redirectTimer.current), []);
 
   async function submit(event) {
     event.preventDefault();
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setSuccess('');
     try {
       await onSubmit(email.trim());
-      navigateBrowserPath('/verify-reset-otp');
+      setSuccess(t('resetOtpSent'));
+      redirectTimer.current = window.setTimeout(() => navigateBrowserPath('/verify-reset-otp'), 1200);
     } catch (issue) {
       setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 503 ? t('resetServiceUnavailable') : translateText(issue.message, language));
     } finally {
@@ -3020,11 +3132,12 @@ function ForgotPasswordPage({ onSubmit }) {
     <h1>{t('forgotPasswordTitle')}</h1>
     <p className="muted">{t('resetEmailCopy')}</p>
     {error && <div className="alert error" role="alert">{error}</div>}
+    {success && <div className="alert success" role="status">{success}</div>}
     <form onSubmit={submit}>
       <label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" placeholder="you@example.com" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-      <button className="button login-button" type="submit" disabled={busy}>{busy ? t('sending') : t('sendResetLink')}</button>
+      <button className="button login-button" type="submit" disabled={busy || Boolean(success)}>{busy ? t('sending') : t('sendResetLink')}</button>
     </form>
-    <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>
+    <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); window.clearTimeout(redirectTimer.current); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>
   </section></main>;
 }
 
@@ -3083,6 +3196,8 @@ function VerifyResetOtpPage({ email: initialEmail, onEmailChange, onVerify, onRe
   }
 
   return <main className="login-wrap"><section className="login-card reset-card">
+    <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
+    <AuthBrand />
     <p className="eyebrow">{t('resetEyebrow')}</p>
     <h1>{t('verifyOtp')}</h1>
     <p className="muted">{t('ifAccountMatches')}</p>
@@ -3135,7 +3250,7 @@ function ResetPasswordPage({ onSubmit }) {
 
   return <main className="login-wrap"><section className="login-card reset-card">
     <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
-    <div className="brand-mark">EF</div>
+    <AuthBrand />
     <p className="eyebrow">{t('completeResetEyebrow')}</p>
     <h1>{completed ? t('passwordResetSuccessful') : t('resetPasswordTitle')}</h1>
     <p className="muted">{completed ? t('passwordResetSuccessCopy') : t('completeResetCopy')}</p>
@@ -3195,7 +3310,7 @@ function VendorLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('vendorPortal', language)}</p><h1>{translate('vendorSignIn', language)}</h1><p className="muted">{translate('manageYourBusiness', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openVendorDashboard', language)}</button></form><p className="login-note">{translateText('Vendor access remains restricted to the authenticated vendor’s own records and services.', language)}</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('vendorPortal', language)}</p><h1>{translate('vendorSignIn', language)}</h1><p className="muted">{translate('manageYourBusiness', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openVendorDashboard', language)}</button></form><p className="login-note">{translateText('Vendor access remains restricted to the authenticated vendor’s own records and services.', language)}</p></div></main>;
 }
 
 function VendorDashboard({ user, onLogout, onUserChange }) {
@@ -3338,7 +3453,7 @@ function CustomerLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('customerPortal', language)}</p><h1>{translate('customerSignIn', language)}</h1><p className="muted">{translate('discoverManageEvents', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openCustomerDashboard', language)}</button></form></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('customerPortal', language)}</p><h1>{translate('customerSignIn', language)}</h1><p className="muted">{translate('discoverManageEvents', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openCustomerDashboard', language)}</button></form></div></main>;
 }
 
 function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
@@ -3432,7 +3547,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
 
     switch (slug) {
       case 'overview':
-        return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('customerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || t('customerArea')}</h2><p className="muted">{t('trackBookings')}</p></div><div className="header-actions"><LanguageSelector/><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div></div><div className="metric-grid"><article className="metric-card"><p>{t('totalBookings')}</p><strong>{data.overview?.totalBookings ?? 0}</strong><span>{data.overview?.pendingBookings ?? 0} {t('pendingLabel')}</span></article><article className="metric-card"><p>{t('confirmedLabel')}</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingEvents ?? 0} {t('upcomingEvents')}</span></article><article className="metric-card"><p>{t('outstandingPayments')}</p><strong>{data.overview?.outstandingPayments ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} {t('openQuotations')}</span></article><article className="metric-card"><p>{t('unreadMessages')}</p><strong>{data.overview?.unreadMessages ?? 0}</strong><span>{data.overview?.unreadNotifications ?? 0} {t('notificationsLabel')}</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('recentBookings')}</h3><button className="button secondary small">{t('openBookings')}</button></div><div className="list-stack">{(data.bookings || []).slice(0,4).map((booking) => <div key={booking.id} className="list-card"><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} • {translateText(booking.status, language)}</small></div><span>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount || 0)}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>{t('savedVendors')}</h3></div><div className="list-stack">{(data.favorites || []).slice(0,3).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.city}</small></div><span className="pill active">{t('savedVendors')}</span></div>)}</div></article></div></section>;
+        return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('customerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || t('customerArea')}</h2><p className="muted">{t('trackBookings')}</p></div><div className="header-actions"><LanguageSelector user={user}/><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div></div><div className="metric-grid"><article className="metric-card"><p>{t('totalBookings')}</p><strong>{data.overview?.totalBookings ?? 0}</strong><span>{data.overview?.pendingBookings ?? 0} {t('pendingLabel')}</span></article><article className="metric-card"><p>{t('confirmedLabel')}</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingEvents ?? 0} {t('upcomingEvents')}</span></article><article className="metric-card"><p>{t('outstandingPayments')}</p><strong>{data.overview?.outstandingPayments ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} {t('openQuotations')}</span></article><article className="metric-card"><p>{t('unreadMessages')}</p><strong>{data.overview?.unreadMessages ?? 0}</strong><span>{data.overview?.unreadNotifications ?? 0} {t('notificationsLabel')}</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('recentBookings')}</h3><button className="button secondary small">{t('openBookings')}</button></div><div className="list-stack">{(data.bookings || []).slice(0,4).map((booking) => <div key={booking.id} className="list-card"><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} • {translateText(booking.status, language)}</small></div><span>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount || 0)}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>{t('savedVendors')}</h3></div><div className="list-stack">{(data.favorites || []).slice(0,3).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.city}</small></div><span className="pill active">{t('savedVendors')}</span></div>)}</div></article></div></section>;
       case 'vendors':
         return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BROWSE VENDORS</p><h2>Discover trusted event vendors</h2><p className="muted">Search by city, category, rating, and price to compare and save the right match.</p></div></div><div className="panel" style={{ padding: '20px' }}><div className="toolbar"><input className="field-input" placeholder="Search vendor name" /><select className="filter-select"><option>All categories</option>{(data.categories || []).map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select><select className="filter-select"><option>Any rating</option><option>4.5+</option><option>4.8+</option></select></div><div className="table-wrap"><table><thead><tr><th>Vendor</th><th>Category</th><th>Location</th><th>Verified</th><th>Rating</th><th>From</th></tr></thead><tbody>{(data.vendors || []).map((vendor) => <tr key={vendor.id}><td>{vendor.name}</td><td>{vendor.category}</td><td>{vendor.city}</td><td><span className="pill active">{vendor.verified ? 'Verified' : 'Unverified'}</span></td><td>{vendor.rating?.toFixed ? vendor.rating.toFixed(1) : '—'}★</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(vendor.priceFrom || 0)}</td></tr>)}</tbody></table></div></div></section>;
       case 'services':
@@ -3495,7 +3610,7 @@ function OrganizerLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('organizerPortal', language)}</p><h1>{translate('organizerSignIn', language)}</h1><p className="muted">{translate('secureOrganizerAccess', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openOrganizerDashboard', language)}</button></form></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('organizerPortal', language)}</p><h1>{translate('organizerSignIn', language)}</h1><p className="muted">{translate('secureOrganizerAccess', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openOrganizerDashboard', language)}</button></form></div></main>;
 }
 
 function OrganizerDashboard({ user, onLogout, onUserChange }) {
@@ -3608,7 +3723,7 @@ function Login({onLogin}) {
   const language = useLanguage();
   const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
   async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email,password); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
 }
 function Overview({ onNavigate }) {
   const language = useLanguage();
@@ -3882,7 +3997,7 @@ function AdminServiceCategories() {
     const message = activating
       ? `Activate “${category.name}”?`
       : `Deactivate “${category.name}”? ${category.service_count} associated service(s) will remain assigned but the category will be hidden from public browsing and new selections.`;
-    if (!window.confirm(message)) return;
+    if (!window.confirm(translateText(message))) return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -4069,7 +4184,7 @@ function GenericDataPage({slug,user,onUserChange}) {
       const payload={...form}; if(slug==='events'){['start_date','end_date'].forEach((key)=>{if(payload[key])payload[key]=new Date(payload[key]).toISOString().slice(0,19).replace('T',' ');else payload[key]=null;});if(payload.budget!=='')payload.budget=Number(payload.budget);else payload.budget=null;payload.organizer_id=Number(payload.organizer_id);}
       result=await api(`/admin/${config.endpoint}/${row.id}`,{method:'PATCH',body:JSON.stringify(payload)});
     } else if(modal.kind==='deactivate'){
-      if(!window.confirm('Deactivate this record? This action is recorded in the audit log.')){setBusy(false);return;}
+      if(!window.confirm(translateText('Deactivate this record? This action is recorded in the audit log.'))){setBusy(false);return;}
       result=await api(`/admin/${config.endpoint}/${row.id}`,{method:'DELETE'});
     } else if(modal.kind==='verify'||modal.kind==='reject'){
       result=await api(`/admin/vendors/${row.id}/verification`,{method:'PATCH',body:JSON.stringify({decision:modal.kind==='verify'?'verified':'rejected',reason:form.reason})});
@@ -4110,7 +4225,7 @@ function GenericDataPage({slug,user,onUserChange}) {
     setNotice(modal.kind==='profile'?(DEMO_AUTH_ENABLED?t('demoProfileUpdated'):t('profileUpdatedSuccessfully')):'Changes saved.');setModal(null);if(slug!=='profile')await load(pagination.page);
   }catch(issue){setError(issue.message);if(modal.kind==='profile'&&(profilePhotoFile||profilePhotoRemoved))setProfilePhotoError(issue.message);}finally{setBusy(false);}}
   async function deleteContactMessage(row){
-    if(!window.confirm(`Permanently delete contact message #${row.id}? This action is recorded in the audit log.`))return;
+    if(!window.confirm(translateText(`Permanently delete contact message #${row.id}? This action is recorded in the audit log.`)))return;
     setBusy(true);setError('');setNotice('');
     try{
       await api(`/admin/contact/${row.id}`,{method:'DELETE'});
@@ -4973,14 +5088,7 @@ function ApiSettingsPage() {
                 <div className="settings-status-row"><span>{t('userSession')}</span><strong>{configuration?.security?.userSessionHours || 8} {t('hours')}</strong></div>
                 <div className="settings-status-row"><span>{t('passwordPolicy')}</span><strong>{configuration?.security?.passwordMinimumLength || 12}–{configuration?.security?.passwordMaximumLength || 16} {t('charactersStrongPassword')}</strong></div>
                 <p className="settings-readonly-note">{t('securityPolicyReadonlyNote')}</p>
-                <label className="field">
-                  <span>{t('defaultRegistrationRole')}</span>
-                  <select value={settings.default_registration_role} disabled={saving} onChange={(event) => changeSetting('default_registration_role', event.target.value)}>
-                    <option value="customer">{t('customerRole')}</option>
-                    <option value="organizer">{t('organizerRole')}</option>
-                    <option value="vendor">{t('vendorRole')}</option>
-                  </select>
-                </label>
+                <div className="settings-status-row"><span>{t('defaultRegistrationRole')}</span><strong>{t('customerRole')}</strong></div>
                 <label className="settings-toggle">
                   <span><strong>{t('publicRegistration')}</strong><small>{t('publicRegistrationHelp')}</small></span>
                   <input type="checkbox" checked={settings.public_registration_enabled} disabled={saving} onChange={(event) => changeSetting('public_registration_enabled', event.target.checked)} />
@@ -5023,7 +5131,7 @@ function MaintenancePage({ platformName, message, onAdminSignIn }) {
   return (
     <main className="maintenance-screen">
       <section className="panel maintenance-card">
-        <div className="brand-mark">EF</div>
+        <AuthBrand />
         <p className="eyebrow">{platformName}</p>
         <h1>{translate('maintenancePageTitle', language)}</h1>
         <p>{message}</p>
@@ -5102,7 +5210,7 @@ export default function App(){
     document.documentElement.dataset.brandingLogoUrl = platformAvailability.brandingLogoUrl || '';
     document.documentElement.dataset.supportEmail = platformAvailability.supportEmail || '';
     document.documentElement.dataset.supportPhone = platformAvailability.supportPhone || '';
-    if (platformAvailability.platformName) document.title = `${platformAvailability.platformName} | Event planning and vendor booking`;
+    if (platformAvailability.platformName) document.title = `${platformAvailability.platformName} | Plan · Book · Celebrate`;
   }, [platformAvailability]);
 
   const navigatePublic = useCallback((path) => {
@@ -5177,6 +5285,12 @@ export default function App(){
     return () => window.removeEventListener('eventhub:auth-invalidated', handleAuthInvalidated);
   }, []);
 
+  useEffect(() => {
+    if (!user || DEMO_AUTH_ENABLED) return;
+    const preferredLanguage = user.preferred_language;
+    if (preferredLanguage === 'en' || preferredLanguage === 'am') setLanguage(preferredLanguage);
+  }, [portal, user?.id, user?.preferred_language, user?.role, user?.roles]);
+
   async function login(email,password){
     if (DEMO_AUTH_ENABLED) {
       const credential = findDemoLogin(email, password);
@@ -5227,23 +5341,29 @@ export default function App(){
     if (canContinue) sessionStorage.removeItem('eventhub_after_login');
     navigatePublic(canContinue ? continuation : rolePath);
   }
-  function completeDemoRegistration(profile, dashboardPath) {
-    authSessionLoader.setAuthenticated(toDemoUser(profile), profile.role);
-    setUser(toDemoUser(profile));setPortal(profile.role);setGlobalError('');setShowLogin(false);
-    navigatePublic(dashboardPath);
+  function completeRegistration(result) {
+    const registeredUser = result?.demo ? toDemoUser(result.profile) : result?.data?.user;
+    if (!registeredUser || registeredUser.role !== 'customer') {
+      setGlobalError('Registration completed, but customer sign-in could not be confirmed. Please sign in.');
+      navigatePublic('/login');
+      return;
+    }
+    authSessionLoader.setAuthenticated(registeredUser, 'customer');
+    setUser(registeredUser);setPortal('customer');setGlobalError('');setShowLogin(false);
+    navigatePublic('/customer/dashboard');
   }
-  async function registerPublic(name,email,password,role='customer'){
+  async function registerPublic(name,email,password){
     if (DEMO_AUTH_ENABLED) {
       if (!name || name.trim().length < 2) throw new Error('Enter your full name (at least 2 characters).');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) throw new Error('Enter a valid email address.');
       if (!isValidDemoPassword(password)) throw new Error('Password must contain 12–16 characters, uppercase, lowercase, and a number.');
-      if (!['customer','organizer','vendor'].includes(role)) throw new Error('Choose a valid account type.');
-      const profile = saveDemoAccount({ name, email, role });
+      const profile = saveDemoAccount({ name, email, role: 'customer' });
       saveDemoSession(profile);
-      return { demo: true, profile, message: 'Demo registration successful', dashboardPath: dashboardPathForRole(role) };
+      return { demo: true, profile, message: 'Demo registration successful', dashboardPath: dashboardPathForRole('customer') };
     }
-    const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,email,password,role})});
-    setUser(null);setPortal(role);setGlobalError('');setShowLogin(false);
+    const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,email,password})});
+    const registeredUser = response?.data?.user;
+    if (!registeredUser || registeredUser.role !== 'customer') throw new Error('The server did not confirm a customer account.');
     return response.data;
   }
   async function requestPasswordResetOtp(email){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); const response=await api('/auth/forgot-password/otp',{method:'POST',body:JSON.stringify({email})}); setPasswordResetEmail(email); return response; }
@@ -5296,7 +5416,7 @@ export default function App(){
     '/about': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/contact': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>,
     '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword />,
-    '/register': <RegisterPage onRegister={registerPublic} onDemoRegistrationComplete={completeDemoRegistration} demoMode={DEMO_AUTH_ENABLED} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} defaultRegistrationRole={platformAvailability?.defaultRegistrationRole ?? 'customer'} />,
+    '/register': <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} />,
     '/forgot-password': <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />,
     '/verify-reset-otp': <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />,
     '/reset-password': <ResetPasswordPage onSubmit={resetPassword} />,
@@ -5311,7 +5431,7 @@ export default function App(){
   const vendorRoute = routePath.match(/^\/vendors\/(\d+)$/);
   const roleDashboardRoute = /^\/(customer|organizer|vendor)\/dashboard(?:\/|$)/.test(routePath);
   const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || roleDashboardRoute;
-  if (checking && requiresSession) return <div className="loading full-screen"><span className="spinner"/>Checking your session…</div>;
+  if (checking && requiresSession) return <div className="loading full-screen"><img className="loading-brand-symbol" src="/eventhub-symbol.png" alt="EventHub"/><span className="spinner"/>Checking your session…</div>;
   if (requiresSession && !user && ['error', 'rate-limited'].includes(authSessionState.status)) {
     return <SessionRecoveryPage sessionState={authSessionState}/>;
   }
@@ -5349,7 +5469,7 @@ export default function App(){
     if (currentPath.startsWith('/admin')) return DEMO_AUTH_ENABLED ? <LoginPage onLogin={login} demoMode /> : <Login onLogin={login}/>;
     if (roleDashboardRoute) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
     if (routePath === '/login') return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword/>;
-    if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onDemoRegistrationComplete={completeDemoRegistration} demoMode={DEMO_AUTH_ENABLED} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} defaultRegistrationRole={platformAvailability?.defaultRegistrationRole ?? 'customer'}/>;
+    if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/>;
     if (DEMO_AUTH_ENABLED && /^\/(customer|organizer|vendor)\/dashboard$/.test(currentPath)) return <LoginPage onLogin={loginPublic} demoMode />;
     if (routePath === '/forgot-password') return <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />;
     if (routePath === '/verify-reset-otp') return <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />;

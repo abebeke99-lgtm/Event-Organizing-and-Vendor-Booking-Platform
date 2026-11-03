@@ -454,6 +454,19 @@ test('anonymous platform session checks do not consume sign-in rate limits', asy
   }
 });
 
+test('successful session checks do not exhaust session probe rate limits', async () => {
+  for (const [path, expected] of [
+    ['/api/auth/me', { user: null }],
+    ['/api/platform/me', { data: { user: null } }],
+  ]) {
+    for (let attempt = 0; attempt < 65; attempt += 1) {
+      const response = await fetch(`${baseUrl}${path}`);
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), expected);
+    }
+  }
+});
+
 test('session endpoints return 401 when a cookie is present but invalid', async () => {
   const adminResponse = await fetch(`${baseUrl}/api/auth/me`, {
     headers: { Cookie: 'admin_session=invalid-test-session' },

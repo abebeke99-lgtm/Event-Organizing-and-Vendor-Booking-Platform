@@ -8,11 +8,11 @@ export async function requireAdmin(req, res, next) {
   try {
     const database = req.app?.locals?.database || pool;
     const [rows] = await database.execute(
-      `SELECT u.id, u.full_name, u.email, u.phone, u.status, GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles
+      `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status, GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles
        FROM admin_sessions s JOIN users u ON u.id = s.user_id
        JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
        WHERE s.token_hash = ? AND s.expires_at > NOW() AND u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE
-       GROUP BY u.id, u.full_name, u.email, u.phone, u.status LIMIT 1`,
+      GROUP BY u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status LIMIT 1`,
       [hashToken(token)]
     );
     if (!rows.length) {

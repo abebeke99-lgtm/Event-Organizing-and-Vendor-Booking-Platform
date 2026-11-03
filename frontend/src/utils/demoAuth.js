@@ -94,16 +94,16 @@ export function readDemoProfile(email, storage = globalThis.localStorage) {
   try {
     profiles = JSON.parse(value);
   } catch {
-    throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+    throw new Error('Saved demo profile data is invalid. Clear the EventHub demo profile data and try again.');
   }
   if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) {
-    throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+    throw new Error('Saved demo profile data is invalid. Clear the EventHub demo profile data and try again.');
   }
 
   const profile = profiles[normalizedEmail];
   if (!profile) return null;
   if (typeof profile.name !== 'string' || typeof profile.phone !== 'string') {
-    throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+    throw new Error('Saved demo profile data is invalid. Clear the EventHub demo profile data and try again.');
   }
   return { name: profile.name, phone: profile.phone };
 }
@@ -123,10 +123,10 @@ export function saveDemoProfile(email, profile, storage = globalThis.localStorag
     try {
       profiles = JSON.parse(value);
     } catch {
-      throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+      throw new Error('Saved demo profile data is invalid. Clear the EventHub demo profile data and try again.');
     }
     if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) {
-      throw new Error('Saved demo profile data is invalid. Clear the EventFlow demo profile data and try again.');
+      throw new Error('Saved demo profile data is invalid. Clear the EventHub demo profile data and try again.');
     }
   }
 

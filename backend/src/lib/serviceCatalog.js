@@ -45,6 +45,8 @@ export function buildServiceFilters(raw = {}) {
   const search = sanitizeText(raw.search, '').toLowerCase().slice(0, 120);
   const category = sanitizeText(raw.category, '').toLowerCase();
   const location = sanitizeText(raw.location, '').toLowerCase();
+  const rawVendorId = Number(raw.vendorId ?? raw.vendor_id ?? 0);
+  const vendorId = Number.isInteger(rawVendorId) && rawVendorId > 0 ? rawVendorId : null;
   const minPrice = Number.isFinite(Number(raw.minPrice)) ? Math.max(0, Number(raw.minPrice)) : 0;
   const maxPrice = Number.isFinite(Number(raw.maxPrice)) ? Math.max(minPrice, Number(raw.maxPrice)) : 0;
   const minRating = Number.isFinite(Number(raw.minRating)) ? Math.max(0, Number(raw.minRating)) : 0;
@@ -57,6 +59,7 @@ export function buildServiceFilters(raw = {}) {
     search,
     category,
     location,
+    vendorId,
     minPrice,
     maxPrice,
     minRating,
@@ -83,6 +86,7 @@ export function listPublicServices(services = [], filters = {}) {
     if (options.search && !haystack.includes(options.search)) return false;
     if (options.category && !matchesCategoryName(service.category, options.category)) return false;
     if (options.location && !service.city.toLowerCase().includes(options.location)) return false;
+    if (options.vendorId && Number(service.vendorId) !== Number(options.vendorId)) return false;
     if (options.minPrice && (service.price === null || service.price < options.minPrice)) return false;
     if (options.maxPrice && (service.price === null || service.price > options.maxPrice)) return false;
     if (options.minRating && service.rating < options.minRating) return false;

@@ -1,4 +1,22 @@
 import { useSyncExternalStore } from 'react';
+import { adminAuditLogMessages } from './i18n/modules/adminAuditLogs.js';
+import { vendorWorkspaceMessages } from './i18n/modules/vendorWorkspace.js';
+import { customerWorkspaceMessages } from './i18n/modules/customerWorkspace.js';
+import { organizerWorkspaceMessages } from './i18n/modules/organizerWorkspace.js';
+import { eventsExperienceMessages } from './i18n/modules/eventsExperience.js';
+import { adminProfileMessages } from './i18n/modules/adminProfile.js';
+import { adminNotificationMessages } from './i18n/modules/adminNotifications.js';
+import { adminRoleManagementMessages } from './i18n/modules/adminRoleManagement.js';
+import { adminUserManagementMessages } from './i18n/modules/adminUserManagement.js';
+import { adminBookingManagementMessages } from './i18n/modules/adminBookingManagement.js';
+import { adminPaymentManagementMessages } from './i18n/modules/adminPaymentManagement.js';
+import { adminReviewsComplaintsMessages } from './i18n/modules/adminReviewsComplaints.js';
+import { adminEventManagementMessages } from './i18n/modules/adminEventManagement.js';
+import { adminVendorVerificationMessages } from './i18n/modules/adminVendorVerification.js';
+import { adminSystemSettingsMessages } from './i18n/modules/adminSystemSettings.js';
+import { publicMarketplaceMessages } from './i18n/modules/publicMarketplace.js';
+import { appDashboardMessages } from './i18n/modules/appDashboard.js';
+import { runtimeMessages } from './i18n/modules/runtimeMessages.js';
 
 const messages = {
   en: {
@@ -9,6 +27,7 @@ const messages = {
     categoriesNav: "Categories",
     aboutUsNav: "About Us",
     contactUsNav: "Contact Us",
+    languagePreferenceSaveFailed: "Your language preference could not be saved. It will remain selected on this device.",
     login: "Login",
     register: "Register",
     adminDashboard: "Admin Dashboard",
@@ -39,6 +58,12 @@ const messages = {
     savedVendors: "Saved Vendors",
     payments: "Payments",
     footerDescription: "One trusted marketplace for event planning, vendor discovery, booking coordination, and service fulfilment.",
+    socialLinksUnconfigured: "Official social profile links are not configured yet.",
+    socialProfileUnconfigured: "official profile not configured",
+    telegram: "Telegram",
+    youtube: "YouTube",
+    facebook: "Facebook",
+    linkedin: "LinkedIn",
     explore: "Explore",
     browseEvents: "Browse Events",
     browseServices: "Browse Services",
@@ -222,8 +247,9 @@ const messages = {
     backHome: "Back to homepage",
     resetEyebrow: "PASSWORD RESET",
     resetEmailCopy: "Enter your email address and we'll send you a verification code to reset your password.",
+    resetOtpSent: "If this email is registered, a verification code has been sent.",
     completeResetEyebrow: "NEW PASSWORD",
-    completeResetCopy: "Choose a new password for your EventFlow account.",
+    completeResetCopy: "Choose a new password for your EventHub account.",
     ifAccountMatches: "If an account exists with this email, a verification code will be sent.",
     aboutUs: "ABOUT US",
     ourMission: "Our mission",
@@ -241,15 +267,15 @@ const messages = {
     trustTransparency: "Trust and Transparency",
     qualityService: "Quality Service",
     customerSatisfaction: "Customer Satisfaction",
-    aboutHeroEyebrow: "ABOUT EVENTFLOW",
+    aboutHeroEyebrow: "ABOUT EVENTHUB",
     aboutHeroTitle: "Making Every Event Extraordinary",
-    aboutHeroCopy: "EventFlow is an event organizing and vendor booking platform designed to bring customers, event organizers, and trusted service providers together. We simplify the process of discovering event services, connecting with vendors, comparing options, and planning memorable experiences.",
+    aboutHeroCopy: "EventHub is an event organizing and vendor booking platform designed to bring customers, event organizers, and trusted service providers together. We simplify the process of discovering event services, connecting with vendors, comparing options, and planning memorable experiences.",
     aboutExploreServices: "Explore Services",
     aboutFindVendors: "Find Vendors",
     aboutHeroPromise: "A more organized way to discover, connect, and plan.",
     aboutHeroImageAlt: "A warmly decorated event venue prepared for a celebration",
     aboutImageNote: "Thoughtful planning. Memorable moments.",
-    aboutMarketplaceStats: "EventFlow marketplace statistics",
+    aboutMarketplaceStats: "EventHub marketplace statistics",
     aboutStatCategories: "Active service categories",
     aboutStatVendors: "Verified vendors",
     aboutStatServices: "Published services",
@@ -257,7 +283,7 @@ const messages = {
     aboutPurposeEyebrow: "OUR PURPOSE",
     aboutPurposeHeading: "A clearer path from idea to event",
     aboutMissionTitle: "Our Mission",
-    aboutMissionCopy: "To simplify event planning by connecting customers with the right event services, professional vendors, and reliable planning resources through one convenient digital platform. EventFlow aims to make event discovery, service comparison, vendor communication, and booking coordination easier, more transparent, and more accessible.",
+    aboutMissionCopy: "To simplify event planning by connecting customers with the right event services, professional vendors, and reliable planning resources through one convenient digital platform. EventHub aims to make event discovery, service comparison, vendor communication, and booking coordination easier, more transparent, and more accessible.",
     aboutMissionObjectives: "Our mission objectives",
     aboutMissionObjective1: "Simplify event planning.",
     aboutMissionObjective2: "Connect customers with suitable vendors.",
@@ -276,7 +302,7 @@ const messages = {
     aboutVisionPriority6: "Create long-term value for customers and vendors.",
     aboutStoryEyebrow: "WHERE IT BEGAN",
     aboutStoryTitle: "Our Story",
-    aboutStoryCopy: "EventFlow was created around a simple idea: planning an event should be organized, convenient, and enjoyable. Finding the right venue, caterer, photographer, decorator, or event planner can involve multiple searches and conversations. EventFlow brings these activities together in one digital experience, helping customers explore services and connect with suitable providers.",
+    aboutStoryCopy: "EventHub was created around a simple idea: planning an event should be organized, convenient, and enjoyable. Finding the right venue, caterer, photographer, decorator, or event planner can involve multiple searches and conversations. EventHub brings these activities together in one digital experience, helping customers explore services and connect with suitable providers.",
     aboutValuesEyebrow: "WHAT MATTERS TO US",
     aboutValuesTitle: "The Values That Guide Us",
     aboutValuesIntro: "These principles shape how we build tools for people planning events and the professionals who make them happen.",
@@ -293,7 +319,7 @@ const messages = {
     aboutValueAccessibilityTitle: "Accessibility",
     aboutValueAccessibilityCopy: "We aim to make event planning tools easy to use across different devices and user needs.",
     aboutProcessEyebrow: "A SIMPLE JOURNEY",
-    aboutProcessTitle: "How EventFlow Works",
+    aboutProcessTitle: "How EventHub Works",
     aboutProcessIntro: "Move from exploring possibilities to coordinating your event in a few clear steps.",
     aboutStepDiscoverTitle: "Discover",
     aboutStepDiscoverCopy: "Browse event categories, available services, vendors, and published events.",
@@ -304,7 +330,7 @@ const messages = {
     aboutStepPlanTitle: "Plan and Book",
     aboutStepPlanCopy: "Coordinate event requirements and complete supported booking processes.",
     aboutWhyEyebrow: "BUILT FOR PRACTICAL PLANNING",
-    aboutWhyTitle: "Why Choose EventFlow?",
+    aboutWhyTitle: "Why Choose EventHub?",
     aboutWhyIntro: "Useful tools bring the people, information, and coordination behind an event into one place.",
     aboutFeatureDiscoveryTitle: "Convenient Event Discovery",
     aboutFeatureDiscoveryCopy: "Explore events, vendors, services, and categories through public listings and search.",
@@ -324,7 +350,7 @@ const messages = {
     aboutFeatureLanguagesCopy: "Switch between the platform's English and Amharic interface.",
     aboutAudienceEyebrow: "ONE PLATFORM, MANY ROLES",
     aboutAudienceTitle: "Who We Serve",
-    aboutAudienceIntro: "EventFlow brings together the people involved in discovering, providing, and coordinating event services.",
+    aboutAudienceIntro: "EventHub brings together the people involved in discovering, providing, and coordinating event services.",
     aboutAudienceCustomersTitle: "Customers",
     aboutAudienceCustomersCopy: "Discover services, explore events, compare providers, and manage supported booking requests.",
     aboutAudienceCustomersAction: "Browse services",
@@ -393,7 +419,10 @@ const messages = {
     message: "Message",
     sending: "Sending…",
     sendInquiry: "Send Message",
-    followUs: "Follow us",
+    followUs: "Follow Us",
+    footerCopyright: "© 2027 EventHub. All Rights Reserved.",
+    footerDeveloper: "Developed by Bekele Abebe",
+    footerDesignCredit: "Designed & Developed with ❤️",
     office: "Office",
     supportHours: "Support hours",
     platformCurrency: "Platform currency (ISO 4217)",
@@ -420,7 +449,7 @@ const messages = {
     signInSecurely: "Sign in securely",
     signingIn: "Signing in…",
     createAccountHeading: "Create an account",
-    registerAsRole: "Register as a customer, organizer, or vendor.",
+    registerAsRole: "Create a customer account. Organizer and vendor accounts are created by an administrator.",
     accountType: "Account type",
     password: "Password",
     emailAddress: "Email address",
@@ -453,7 +482,7 @@ const messages = {
     updatingPassword: "Updating password…",
     confirmPassword: "Confirm password",
     passwordMismatch: "Passwords do not match.",
-    passwordPlaceholder: "Enter password (12–16 characters)",
+    passwordPlaceholder: "Enter password",
     passwordInvalid: "Password must contain 12–16 characters, uppercase, lowercase, and a number.",
     passwordsMatch: "Passwords match.",
     showPassword: "Show password",
@@ -721,9 +750,9 @@ const messages = {
     submitFeedback: "Submit and review feedback for eligible completed services.",
     importantUpdates: "Important updates",
     stayCurrent: "Stay current with booking changes, quotations, and payment updates.",
-    vendorPortal: "EVENTFLOW VENDOR PORTAL",
-    customerPortal: "EVENTFLOW CUSTOMER PORTAL",
-    organizerPortal: "EVENTFLOW ORGANIZER PORTAL",
+    vendorPortal: "EVENTHUB VENDOR PORTAL",
+    customerPortal: "EVENTHUB CUSTOMER PORTAL",
+    organizerPortal: "EVENTHUB ORGANIZER PORTAL",
     manageYourBusiness: "Manage your business, services, bookings, quotations, and earnings.",
     secureOrganizerAccess: "Secure access for planning events, comparing vendors, and tracking bookings.",
     discoverManageEvents: "Discover services, manage your events, request quotes, and track reservations.",
@@ -799,6 +828,24 @@ const messages = {
     submitRequest: "Send request",
     requestSuccess: "Your package request was saved. The team can follow up using your email.",
     requestFailure: "Your request could not be saved. Please try again.",
+    ...adminAuditLogMessages.en,
+    ...vendorWorkspaceMessages.en,
+    ...customerWorkspaceMessages.en,
+    ...organizerWorkspaceMessages.en,
+    ...eventsExperienceMessages.en,
+    ...adminProfileMessages.en,
+    ...adminNotificationMessages.en,
+    ...adminRoleManagementMessages.en,
+    ...adminUserManagementMessages.en,
+    ...adminBookingManagementMessages.en,
+    ...adminPaymentManagementMessages.en,
+    ...adminReviewsComplaintsMessages.en,
+    ...adminEventManagementMessages.en,
+    ...adminVendorVerificationMessages.en,
+    ...adminSystemSettingsMessages.en,
+    ...publicMarketplaceMessages.en,
+    ...appDashboardMessages.en,
+    ...runtimeMessages.en,
   },
   am: {
     homeNav: "መነሻ",
@@ -808,6 +855,7 @@ const messages = {
     categoriesNav: "ምድቦች",
     aboutUsNav: "ስለ እኛ",
     contactUsNav: "ያግኙን",
+    languagePreferenceSaveFailed: "የቋንቋ ምርጫዎን ማስቀመጥ አልተቻለም። በዚህ መሣሪያ ላይ እንደተመረጠ ይቆያል።",
     login: "ግባ",
     register: "ይመዝገቡ",
     adminDashboard: "የአስተዳዳሪ ዳሽቦርድ",
@@ -838,6 +886,12 @@ const messages = {
     savedVendors: "የተቀመጡ አገልግሎት ሰጪዎች",
     payments: "ክፍያዎች",
     footerDescription: "ለዝግጅት እቅድ፣ አገልግሎት ሰጪ ፍለጋ፣ ቦታ ማስያዝ እና አገልግሎት ማስተባበር የታመነ መድረክ።",
+    socialLinksUnconfigured: "ይፋዊ የማህበራዊ ሚዲያ መገለጫ አገናኞች ገና አልተዋቀሩም።",
+    socialProfileUnconfigured: "ይፋዊ መገለጫ ገና አልተዋቀረም",
+    telegram: "ቴሌግራም",
+    youtube: "ዩቲዩብ",
+    facebook: "ፌስቡክ",
+    linkedin: "ሊንክድኢን",
     explore: "ይመልከቱ",
     browseEvents: "ዝግጅቶችን ይመልከቱ",
     browseServices: "አገልግሎቶችን ይመልከቱ",
@@ -936,8 +990,8 @@ const messages = {
     vendorReviews: "ግምገማዎች",
     bookService: "አገልግሎት ያስይዙ",
     vendorsLabel: "አገልግሎት ሰጪዎች",
-    noVendorMatches: "የሚስማማ አገልግሎት ሰጪ አልተገኘም",
-    tryDifferentFilters: "ሌላ ፍለጋ ወይም ማጣሪያ ይሞክሩ።",
+    noVendorMatches: "የሚመጥን አገልግሎት አልተገኘም",
+    tryDifferentFilters: "ሌላ ቃል ወይም ማጣሪያ ይሞክሩ።",
     profileUnavailable: "መገለጫው አይገኝም",
     vendorNotFound: "አገልግሎት ሰጪው አልተገኘም",
     vendorUnavailable: "ይህ አገልግሎት ሰጪ በአሁኑ ጊዜ ይፋዊ አይደለም ወይም አይገኝም።",
@@ -1015,8 +1069,9 @@ const messages = {
     backHome: "ወደ መነሻ ገጽ ተመለስ",
     resetEyebrow: "የይለፍ ቃል ለውጥ",
     resetEmailCopy: "የይለፍ ቃልዎን ለመቀየር የማረጋገጫ ኮድ እንዲላክልዎ የኢሜይል አድራሻዎን ያስገቡ።",
+    resetOtpSent: "ይህ ኢሜይል ከተመዘገበ፣ የማረጋገጫ ኮድ ተልኳል።",
     completeResetEyebrow: "አዲስ የይለፍ ቃል",
-    completeResetCopy: "ለEventFlow መለያዎ አዲስ የይለፍ ቃል ይምረጡ።",
+    completeResetCopy: "ለEventHub መለያዎ አዲስ የይለፍ ቃል ይምረጡ።",
     ifAccountMatches: "ከዚህ ኢሜይል ጋር የተያያዘ መለያ ካለ፣ የማረጋገጫ ኮድ ይላካል።",
     aboutUs: "ስለ እኛ",
     ourMission: "ተልዕኮአችን",
@@ -1034,15 +1089,15 @@ const messages = {
     trustTransparency: "እምነት እና ግልጽነት",
     qualityService: "ጥራት ያለው አገልግሎት",
     customerSatisfaction: "የደንበኛ እርካታ",
-    aboutHeroEyebrow: "ስለ EVENTFLOW",
+    aboutHeroEyebrow: "ስለ EVENTHUB",
     aboutHeroTitle: "እያንዳንዱን ዝግጅት ልዩ እናደርጋለን",
-    aboutHeroCopy: "EventFlow ደንበኞችን፣ የዝግጅት አዘጋጆችን እና ታማኝ የአገልግሎት ሰጪዎችን ለማገናኘት የተዘጋጀ የዝግጅት ማደራጃና የአገልግሎት ሰጪ ማስያዣ መድረክ ነው። የዝግጅት አገልግሎቶችን ማግኘት፣ ከአገልግሎት ሰጪዎች ጋር መገናኘት፣ አማራጮችን ማወዳደር እና የማይረሱ ተሞክሮዎችን ማቀድ ቀላል እናደርጋለን።",
+    aboutHeroCopy: "EventHub ደንበኞችን፣ የዝግጅት አዘጋጆችን እና ታማኝ የአገልግሎት ሰጪዎችን ለማገናኘት የተዘጋጀ የዝግጅት ማደራጃና የአገልግሎት ሰጪ ማስያዣ መድረክ ነው። የዝግጅት አገልግሎቶችን ማግኘት፣ ከአገልግሎት ሰጪዎች ጋር መገናኘት፣ አማራጮችን ማወዳደር እና የማይረሱ ተሞክሮዎችን ማቀድ ቀላል እናደርጋለን።",
     aboutExploreServices: "አገልግሎቶችን ይመልከቱ",
     aboutFindVendors: "አገልግሎት ሰጪዎችን ያግኙ",
     aboutHeroPromise: "ለመፈለግ፣ ለመገናኘት እና ለማቀድ የተደራጀ መንገድ።",
     aboutHeroImageAlt: "ለደስታ በዓል የተዘጋጀ በሚያምር መንገድ የተሸለመ የዝግጅት ቦታ",
     aboutImageNote: "በጥንቃቄ ማቀድ። የማይረሱ ጊዜያት።",
-    aboutMarketplaceStats: "የEventFlow የገበያ መድረክ ስታቲስቲክስ",
+    aboutMarketplaceStats: "የEventHub የገበያ መድረክ ስታቲስቲክስ",
     aboutStatCategories: "ንቁ የአገልግሎት ምድቦች",
     aboutStatVendors: "የተረጋገጡ አገልግሎት ሰጪዎች",
     aboutStatServices: "የታተሙ አገልግሎቶች",
@@ -1050,7 +1105,7 @@ const messages = {
     aboutPurposeEyebrow: "ዓላማችን",
     aboutPurposeHeading: "ከሐሳብ እስከ ዝግጅት የተቃና መንገድ",
     aboutMissionTitle: "ተልዕኮአችን",
-    aboutMissionCopy: "ደንበኞችን ከተስማሚ የዝግጅት አገልግሎቶች፣ ባለሙያ አገልግሎት ሰጪዎች እና አስተማማኝ የዕቅድ ምንጮች ጋር በአንድ ምቹ ዲጂታል መድረክ በማገናኘት የዝግጅት ዕቅድን ማቅለል ነው። EventFlow የዝግጅት ማግኘትን፣ አገልግሎቶችን ማወዳደርን፣ ከአገልግሎት ሰጪዎች ጋር መገናኘትን እና የማስያዣ ማስተባበርን ቀላል፣ ግልጽ እና ተደራሽ ለማድረግ ይጥራል።",
+    aboutMissionCopy: "ደንበኞችን ከተስማሚ የዝግጅት አገልግሎቶች፣ ባለሙያ አገልግሎት ሰጪዎች እና አስተማማኝ የዕቅድ ምንጮች ጋር በአንድ ምቹ ዲጂታል መድረክ በማገናኘት የዝግጅት ዕቅድን ማቅለል ነው። EventHub የዝግጅት ማግኘትን፣ አገልግሎቶችን ማወዳደርን፣ ከአገልግሎት ሰጪዎች ጋር መገናኘትን እና የማስያዣ ማስተባበርን ቀላል፣ ግልጽ እና ተደራሽ ለማድረግ ይጥራል።",
     aboutMissionObjectives: "የተልዕኮአችን ዓላማዎች",
     aboutMissionObjective1: "የዝግጅት ዕቅድን ማቅለል።",
     aboutMissionObjective2: "ደንበኞችን ከተስማሚ አገልግሎት ሰጪዎች ጋር ማገናኘት።",
@@ -1069,7 +1124,7 @@ const messages = {
     aboutVisionPriority6: "ለደንበኞችና ለአገልግሎት ሰጪዎች ዘላቂ እሴት መፍጠር።",
     aboutStoryEyebrow: "የጀመርንበት ሐሳብ",
     aboutStoryTitle: "ታሪካችን",
-    aboutStoryCopy: "EventFlow በቀላል ሐሳብ ተፈጠረ፦ ዝግጅት ማቀድ የተደራጀ፣ ምቹ እና አስደሳች መሆን አለበት። ትክክለኛውን የዝግጅት ቦታ፣ የምግብ አቅራቢ፣ ፎቶግራፍ አንሺ፣ አስዋቢ ወይም የዝግጅት አዘጋጅ ማግኘት ብዙ ፍለጋና ውይይት ሊጠይቅ ይችላል። EventFlow እነዚህን ሂደቶች በአንድ ዲጂታል ተሞክሮ ያገናኛል፤ ደንበኞችም አገልግሎቶችን እንዲያስሱና ከተስማሚ አቅራቢዎች ጋር እንዲገናኙ ይረዳል።",
+    aboutStoryCopy: "EventHub በቀላል ሐሳብ ተፈጠረ፦ ዝግጅት ማቀድ የተደራጀ፣ ምቹ እና አስደሳች መሆን አለበት። ትክክለኛውን የዝግጅት ቦታ፣ የምግብ አቅራቢ፣ ፎቶግራፍ አንሺ፣ አስዋቢ ወይም የዝግጅት አዘጋጅ ማግኘት ብዙ ፍለጋና ውይይት ሊጠይቅ ይችላል። EventHub እነዚህን ሂደቶች በአንድ ዲጂታል ተሞክሮ ያገናኛል፤ ደንበኞችም አገልግሎቶችን እንዲያስሱና ከተስማሚ አቅራቢዎች ጋር እንዲገናኙ ይረዳል።",
     aboutValuesEyebrow: "ለእኛ አስፈላጊ የሆኑ ነገሮች",
     aboutValuesTitle: "የሚመሩን እሴቶች",
     aboutValuesIntro: "እነዚህ መርሆዎች ዝግጅት ለሚያቅዱ ሰዎችና ዝግጅቶችን እውን ለሚያደርጉ ባለሙያዎች የምንገነባቸውን መሳሪያዎች ይቀርጻሉ።",
@@ -1086,7 +1141,7 @@ const messages = {
     aboutValueAccessibilityTitle: "ተደራሽነት",
     aboutValueAccessibilityCopy: "የዝግጅት ዕቅድ መሳሪያዎችን በተለያዩ መሳሪያዎችና የተጠቃሚ ፍላጎቶች ላይ ቀላል ለመጠቀም እንጥራለን።",
     aboutProcessEyebrow: "ቀላል ሂደት",
-    aboutProcessTitle: "EventFlow እንዴት ይሰራል",
+    aboutProcessTitle: "EventHub እንዴት ይሰራል",
     aboutProcessIntro: "በጥቂት ግልጽ ደረጃዎች አማራጮችን ከማሰስ ወደ ዝግጅትዎ ማስተባበር ይሂዱ።",
     aboutStepDiscoverTitle: "ያስሱ",
     aboutStepDiscoverCopy: "የዝግጅት ምድቦችን፣ የሚገኙ አገልግሎቶችን፣ አገልግሎት ሰጪዎችን እና የታተሙ ዝግጅቶችን ይመልከቱ።",
@@ -1097,7 +1152,7 @@ const messages = {
     aboutStepPlanTitle: "ያቅዱና ያስይዙ",
     aboutStepPlanCopy: "የዝግጅት ፍላጎቶችን ያስተባብሩ እና በመድረኩ የሚደገፉ የማስያዣ ሂደቶችን ይጨርሱ።",
     aboutWhyEyebrow: "ለተግባራዊ ዕቅድ የተዘጋጀ",
-    aboutWhyTitle: "ለምን EventFlowን ይመርጣሉ?",
+    aboutWhyTitle: "ለምን EventHubን ይመርጣሉ?",
     aboutWhyIntro: "ጠቃሚ መሳሪያዎች ከዝግጅት ጀርባ ያሉትን ሰዎች፣ መረጃዎች እና ማስተባበር በአንድ ቦታ ያገናኛሉ።",
     aboutFeatureDiscoveryTitle: "ምቹ የዝግጅት ፍለጋ",
     aboutFeatureDiscoveryCopy: "ዝግጅቶችን፣ አገልግሎት ሰጪዎችን፣ አገልግሎቶችን እና ምድቦችን በይፋዊ ዝርዝሮችና ፍለጋ ያስሱ።",
@@ -1117,7 +1172,7 @@ const messages = {
     aboutFeatureLanguagesCopy: "በመድረኩ የእንግሊዝኛና የአማርኛ በይነገጽ መካከል ይቀያይሩ።",
     aboutAudienceEyebrow: "አንድ መድረክ፣ ብዙ ሚናዎች",
     aboutAudienceTitle: "ለማን እንሰራለን",
-    aboutAudienceIntro: "EventFlow የዝግጅት አገልግሎቶችን በማግኘት፣ በማቅረብ እና በማስተባበር የሚሳተፉ ሰዎችን ያገናኛል።",
+    aboutAudienceIntro: "EventHub የዝግጅት አገልግሎቶችን በማግኘት፣ በማቅረብ እና በማስተባበር የሚሳተፉ ሰዎችን ያገናኛል።",
     aboutAudienceCustomersTitle: "ደንበኞች",
     aboutAudienceCustomersCopy: "አገልግሎቶችን ያግኙ፣ ዝግጅቶችን ያስሱ፣ አቅራቢዎችን ያወዳድሩ እና የሚደገፉ የማስያዣ ጥያቄዎችን ያስተዳድሩ።",
     aboutAudienceCustomersAction: "አገልግሎቶችን ያስሱ",
@@ -1186,7 +1241,10 @@ const messages = {
     message: "መልዕክት",
     sending: "በመላክ ላይ…",
     sendInquiry: "መልዕክት ይላኩ",
-    followUs: "ይከተሉን",
+    followUs: "ይከታተሉን",
+    footerCopyright: "© 2027 EventHub. መብቱ በሕግ የተጠበቀ ነው።",
+    footerDeveloper: "በBekele Abebe የተሰራ",
+    footerDesignCredit: "በፍቅር የተነደፈና የተገነባ።",
     office: "ቢሮ",
     supportHours: "የድጋፍ ሰዓት",
     platformCurrency: "የመድረክ ገንዘብ (ISO 4217)",
@@ -1213,7 +1271,7 @@ const messages = {
     signInSecurely: "በደህና ይግቡ",
     signingIn: "በመግባት ላይ…",
     createAccountHeading: "መለያ ይፍጠሩ",
-    registerAsRole: "እንደ ደንበኛ፣ አዘጋጅ ወይም አገልግሎት ሰጪ ይመዝገቡ።",
+    registerAsRole: "የደንበኛ መለያ ይፍጠሩ። የአዘጋጅ እና የአገልግሎት ሰጪ መለያዎች በአስተዳዳሪ ይፈጠራሉ።",
     accountType: "የመለያ አይነት",
     password: "የይለፍ ቃል",
     emailAddress: "የኢሜይል አድራሻ",
@@ -1246,7 +1304,7 @@ const messages = {
     updatingPassword: "የይለፍ ቃል በማዘመን ላይ…",
     confirmPassword: "የይለፍ ቃሉን ያረጋግጡ",
     passwordMismatch: "የይለፍ ቃሎቹ አይዛመዱም።",
-    passwordPlaceholder: "የይለፍ ቃል ያስገቡ (12–16 ቁምፊዎች)",
+    passwordPlaceholder: "የይለፍ ቃል ያስገቡ",
     passwordInvalid: "የይለፍ ቃሉ 12–16 ቁምፊዎች፣ ትልቅና ትንሽ ፊደል እና ቁጥር ሊኖረው ይገባል።",
     passwordsMatch: "የይለፍ ቃሎቹ ይዛመዳሉ።",
     showPassword: "የይለፍ ቃሉን አሳይ",
@@ -1514,9 +1572,9 @@ const messages = {
     submitFeedback: "ብቁ ለሆኑ የተጠናቀቁ አገልግሎቶች ግምገማ ይስጡ።",
     importantUpdates: "አስፈላጊ ዝማኔዎች",
     stayCurrent: "ስለ ቦታ ማስያዣዎች፣ ዋጋ ጥያቄዎች እና ክፍያዎች ይወቁ።",
-    vendorPortal: "የEVENTFLOW አገልግሎት ሰጪ መድረክ",
-    customerPortal: "የEVENTFLOW ደንበኛ መድረክ",
-    organizerPortal: "የEVENTFLOW አዘጋጅ መድረክ",
+    vendorPortal: "የEVENTHUB አገልግሎት ሰጪ መድረክ",
+    customerPortal: "የEVENTHUB ደንበኛ መድረክ",
+    organizerPortal: "የEVENTHUB አዘጋጅ መድረክ",
     manageYourBusiness: "ንግድዎን፣ አገልግሎቶችን፣ ቦታ ማስያዣዎችን፣ ዋጋ ጥያቄዎችን እና ገቢን ያስተዳድሩ።",
     secureOrganizerAccess: "ዝግጅቶችን ለማቀድ፣ አገልግሎት ሰጪዎችን ለማወዳደር እና ቦታ ማስያዣዎችን ለመከታተል በደህና ይግቡ።",
     discoverManageEvents: "አገልግሎቶችን ያግኙ፣ ዝግጅቶችዎን ያስተዳድሩ እና ጥያቄዎችን ይከታተሉ።",
@@ -1598,10 +1656,27 @@ const messages = {
     submitRequest: "ጥያቄውን ላክ",
     requestSuccess: "የአገልግሎት ጥያቄዎ ተመዝግቧል። ቡድኑ በኢሜይል ሊያገኝዎ ይችላል።",
     requestFailure: "ጥያቄዎን ማስቀመጥ አልተቻለም። እንደገና ይሞክሩ።",
+    ...adminAuditLogMessages.am,
+    ...vendorWorkspaceMessages.am,
+    ...customerWorkspaceMessages.am,
+    ...organizerWorkspaceMessages.am,
+    ...eventsExperienceMessages.am,
+    ...adminProfileMessages.am,
+    ...adminNotificationMessages.am,
+    ...adminRoleManagementMessages.am,
+    ...adminUserManagementMessages.am,
+    ...adminBookingManagementMessages.am,
+    ...adminPaymentManagementMessages.am,
+    ...adminReviewsComplaintsMessages.am,
+    ...adminEventManagementMessages.am,
+    ...adminVendorVerificationMessages.am,
+    ...adminSystemSettingsMessages.am,
+    ...publicMarketplaceMessages.am,
+    ...appDashboardMessages.am,
+    ...runtimeMessages.am,
   },
 };
 
-const listeners = new Set();
 function readSavedLanguage() {
   try {
     return typeof window !== 'undefined' && window.localStorage.getItem('eventhub-language') === 'am' ? 'am' : 'en';
@@ -1610,57 +1685,98 @@ function readSavedLanguage() {
   }
 }
 
-let language = readSavedLanguage();
-let hasExplicitLanguage = false;
-try {
-  hasExplicitLanguage = typeof window !== 'undefined' && ['en', 'am'].includes(window.localStorage.getItem('eventhub-language'));
-} catch {
-  hasExplicitLanguage = false;
-}
+const languageStateKey = Symbol.for('eventflow.language-state');
+const hasSavedLanguage = (() => {
+  try {
+    return typeof window !== 'undefined' && ['en', 'am'].includes(window.localStorage.getItem('eventhub-language'));
+  } catch {
+    return false;
+  }
+})();
+const languageState = globalThis[languageStateKey] || (globalThis[languageStateKey] = {
+  language: readSavedLanguage(),
+  hasExplicitLanguage: hasSavedLanguage,
+  listeners: new Set(),
+});
+
+if (hasSavedLanguage) languageState.hasExplicitLanguage = true;
 
 export function getLanguage() {
-  return language;
+  return languageState.language;
 }
 
 export function setLanguage(nextLanguage) {
   if (nextLanguage !== 'en' && nextLanguage !== 'am') return;
-  language = nextLanguage;
-  hasExplicitLanguage = true;
+  languageState.language = nextLanguage;
+  languageState.hasExplicitLanguage = true;
   if (typeof window !== 'undefined') {
     try {
-      window.localStorage.setItem('eventhub-language', language);
+      window.localStorage.setItem('eventhub-language', languageState.language);
     } catch {
       // Keep the in-session language switch functional when storage is blocked.
     }
   }
-  listeners.forEach((listener) => listener());
+  languageState.listeners.forEach((listener) => listener());
 }
 
 export function setPlatformDefaultLanguage(nextLanguage) {
   if (nextLanguage !== 'en' && nextLanguage !== 'am') return;
-  if (hasExplicitLanguage || language === nextLanguage) return;
-  language = nextLanguage;
-  listeners.forEach((listener) => listener());
+  if (languageState.hasExplicitLanguage || languageState.language === nextLanguage) return;
+  languageState.language = nextLanguage;
+  languageState.listeners.forEach((listener) => listener());
 }
 
 export function subscribeToLanguage(listener) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  languageState.listeners.add(listener);
+  return () => languageState.listeners.delete(listener);
 }
 
 export function useLanguage() {
   return useSyncExternalStore(subscribeToLanguage, getLanguage, () => 'en');
 }
 
-export function translate(key, selectedLanguage = language) {
+export function translate(key, selectedLanguage = getLanguage()) {
   return messages[selectedLanguage]?.[key] || messages.en[key] || key;
 }
 
 const englishMessageKeys = new Map(Object.entries(messages.en).map(([key, value]) => [value, key]));
+const messageTemplates = Object.entries(messages.en).flatMap(([key, value]) => {
+  if (!value.includes('{')) return [];
+  const placeholders = [];
+  const pattern = value.split(/(\{[A-Za-z][A-Za-z0-9_]*\})/g).map((part) => {
+    const placeholder = part.match(/^\{([A-Za-z][A-Za-z0-9_]*)\}$/);
+    if (placeholder) {
+      placeholders.push(placeholder[1]);
+      return '(.+?)';
+    }
+    return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }).join('');
+  return [{ key, placeholders, pattern: new RegExp(`^${pattern}$`) }];
+});
 
-export function translateText(value, selectedLanguage = language) {
+export function translateText(value, selectedLanguage = getLanguage()) {
   if (typeof value !== 'string') return value;
-  return translate(englishMessageKeys.get(value) || value, selectedLanguage);
+  const key = englishMessageKeys.get(value);
+  if (key) return translate(key, selectedLanguage);
+
+  for (const template of messageTemplates) {
+    const match = template.pattern.exec(value);
+    if (!match) continue;
+    return template.placeholders.reduce(
+      (translated, name, index) => {
+        const captured = match[index + 1];
+        const value = ['role', 'status'].includes(name)
+          ? translateText(captured, selectedLanguage)
+          : name === 'changes'
+            ? captured.split(',').map((item) => translateText(item.trim(), selectedLanguage)).join(', ')
+            : captured;
+        return translated.replaceAll(`{${name}}`, value);
+      },
+      translate(template.key, selectedLanguage),
+    );
+  }
+
+  return value;
 }
 
 export function getMissingTranslationKeys(selectedLanguage) {

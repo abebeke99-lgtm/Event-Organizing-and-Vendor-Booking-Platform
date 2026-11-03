@@ -10,6 +10,7 @@ const user = {
   full_name: 'Customer Test',
   email: 'customer-test@example.test',
   phone: null,
+  preferred_language: 'en',
   status: 'active',
   role: 'customer',
 };
@@ -37,6 +38,7 @@ function createDatabase() {
     if (sql.includes('FROM user_sessions s')) {
       return [values[0] === hashToken(sessionToken) ? [{ ...user, permission_keys: permissionKeys.join(',') }] : [], []];
     }
+    if (sql.startsWith('UPDATE users SET preferred_language = ?')) return [{ affectedRows: 1 }, []];
     if (sql === 'SELECT b.status FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?') {
       return [[{ status: 'confirmed' }, { status: 'requested' }, { status: 'completed' }], []];
     }
@@ -241,4 +243,28 @@ test('revoking a role permission blocks the protected customer operation on the 
     error: 'Access denied. The required permission is not assigned to this account.',
   });
   database.setPermissionKeys(['favorites.manage_own', 'bookings.view_own']);
+});
+
+test('authenticated platform users can persist supported language preferences', async () => {
+  const saved = await request('/api/platform/preferences/language', {
+    method: 'PATCH',
+    body: { language: 'am' },
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual((await saved.json()).data, { language: 'am' });
+  assert.ok(database.statements.some(({ sql, values }) => sql === 'UPDATE users SET preferred_language = ? WHERE id = ?'
+    && values[0] === 'am' && values[1] === user.id));
+
+  const invalid = await request('/api/platform/preferences/language', {
+    method: 'PATCH',
+    body: { language: 'fr' },
+  });
+  assert.equal(invalid.status, 400);
+
+  const anonymous = await request('/api/platform/preferences/language', {
+    method: 'PATCH',
+    authenticated: false,
+    body: { language: 'en' },
+  });
+  assert.equal(anonymous.status, 401);
 });

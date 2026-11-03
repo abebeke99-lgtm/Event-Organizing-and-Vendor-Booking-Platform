@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Eye, KeyRound, Pencil, Plus, Search, Shield, UserRound, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Eye, EyeOff, KeyRound, Pencil, Plus, Search, Shield, UserRound, X } from 'lucide-react';
 import apiClient from './api/axios.js';
+import { translate, translateText } from './language.js';
+import { generateSecurePassword, validateCreateUserForm } from './adminUserManagementUtils.js';
 import './adminUserManagement.css';
 
-const emptyForm = { full_name: '', email: '', phone: '', role_id: '', password: '' };
+const emptyForm = { full_name: '', email: '', phone: '', role_id: '', password: '', confirm_password: '', status: 'active' };
 const statusOptions = ['active', 'suspended', 'pending'];
 const initialPagination = { page: 1, pageSize: 20, total: 0 };
 
@@ -17,32 +19,94 @@ function displayDateTime(value) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
-function UserModal({ modal, roles, onClose, onSave, onChange, form, busy }) {
+function statusLabel(status) {
+  return translate(`adminUserStatus${status.charAt(0).toUpperCase()}${status.slice(1)}`);
+}
+
+function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors }) {
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
   if (!modal) return null;
   const isCreate = modal.type === 'create';
+  const assignableRoles = isCreate
+    ? roles.filter((role) => ['organizer', 'vendor'].includes(String(role.name).toLowerCase()))
+    : roles;
+  const t = (key) => translate(key);
+  function showFieldError(field) {
+    return errors[field] ? <small className="um-field-error" id={`um-error-${field}`} role="alert">{errors[field]}</small> : null;
+  }
+  function generateTemporaryPassword() {
+    const password = generateSecurePassword();
+    onChange('password', password);
+    onChange('confirm_password', password);
+    setPasswordVisible(true);
+    setConfirmPasswordVisible(true);
+  }
   return (
     <div className="um-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !busy) onClose();
     }}>
-      <section className="um-modal" role="dialog" aria-modal="true" aria-labelledby="um-modal-title">
+      <section className={`um-modal${isCreate ? ' um-create-modal' : ''}`} role="dialog" aria-modal="true" aria-labelledby="um-modal-title">
         <div className="um-modal-heading">
           <div>
-            <p className="eyebrow">{isCreate ? 'NEW ACCOUNT' : 'USER DETAILS'}</p>
-            <h3 id="um-modal-title">{isCreate ? 'Create user account' : 'Edit user information'}</h3>
+            <p className="eyebrow">{t(isCreate ? 'adminUserCreateEyebrow' : 'adminUserEditEyebrow')}</p>
+            <h3 id="um-modal-title">{t(isCreate ? 'adminUserCreateTitle' : 'adminUserEditTitle')}</h3>
           </div>
-          <button type="button" className="um-icon-button" onClick={onClose} disabled={busy} aria-label="Close dialog"><X size={18}/></button>
+          <button type="button" className="um-icon-button" onClick={onClose} disabled={busy} aria-label={t('adminUserCloseDialog')}><X size={18}/></button>
         </div>
-        <form className="um-form" onSubmit={onSave}>
-          <label className="field"><span>Full name</span><input required maxLength={160} autoComplete="name" value={form.full_name} onChange={(event) => onChange('full_name', event.target.value)}/></label>
-          <label className="field"><span>Email address</span><input required type="email" maxLength={254} autoComplete="email" value={form.email} onChange={(event) => onChange('email', event.target.value)}/></label>
-          <label className="field"><span>Phone number</span><input maxLength={40} autoComplete="tel" value={form.phone} onChange={(event) => onChange('phone', event.target.value)}/></label>
+        <form className={`um-form${isCreate ? ' um-create-form' : ''}`} onSubmit={onSave} noValidate={isCreate}>
+          <label className="field um-field">
+            <span>{t('adminUserFullName')}</span>
+            <input required maxLength={160} autoComplete="name" placeholder={t('adminUserFullNamePlaceholder')} value={form.full_name} onChange={(event) => onChange('full_name', event.target.value)} aria-invalid={Boolean(errors.full_name)} aria-describedby={errors.full_name ? 'um-error-full_name' : undefined}/>
+            {showFieldError('full_name')}
+          </label>
+          <label className="field um-field">
+            <span>{t('adminUserEmailAddress')}</span>
+            <input required type="email" maxLength={254} autoComplete="email" placeholder={t('adminUserEmailPlaceholder')} value={form.email} onChange={(event) => onChange('email', event.target.value)} aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? 'um-error-email' : undefined}/>
+            {showFieldError('email')}
+          </label>
+          <label className="field um-field">
+            <span>{t('adminUserPhoneNumber')}</span>
+            <input type="tel" maxLength={40} autoComplete="tel" placeholder={t('adminUserPhonePlaceholder')} value={form.phone} onChange={(event) => onChange('phone', event.target.value)} aria-invalid={Boolean(errors.phone)} aria-describedby={errors.phone ? 'um-error-phone' : undefined}/>
+            {showFieldError('phone')}
+          </label>
           {isCreate && <>
-            <label className="field"><span>Initial password</span><input required type="password" minLength={16} maxLength={128} autoComplete="new-password" value={form.password} onChange={(event) => onChange('password', event.target.value)}/><small>Use at least 16 characters. The password is stored as a secure hash.</small></label>
-            <label className="field"><span>Role</span><select required value={form.role_id} onChange={(event) => onChange('role_id', event.target.value)}><option value="">Choose a role</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>
+            <div className="field um-field">
+              <label htmlFor="um-initial-password">{t('adminUserInitialPassword')}</label>
+              <span className="um-password-input">
+                <input id="um-initial-password" required type={passwordVisible ? 'text' : 'password'} minLength={16} maxLength={128} autoComplete="new-password" placeholder={t('adminUserPasswordPlaceholder')} value={form.password} onChange={(event) => onChange('password', event.target.value)} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? 'um-error-password' : 'um-password-requirements'}/>
+                <button type="button" className="um-password-toggle" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={passwordVisible} title={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}><span>{t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}</span>{passwordVisible ? <EyeOff size={16}/> : <Eye size={16}/>}</button>
+              </span>
+              <span className="um-password-tools">
+                <small id="um-password-requirements">{t('adminUserPasswordNotice')}</small>
+                <button type="button" className="um-generate-password" onClick={generateTemporaryPassword} disabled={busy}><KeyRound size={14}/>{t('adminUserGeneratePassword')}</button>
+              </span>
+              {showFieldError('password')}
+            </div>
+            <div className="field um-field">
+              <label htmlFor="um-confirm-password">{t('adminUserConfirmPassword')}</label>
+              <span className="um-password-input">
+                <input id="um-confirm-password" required type={confirmPasswordVisible ? 'text' : 'password'} minLength={16} maxLength={128} autoComplete="new-password" placeholder={t('adminUserConfirmPasswordPlaceholder')} value={form.confirm_password} onChange={(event) => onChange('confirm_password', event.target.value)} aria-invalid={Boolean(errors.confirm_password)} aria-describedby={errors.confirm_password ? 'um-error-confirm_password' : undefined}/>
+                <button type="button" className="um-password-toggle" onClick={() => setConfirmPasswordVisible((visible) => !visible)} aria-label={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={confirmPasswordVisible} title={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}><span>{t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}</span>{confirmPasswordVisible ? <EyeOff size={16}/> : <Eye size={16}/>}</button>
+              </span>
+              {showFieldError('confirm_password')}
+            </div>
+            <label className="field um-field">
+              <span>{t('adminUserAccountType')}</span>
+              <select required value={form.role_id} onChange={(event) => onChange('role_id', event.target.value)} aria-invalid={Boolean(errors.role_id)} aria-describedby={errors.role_id ? 'um-error-role_id' : undefined}>
+                <option value="">{t('adminUserChooseAccountType')}</option>
+                {assignableRoles.map((role) => <option key={role.id} value={role.id}>{t(`adminUserRole${String(role.name).toLowerCase()}`)}</option>)}
+              </select>
+              {showFieldError('role_id')}
+            </label>
+            <label className="field um-field">
+              <span>{t('adminUserAccountStatus')}</span>
+              <select value={form.status} onChange={(event) => onChange('status', event.target.value)}><option value="active">{t('adminUserStatusActive')}</option><option value="suspended">{t('adminUserCreateStatusSuspended')}</option></select>
+            </label>
           </>}
           <div className="um-modal-actions">
-            <button type="button" className="button secondary" onClick={onClose} disabled={busy}>Cancel</button>
-            <button type="submit" className="button" disabled={busy}>{busy ? 'Saving…' : isCreate ? 'Create account' : 'Save changes'}</button>
+            <button type="button" className="button secondary" onClick={onClose} disabled={busy}>{t('adminUserCancel')}</button>
+            <button type="submit" className="button" disabled={busy} aria-busy={busy}>{busy ? <><span className="um-spinner" aria-hidden="true"/>{t('adminUserSaving')}</> : isCreate ? t('adminUserCreateAccount') : t('adminUserSaveChanges')}</button>
           </div>
         </form>
       </section>
@@ -65,7 +129,7 @@ function ActionModal({ modal, roles, form, busy, onClose, onChange, onSubmit }) 
         </div>
         <form className="um-form" onSubmit={onSubmit}>
           {isStatus ? <>
-            <label className="field"><span>Account status</span><select value={form.status} onChange={(event) => onChange('status', event.target.value)}>{statusOptions.map((status) => <option value={status} key={status}>{status}</option>)}</select></label>
+            <label className="field"><span>{translate('adminUserAccountStatus')}</span><select value={form.status} onChange={(event) => onChange('status', event.target.value)}>{statusOptions.map((status) => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label>
             <label className="field"><span>Reason for this change</span><textarea required minLength={3} maxLength={500} rows={3} value={form.reason} onChange={(event) => onChange('reason', event.target.value)}/></label>
           </> : <label className="field"><span>New role</span><select required value={form.role_id} onChange={(event) => onChange('role_id', event.target.value)}><option value="">Choose a role</option>{roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}</select></label>}
           <div className="um-modal-actions">
@@ -96,7 +160,7 @@ function UserDetails({ user, details, loading, error, onClose }) {
             <div><span>Email</span><strong>{user.email}</strong></div>
             <div><span>Phone</span><strong>{user.phone || '—'}</strong></div>
             <div><span>Role</span><strong>{user.roles || 'Unassigned'}</strong></div>
-            <div><span>Account status</span><strong><span className={`pill ${user.status}`}>{user.status}</span></strong></div>
+            <div><span>{translate('adminUserAccountStatus')}</span><strong><span className={`pill ${user.status}`}>{statusLabel(user.status)}</span></strong></div>
             <div><span>Registered</span><strong>{displayDateTime(user.created_at)}</strong></div>
           </div>
           <section className="um-detail-section">
@@ -131,6 +195,7 @@ export default function AdminUserManagement() {
   const [filters, setFilters] = useState({ q: /^\d+$/.test(focusId || '') ? focusId : '', status: '', role: '', dateFrom: '', dateTo: '', sortBy: 'created_at', sortDirection: 'desc' });
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [formErrors, setFormErrors] = useState({});
   const [actionModal, setActionModal] = useState(null);
   const [actionForm, setActionForm] = useState({});
   const [selectedUser, setSelectedUser] = useState(null);
@@ -181,6 +246,12 @@ export default function AdminUserManagement() {
 
   function updateForm(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
+    setFormErrors((current) => {
+      if (!current[field]) return current;
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
   }
 
   function updateActionForm(field, value) {
@@ -202,26 +273,39 @@ export default function AdminUserManagement() {
 
   function startCreate() {
     setForm(emptyForm);
+    setFormErrors({});
     setModal({ type: 'create' });
   }
 
   function startEdit(user) {
     setForm({ ...emptyForm, full_name: user.full_name, email: user.email, phone: user.phone || '' });
+    setFormErrors({});
     setModal({ type: 'edit', user });
   }
 
   async function saveUser(event) {
     event.preventDefault();
-    setBusy(true);
+    if (busy) return;
     setError('');
     setNotice('');
+    if (modal.type === 'create') {
+      const validationErrors = validateCreateUserForm(form, translate);
+      setFormErrors(validationErrors);
+      if (Object.keys(validationErrors).length) return;
+    }
+    setBusy(true);
     try {
-      if (modal.type === 'edit' && !window.confirm(`Save profile changes for ${modal.user.full_name}?`)) return;
+      if (modal.type === 'edit' && !window.confirm(translateText(`Save profile changes for ${modal.user.full_name}?`))) return;
       const payload = { ...form, phone: form.phone.trim() || null };
       if (modal.type === 'create') {
+        if (payload.password !== payload.confirm_password) {
+          setFormErrors({ confirm_password: translate('adminUserPasswordMismatch') });
+          return;
+        }
+        delete payload.confirm_password;
         payload.role_id = Number(payload.role_id);
         await apiClient.post('/admin/users', payload);
-        setNotice('User account created.');
+        setNotice(translate('adminUserCreated'));
       } else {
         delete payload.password;
         delete payload.role_id;
@@ -231,7 +315,13 @@ export default function AdminUserManagement() {
       setModal(null);
       await loadUsers(pagination.page, filters, pagination.pageSize);
     } catch (issue) {
-      setError(issue.message || 'The user could not be saved.');
+      if (modal?.type === 'create' && issue.status === 409 && /email|ኢሜይል/i.test(issue.message || '')) {
+        setFormErrors((current) => ({ ...current, email: issue.message }));
+      } else if (modal?.type === 'create' && issue.status === 409 && /phone|ስልክ/i.test(issue.message || '')) {
+        setFormErrors((current) => ({ ...current, phone: issue.message }));
+      } else {
+        setError(issue.message || 'The user could not be saved.');
+      }
     } finally {
       setBusy(false);
     }
@@ -251,7 +341,9 @@ export default function AdminUserManagement() {
 
   async function saveSensitiveChange(event) {
     event.preventDefault();
-    if (!window.confirm(`Confirm ${actionModal.type === 'status' ? `changing this account to ${actionForm.status}` : 'changing this user’s role'}?`)) return;
+    if (!window.confirm(translateText(actionModal.type === 'status'
+      ? `Confirm changing this account to ${actionForm.status}?`
+      : 'Confirm changing this user’s role?'))) return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -273,7 +365,7 @@ export default function AdminUserManagement() {
   }
 
   async function initiatePasswordReset(user) {
-    if (!window.confirm(`Send a password reset verification code to ${user.email}? The current password will not be disclosed.`)) return;
+    if (!window.confirm(translateText(`Send a password reset verification code to ${user.email}? The current password will not be disclosed.`))) return;
     setBusy(true);
     setError('');
     setNotice('');
@@ -321,7 +413,7 @@ export default function AdminUserManagement() {
       <form className="um-filters panel" onSubmit={applyFilters}>
         <label className="um-search"><Search size={16}/><input aria-label="Search users" placeholder="Search name, email, phone, or ID" value={searchInput} onChange={(event) => setSearchInput(event.target.value)}/><button type="submit">Search</button></label>
         <label className="um-filter"><span>Role</span><select value={filters.role} onChange={(event) => changeFilter('role', event.target.value)}><option value="">All roles</option>{filterRoles.map((role) => <option value={role.name} key={role.id}>{role.name}</option>)}</select></label>
-        <label className="um-filter"><span>Status</span><select value={filters.status} onChange={(event) => changeFilter('status', event.target.value)}><option value="">All statuses</option>{statusOptions.map((status) => <option value={status} key={status}>{status}</option>)}</select></label>
+        <label className="um-filter"><span>{translate('adminUserStatusFilter')}</span><select value={filters.status} onChange={(event) => changeFilter('status', event.target.value)}><option value="">All statuses</option>{statusOptions.map((status) => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label>
         <label className="um-filter"><span>Registered from</span><input type="date" value={filters.dateFrom} max={filters.dateTo || undefined} onChange={(event) => changeFilter('dateFrom', event.target.value)}/></label>
         <label className="um-filter"><span>Registered to</span><input type="date" value={filters.dateTo} min={filters.dateFrom || undefined} onChange={(event) => changeFilter('dateTo', event.target.value)}/></label>
         <label className="um-filter"><span>Sort by</span><select value={`${filters.sortBy}:${filters.sortDirection}`} onChange={(event) => {
@@ -344,7 +436,7 @@ export default function AdminUserManagement() {
                 <td><strong className="um-user-name">{user.full_name}</strong><span className="um-user-email">{user.email}</span>{user.phone && <span className="um-user-phone">{user.phone}</span>}</td>
                 <td>#{user.id}</td>
                 <td>{user.roles || 'Unassigned'}</td>
-                <td><span className={`pill ${user.status}`}>{user.status}</span></td>
+                <td><span className={`pill ${user.status}`}>{statusLabel(user.status)}</span></td>
                 <td>{displayDate(user.created_at)}</td>
                 <td>{Number(user.bookings_count || 0)}</td>
                 <td><div className="um-row-actions">
@@ -361,7 +453,7 @@ export default function AdminUserManagement() {
         </>}
       </section>
       <p className="um-retention-note"><CalendarDays size={14}/> Accounts are deactivated rather than deleted so booking, audit, and financial records remain intact.</p>
-      <UserModal modal={modal} roles={roles} form={form} busy={busy} onClose={() => setModal(null)} onSave={saveUser} onChange={updateForm}/>
+      <UserModal modal={modal} roles={modal?.type === 'create' ? roles.filter((role) => ['organizer', 'vendor'].includes(role.name.toLowerCase())) : roles} form={form} busy={busy} errors={formErrors} onClose={() => { setFormErrors({}); setModal(null); }} onSave={saveUser} onChange={updateForm}/>
       <ActionModal modal={actionModal} roles={roles} form={actionForm} busy={busy} onClose={() => setActionModal(null)} onChange={updateActionForm} onSubmit={saveSensitiveChange}/>
       <UserDetails user={selectedUser} details={userDetails} loading={detailsLoading} error={detailsError} onClose={() => setSelectedUser(null)}/>
     </div>

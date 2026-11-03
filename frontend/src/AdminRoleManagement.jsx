@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, KeyRound, Search, Shield, ShieldAlert, Users } from 'lucide-react';
 import apiClient from './api/axios.js';
+import { translateText } from './language.js';
 import './adminRoleManagement.css';
 
 const pageSize = 10;
@@ -150,7 +151,7 @@ export default function AdminRoleManagement() {
 
   async function savePermissions() {
     if (!selectedRole || roleIsAdmin(selectedRole) || !isDirty) return;
-    if (!window.confirm(`Save permission changes for ${selectedRole.name}? These changes take effect immediately for users in this role.`)) return;
+    if (!window.confirm(translateText(`Save permission changes for ${selectedRole.name}? These changes take effect immediately for users in this role.`))) return;
     setSaving(true);
     setError('');
     setNotice('');
@@ -174,7 +175,7 @@ export default function AdminRoleManagement() {
     const message = enabling
       ? `Activate the ${role.name} role?`
       : `Disable the ${role.name} role? Users may lose access to this role’s permissions.`;
-    if (!window.confirm(message)) return;
+    if (!window.confirm(translateText(message))) return;
     setSaving(true);
     setError('');
     setNotice('');

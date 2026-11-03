@@ -12,7 +12,7 @@ const smtpEnvironment = {
   SMTP_PORT: '587',
   SMTP_USER: 'smtp-user',
   SMTP_PASSWORD: 'smtp-password',
-  SMTP_FROM: 'EventFlow <no-reply@example.test>',
+  SMTP_FROM: 'EventHub <no-reply@example.test>',
 };
 
 test('password reset OTP email includes the code, five-minute expiry, and escaped name', () => {
@@ -23,7 +23,7 @@ test('password reset OTP email includes the code, five-minute expiry, and escape
   }, smtpEnvironment);
 
   assert.equal(message.to, 'ada@example.test');
-  assert.equal(message.subject, 'EventFlow Password Reset Verification Code');
+  assert.equal(message.subject, 'EventHub Password Reset Verification Code');
   assert.match(message.text, /123456/);
   assert.match(message.text, /expires in 5 minutes/);
   assert.match(message.html, /&lt;Ada &amp; Co&gt;/);

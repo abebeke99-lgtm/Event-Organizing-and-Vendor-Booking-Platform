@@ -10,11 +10,16 @@ const statements = [];
 const auditRecords = [];
 const adminSessions = new Set([hashToken(initialToken)]);
 let passwordHash;
+let emailChangeChallenge = null;
+let emailChangeEmail;
+const registeredEmails = new Set(['taken@example.test']);
+const testEmailOtp = '123456';
 let profile = {
   id: 17,
   full_name: 'Profile Administrator',
   email: 'admin@example.test',
   phone: '555-0101',
+  preferred_language: 'en',
   status: 'active',
   created_at: '2024-01-02 10:00:00',
   roles: 'Admin',
@@ -24,15 +29,76 @@ let profile = {
 
 async function execute(sql, values = []) {
   statements.push({ sql, values });
+  if (sql.startsWith('SELECT u.id, u.full_name, u.email, u.preferred_language, u.password_hash FROM users u')) {
+    return [[profile.email === values[0] ? {
+      id: profile.id,
+      full_name: profile.full_name,
+      email: profile.email,
+      preferred_language: profile.preferred_language,
+      password_hash: passwordHash,
+    } : null].filter(Boolean)];
+  }
   if (sql.includes('FROM admin_sessions s')) {
     return [adminSessions.has(values[0]) ? [{
       id: profile.id,
       full_name: profile.full_name,
       email: profile.email,
       phone: profile.phone,
+      preferred_language: profile.preferred_language,
       status: profile.status,
       roles: profile.roles,
     }] : []];
+  }
+  if (sql.startsWith('SELECT id, full_name, email, password_hash FROM users WHERE id = ? FOR UPDATE')) {
+    return [[{ id: profile.id, full_name: profile.full_name, email: profile.email, password_hash: passwordHash }]];
+  }
+  if (sql.startsWith('SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ?')) {
+    return [[registeredEmails.has(String(values[0]).toLowerCase()) ? { id: 21 } : null].filter(Boolean)];
+  }
+  if (sql.startsWith('DELETE FROM admin_email_change_otp_challenges WHERE expires_at <= NOW()')) {
+    if (emailChangeChallenge?.expired || emailChangeChallenge?.consumed) emailChangeChallenge = null;
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('SELECT (last_sent_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)) AS cooldown_active')) {
+    return [emailChangeChallenge ? [{ cooldown_active: false }] : []];
+  }
+  if (sql.startsWith('DELETE FROM admin_email_change_otp_challenges WHERE user_id = ?')) {
+    emailChangeChallenge = null;
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('INSERT INTO admin_email_change_otp_challenges')) {
+    emailChangeChallenge = {
+      id: 44,
+      user_id: values[0],
+      current_email: values[1],
+      pending_email: values[2],
+      otp_hash: values[3],
+      otp_salt: values[4],
+      failed_attempts: 0,
+      expired: false,
+    };
+    return [{ insertId: 44, affectedRows: 1 }];
+  }
+  if (sql.startsWith('DELETE FROM admin_email_change_otp_challenges WHERE id = ?')) {
+    if (emailChangeChallenge?.id === values[0]) emailChangeChallenge = null;
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('SELECT id, current_email, pending_email, otp_hash, otp_salt, expires_at, failed_attempts')) {
+    return [emailChangeChallenge ? [{ ...emailChangeChallenge, expired: Number(emailChangeChallenge.expired) }] : []];
+  }
+  if (sql.startsWith('SELECT email FROM users WHERE id = ? FOR UPDATE')) return [[{ email: profile.email }]];
+  if (sql.startsWith('UPDATE admin_email_change_otp_challenges SET failed_attempts')) {
+    if (emailChangeChallenge) emailChangeChallenge.failed_attempts = values[0];
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('UPDATE users SET email = ? WHERE id = ?')) {
+    profile.email = values[0];
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('DELETE FROM admin_sessions WHERE user_id = ? AND token_hash <> ?')) {
+    adminSessions.clear();
+    adminSessions.add(values[1]);
+    return [{ affectedRows: 1 }];
   }
   if (sql.startsWith('SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at')) {
     return [[{
@@ -116,7 +182,15 @@ const database = {
     };
   },
 };
-const app = createApp({ database });
+const app = createApp({
+  database,
+  emailChangeEmailConfigured: () => true,
+  emailChangeEmailSender: async (message) => { emailChangeEmail = message.email; },
+  emailChangeOtpGenerator: () => testEmailOtp,
+  emailChangeOtpHasher: async () => ({ hash: 'a'.repeat(128), salt: 'b'.repeat(32) }),
+  emailChangeOtpVerifier: async (otp) => otp === testEmailOtp,
+  emailChangeNoticeSender: async () => {},
+});
 const server = app.listen(0, '127.0.0.1');
 let baseUrl;
 
@@ -182,6 +256,32 @@ test('administrator can update only permitted profile fields and changes are aud
     body: JSON.stringify({ role_id: 3 }),
   });
   assert.equal(roleChange.status, 400);
+});
+
+test('administrator language preference accepts supported locales and rejects invalid values', async () => {
+  const saved = await adminRequest('/api/admin/profile/language', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ language: 'am' }),
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual((await saved.json()).data, { language: 'am' });
+  assert.ok(statements.some(({ sql, values }) => sql === 'UPDATE users SET preferred_language = ? WHERE id = ?'
+    && values[0] === 'am' && values[1] === profile.id));
+
+  const invalid = await adminRequest('/api/admin/profile/language', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ language: 'fr' }),
+  });
+  assert.equal(invalid.status, 400);
+
+  const anonymous = await adminRequest('/api/admin/profile/language', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ language: 'en' }),
+  }, 'invalid-session');
+  assert.equal(anonymous.status, 401);
 });
 
 test('administrator profile image validates content and audits successful upload/removal', async () => {
@@ -259,4 +359,83 @@ test('password change requires the current password and rotates administrator se
   const newSession = await adminRequest('/api/admin/profile', {}, rotatedToken);
   assert.equal(newSession.status, 200);
   assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.password_changed'));
+});
+
+test('administrator email changes stay pending until OTP verification and then use the new login identity', async () => {
+  adminSessions.add(hashToken(initialToken));
+  emailChangeChallenge = null;
+  emailChangeEmail = '';
+
+  const unauthenticated = await adminRequest('/api/admin/profile/email-change', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'new@example.test', currentPassword: 'NewAdminPass123' }),
+  }, 'invalid-session');
+  assert.equal(unauthenticated.status, 401);
+
+  const invalidAddress = await adminRequest('/api/admin/profile/email-change', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'invalid', currentPassword: 'NewAdminPass123' }),
+  });
+  assert.equal(invalidAddress.status, 400);
+
+  const wrongPassword = await adminRequest('/api/admin/profile/email-change', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'new@example.test', currentPassword: 'wrong-password' }),
+  });
+  assert.equal(wrongPassword.status, 400);
+
+  const duplicate = await adminRequest('/api/admin/profile/email-change', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'taken@example.test', currentPassword: 'NewAdminPass123' }),
+  });
+  assert.equal(duplicate.status, 409);
+
+  const requested = await adminRequest('/api/admin/profile/email-change', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: ' NEW@example.test ', currentPassword: 'NewAdminPass123' }),
+  });
+  assert.equal(requested.status, 202);
+  assert.equal(profile.email, 'admin@example.test');
+  assert.equal(emailChangeEmail, 'new@example.test');
+  assert.notEqual(emailChangeChallenge.otp_hash, testEmailOtp);
+  assert.equal(emailChangeChallenge.pending_email, 'new@example.test');
+
+  const wrongOtp = await adminRequest('/api/admin/profile/email-change/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp: '000000' }),
+  });
+  assert.equal(wrongOtp.status, 400);
+  assert.equal(profile.email, 'admin@example.test');
+
+  const verified = await adminRequest('/api/admin/profile/email-change/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp: testEmailOtp }),
+  });
+  assert.equal(verified.status, 200);
+  assert.deepEqual((await verified.json()).data, { email: 'new@example.test' });
+  assert.equal(profile.email, 'new@example.test');
+  assert.equal(adminSessions.has(hashToken(initialToken)), true);
+
+  const newLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'new@example.test', password: 'NewAdminPass123' }),
+  });
+  assert.equal(newLogin.status, 200);
+  assert.equal((await newLogin.json()).user.email, 'new@example.test');
+
+  const oldLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'admin@example.test', password: 'NewAdminPass123' }),
+  });
+  assert.equal(oldLogin.status, 401);
+  assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.profile_email_changed'));
 });

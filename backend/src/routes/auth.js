@@ -55,6 +55,7 @@ export function createAuthRouter({
   const sessionCheckLimiter = createAuthRateLimiter({
     windowMs: 15 * 60 * 1000,
     limit: 60,
+    skipSuccessfulRequests: true,
     message: 'Too many session checks. Please try again later.',
   });
   const adminLoginLimiter = createAuthRateLimiter({
@@ -283,7 +284,7 @@ export function createAuthRouter({
     }
     try {
       const [rows] = await database.execute(
-        `SELECT u.id, u.full_name, u.email, u.password_hash FROM users u
+        `SELECT u.id, u.full_name, u.email, u.preferred_language, u.password_hash FROM users u
          JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
          WHERE u.email = ? AND u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE LIMIT 1`,
         [email]
@@ -293,7 +294,7 @@ export function createAuthRouter({
       const session = await createSession(rows[0].id, database);
       res.cookie('admin_session', session.token, { ...cookieOptions(), expires: session.expiresAt });
       await writeAudit(database, { actorId: rows[0].id, action: 'auth.login', entityType: 'session', ip: req.ip });
-      res.json({ user: { id: rows[0].id, full_name: rows[0].full_name, email: rows[0].email } });
+      res.json({ user: { id: rows[0].id, full_name: rows[0].full_name, email: rows[0].email, preferred_language: rows[0].preferred_language } });
     } catch (error) { next(error); }
   });
 

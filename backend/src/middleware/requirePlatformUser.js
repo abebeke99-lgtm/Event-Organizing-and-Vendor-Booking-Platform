@@ -9,7 +9,7 @@ export async function requirePlatformUser(req, res, next) {
   try {
     const database = req.app?.locals?.database || pool;
     const [rows] = await database.execute(
-      `SELECT u.id, u.full_name, u.email, u.phone, u.status, LOWER(r.name) AS role,
+      `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status, LOWER(r.name) AS role,
          GROUP_CONCAT(DISTINCT p.permission_key ORDER BY p.permission_key SEPARATOR ',') AS permission_keys
        FROM user_sessions s
        JOIN users u ON u.id = s.user_id
@@ -19,7 +19,7 @@ export async function requirePlatformUser(req, res, next) {
        LEFT JOIN permissions p ON p.id = rp.permission_id
        WHERE s.token_hash = ? AND s.expires_at > NOW() AND u.status = 'active'
          AND r.is_admin = FALSE AND r.is_active = TRUE
-       GROUP BY u.id, u.full_name, u.email, u.phone, u.status, r.name
+      GROUP BY u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status, r.name
        ORDER BY CASE LOWER(r.name) WHEN 'customer' THEN 1 WHEN 'organizer' THEN 2 WHEN 'vendor' THEN 3 ELSE 4 END
        LIMIT 1`,
       [hashToken(token)]

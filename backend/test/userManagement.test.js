@@ -29,13 +29,18 @@ const account = {
 function createDatabase() {
   const statements = [];
   let duplicateEmail = false;
+  let duplicatePhone = false;
   let failUserList = false;
   let insertedPasswordHash = '';
+  let insertedUserValues = [];
   const deletedSessions = [];
   const user = { ...account };
 
   async function execute(sql, values = []) {
     statements.push({ sql, values });
+    if (sql.includes('FROM system_settings')) {
+      return [[{ setting_key: 'public_registration_enabled', setting_value: 'true' }], []];
+    }
     if (sql.includes('FROM admin_sessions s')) {
       return [values[0] === hashToken(adminToken) ? [{ ...adminRow }] : [], []];
     }
@@ -59,12 +64,22 @@ function createDatabase() {
       return [Number(values[0]) === user.id ? [{ id: user.id }] : [], []];
     }
     if (sql.startsWith('SELECT id, name FROM roles WHERE id = ?')) {
-      return [Number(values[0]) === 3 ? [{ id: 3, name: 'Customer' }] : [], []];
+      const roles = {
+        3: { id: 3, name: 'Customer' },
+        4: { id: 4, name: 'Organizer' },
+        5: { id: 5, name: 'Vendor' },
+      };
+      return [roles[Number(values[0])] ? [roles[Number(values[0])]] : [], []];
+    }
+    if (sql.includes("LOWER(name) = 'customer'")) return [[{ id: 3 }], []];
+    if (sql.includes('FROM users WHERE phone = ?')) {
+      return [duplicatePhone ? [{ id: 9 }] : [], []];
     }
     if (sql.startsWith('SELECT COUNT(*) AS total FROM roles')) return [[{ total: 1 }], []];
     if (sql.includes('GROUP_CONCAT(r.name ORDER BY r.name')) return [[{ id: 3, name: 'Customer', is_admin: 0, is_active: 1 }], []];
     if (sql.startsWith('INSERT INTO users')) {
       if (duplicateEmail) throw Object.assign(new Error('Duplicate email'), { code: 'ER_DUP_ENTRY' });
+      insertedUserValues = values;
       insertedPasswordHash = values[3];
       return [{ insertId: 20, affectedRows: 1 }, []];
     }
@@ -115,8 +130,10 @@ function createDatabase() {
     statements,
     deletedSessions,
     setDuplicateEmail(value) { duplicateEmail = value; },
+    setDuplicatePhone(value) { duplicatePhone = value; },
     setFailUserList(value) { failUserList = value; },
     getInsertedPasswordHash() { return insertedPasswordHash; },
+    getInsertedUserValues() { return insertedUserValues; },
     async execute(...args) { return execute(...args); },
     async query() { return [[], []]; },
     async getConnection() {
@@ -172,6 +189,55 @@ test('user management endpoints require an authenticated administrator', async (
     assert.equal(response.status, 401);
     assert.deepEqual(await response.json(), { error: 'Authentication required.' });
   }
+
+  const platformUser = await fetch(`${baseUrl}/api/admin/users`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Cookie: 'platform_session=customer-session',
+    },
+    body: JSON.stringify({
+      full_name: 'Unauthorized Organizer',
+      email: 'unauthorized@example.test',
+      password: 'StrongInitialPassword123',
+      role_id: 4,
+    }),
+  });
+  assert.equal(platformUser.status, 401);
+});
+
+test('public registration rejects organizer and vendor role requests', async () => {
+  for (const role of ['organizer', 'vendor']) {
+    const response = await fetch(`${baseUrl}/api/platform/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'New Account',
+        email: `${role}@example.test`,
+        password: 'StrongPass123',
+        role,
+      }),
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'Public registration is limited to customer accounts.' });
+  }
+});
+
+test('public registration creates an authenticated customer account only', async () => {
+  const response = await fetch(`${baseUrl}/api/platform/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Public Customer',
+      email: 'public-customer@example.test',
+      password: 'StrongPass123',
+    }),
+  });
+  assert.equal(response.status, 201);
+  const body = await response.json();
+  assert.equal(body.data.user.role, 'customer');
+  assert.equal(response.headers.get('set-cookie')?.includes('platform_session='), true);
+  assert.equal(database.statements.some(({ sql, values }) => sql.startsWith('INSERT INTO user_roles') && values[1] === 3), true);
 });
 
 test('user listing applies database filters, sorting, and pagination without exposing hashes', async () => {
@@ -201,22 +267,49 @@ test('user listing rejects invalid registration dates and invalid pagination', a
   assert.equal(invalidPage.status, 400);
 });
 
-test('administrator can create users with a bcrypt-hashed password and duplicate email is rejected', async () => {
+test('administrator can create organizer and vendor accounts with a bcrypt-hashed password', async () => {
+  const weakPassword = await adminRequest('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      full_name: 'Weak Password Account',
+      email: 'weak-password@example.test',
+      password: 'aaaaaaaaaaaaaaaa',
+      role_id: 4,
+    }),
+  });
+  assert.equal(weakPassword.status, 400);
+
   const response = await adminRequest('/api/admin/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      full_name: 'New Customer',
+      full_name: 'New Organizer',
       email: ' NEW@example.test ',
       phone: '',
       password: 'StrongInitialPassword123',
-      role_id: 3,
+      role_id: 4,
+      status: 'suspended',
     }),
   });
-  assert.equal(response.status, 201);
-  assert.deepEqual(await response.json(), { data: { id: 20 } });
+  const responseBody = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(responseBody));
+  assert.deepEqual(responseBody, { data: { id: 20 } });
   assert.notEqual(database.getInsertedPasswordHash(), 'StrongInitialPassword123');
   assert.equal(await bcrypt.compare('StrongInitialPassword123', database.getInsertedPasswordHash()), true);
+  assert.equal(database.getInsertedUserValues()[4], 'suspended');
+
+  const vendor = await adminRequest('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      full_name: 'New Vendor',
+      email: 'vendor@example.test',
+      password: 'StrongInitialPassword123',
+      role_id: 5,
+    }),
+  });
+  assert.equal(vendor.status, 201);
 
   database.setDuplicateEmail(true);
   const duplicateResponse = await adminRequest('/api/admin/users', {
@@ -226,11 +319,26 @@ test('administrator can create users with a bcrypt-hashed password and duplicate
       full_name: 'Duplicate User',
       email: 'jordan@example.test',
       password: 'StrongInitialPassword123',
-      role_id: 3,
+      role_id: 4,
     }),
   });
   assert.equal(duplicateResponse.status, 409);
   database.setDuplicateEmail(false);
+
+  database.setDuplicatePhone(true);
+  const duplicatePhoneResponse = await adminRequest('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      full_name: 'Duplicate Phone',
+      email: 'different@example.test',
+      phone: '+12025550123',
+      password: 'StrongInitialPassword123',
+      role_id: 4,
+    }),
+  });
+  assert.equal(duplicatePhoneResponse.status, 409);
+  database.setDuplicatePhone(false);
 
   const administratorRole = await adminRequest('/api/admin/users', {
     method: 'POST',
@@ -243,9 +351,46 @@ test('administrator can create users with a bcrypt-hashed password and duplicate
     }),
   });
   assert.equal(administratorRole.status, 400);
+
+  const customerRole = await adminRequest('/api/admin/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      full_name: 'Admin-created Customer',
+      email: 'customer@example.test',
+      password: 'StrongInitialPassword123',
+      role_id: 3,
+    }),
+  });
+  assert.equal(customerRole.status, 400);
+});
+
+test('administrator can create organizer and vendor accounts, and vendor profiles are provisioned', async () => {
+  for (const [roleId, status] of [[4, 'active'], [5, 'suspended']]) {
+    const response = await adminRequest('/api/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: 'Platform Account',
+        email: `role-${roleId}@example.test`,
+        password: 'StrongInitialPassword123',
+        role_id: roleId,
+        status,
+      }),
+    });
+    assert.equal(response.status, 201);
+  }
+  assert.equal(database.statements.some(({ sql }) => sql.startsWith('INSERT INTO vendor_profiles')), true);
 });
 
 test('user updates validate editable fields and reject role escalation through profile updates', async () => {
+  const selfEmailChange = await adminRequest('/api/admin/users/1', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'unverified@example.test' }),
+  });
+  assert.equal(selfEmailChange.status, 409);
+
   const invalid = await adminRequest('/api/admin/users/2', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

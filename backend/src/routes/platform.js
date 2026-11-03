@@ -16,6 +16,7 @@ import {
   VENDOR_VERIFICATION_DOCUMENT_TYPES,
 } from '../lib/vendorVerificationDocuments.js';
 import { loadSystemSettings } from '../lib/systemSettings.js';
+import { isStrongPassword } from '../lib/authFlow.js';
 import { calculateDashboardSummary, createBookingSnapshot } from '../lib/bookingRules.js';
 import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } from '../lib/eventCatalog.js';
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
@@ -81,10 +82,11 @@ async function notifyBookingParties(database, booking, actorId, status, reason =
     }
   }
 }
-const emailSchema = z.string().trim().email().max(190);
+const emailSchema = z.string().trim().email().max(254);
 const sessionCheckLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 60,
+  skipSuccessfulRequests: true,
   message: 'Too many session checks. Please try again later.',
 });
 const registrationLimiter = createAuthRateLimiter({
@@ -216,14 +218,14 @@ async function listAllPublicEvents() {
   return rows.map(mapDatabaseEvent);
 }
 
-router.get('/categories', async (req, res) => {
+router.get('/categories', asyncHandler(async (req, res) => {
   const marketplace = await loadPublicMarketplace(req.app?.locals?.database || pool);
   const search = sanitizeText(req.query.search, '').toLowerCase();
   const categories = search
     ? marketplace.categories.filter((category) => `${category.name} ${category.description}`.toLowerCase().includes(search))
     : marketplace.categories;
   return res.json({ data: categories });
-});
+}));
 
 router.get('/categories/:id/image', async (req, res) => {
   const id = z.coerce.number().int().positive().safeParse(req.params.id);
@@ -400,6 +402,7 @@ router.get('/services', asyncHandler(async (req, res) => {
     search: req.query.search,
     category: req.query.category,
     location: req.query.location,
+    vendorId: req.query.vendorId,
     minPrice: req.query.minPrice,
     maxPrice: req.query.maxPrice,
     minRating: req.query.minRating,
@@ -1890,65 +1893,75 @@ router.patch('/quotations/:id/respond', requirePlatformUser, asyncHandler(async 
 
 router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
   const schema = z.object({
-    name: z.string().trim().min(2).max(120),
+    name: z.string().trim().min(2).max(160),
     email: emailSchema,
-    password: z.string().min(8).max(128),
-    role: z.enum(['customer', 'organizer', 'vendor']).optional(),
-    phone: z.string().trim().max(30).optional().default(''),
-    city: z.string().trim().max(120).optional().default(''),
-  });
+    password: z.string().min(12).max(16).refine(isStrongPassword),
+  }).strict();
+  if (req.body && Object.hasOwn(req.body, 'role')) {
+    return res.status(403).json({ error: 'Public registration is limited to customer accounts.' });
+  }
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration.' });
 
-  const systemSettings = await loadSystemSettings(pool, ['public_registration_enabled', 'default_registration_role']);
+  const database = databaseFor(req);
+  const systemSettings = await loadSystemSettings(database, ['public_registration_enabled']);
   if (!systemSettings.public_registration_enabled) {
     return res.status(403).json({ error: 'Public registration is currently disabled.' });
   }
-  const registrationRole = parsed.data.role || systemSettings.default_registration_role;
   const normalizedEmail = parsed.data.email.toLowerCase();
-  const [existing] = await pool.execute('SELECT id FROM users WHERE email = ? LIMIT 1', [normalizedEmail]);
-  if (existing.length) return res.status(409).json({ error: 'An account with this email already exists.' });
-
-  const roleName = registrationRole === 'vendor' ? 'Vendor' : registrationRole === 'organizer' ? 'Organizer' : 'Customer';
-  const [roleRows] = await pool.execute('SELECT id FROM roles WHERE name = ? AND is_active = TRUE LIMIT 1', [roleName]);
-  if (!roleRows.length) return res.status(500).json({ error: 'Registration role is unavailable.' });
-
   const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-  const created = await inTransaction(async (connection) => {
-    const [result] = await connection.execute(
-      `INSERT INTO users (full_name, email, phone, password_hash, status)
-       VALUES (?, ?, ?, ?, 'active')`,
-      [parsed.data.name, normalizedEmail, parsed.data.phone || null, passwordHash]
-    );
-    await connection.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [result.insertId, roleRows[0].id]);
-    const { token } = await createUserSession(connection, result.insertId);
-    if (registrationRole === 'vendor') {
-      await ensureVendorProfileRecord(result.insertId, parsed.data.name, connection);
+  const preferredLanguage = req.language === 'am' ? 'am' : 'en';
+  let created;
+  try {
+    created = await inDatabaseTransaction(database, async (connection) => {
+      const [[existingEmail]] = await connection.execute(
+        'SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
+        [normalizedEmail],
+      );
+      if (existingEmail) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
+      const [[customerRole]] = await connection.execute(
+        "SELECT id FROM roles WHERE LOWER(name) = 'customer' AND is_active = TRUE AND is_admin = FALSE LIMIT 1",
+      );
+      if (!customerRole) throw Object.assign(new Error('Customer registration is unavailable.'), { status: 503 });
+
+      const [result] = await connection.execute(
+        `INSERT INTO users (full_name, email, phone, password_hash, status, preferred_language)
+         VALUES (?, ?, ?, ?, 'active', ?)`,
+        [parsed.data.name, normalizedEmail, null, passwordHash, preferredLanguage],
+      );
+      await connection.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [result.insertId, customerRole.id]);
+      const { token } = await createUserSession(connection, result.insertId);
+      await writeAudit(connection, {
+        actorId: result.insertId,
+        action: 'auth.register',
+        entityType: 'user',
+        entityId: result.insertId,
+        details: { role: 'Customer' },
+        ip: req.ip,
+      });
+      await notifyAdministrators(connection, {
+        title: 'New user registration',
+        message: `${parsed.data.name} registered as a customer.`,
+        type: 'user_registration',
+        relatedType: 'user',
+        relatedId: result.insertId,
+        idempotencyKey: `user-registration:${result.insertId}`,
+        actorId: result.insertId,
+      });
+      return { id: result.insertId, token };
+    });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'An account with this email or phone number already exists.' });
     }
-    await writeAudit(connection, {
-      actorId: result.insertId,
-      action: 'auth.register',
-      entityType: 'user',
-      entityId: result.insertId,
-      details: { role: roleName, city: parsed.data.city || null },
-      ip: req.ip,
-    });
-    await notifyAdministrators(connection, {
-      title: 'New user registration',
-      message: `${parsed.data.name} registered as a ${roleName.toLowerCase()}.`,
-      type: 'user_registration',
-      relatedType: 'user',
-      relatedId: result.insertId,
-      idempotencyKey: `user-registration:${result.insertId}`,
-      actorId: result.insertId,
-    });
-    return { id: result.insertId, token };
-  });
+    throw error;
+  }
 
   setPlatformCookie(res, created.token);
   return res.status(201).json({
     data: {
-      user: { id: created.id, name: parsed.data.name, email: normalizedEmail, role: registrationRole },
+      user: { id: created.id, name: parsed.data.name, full_name: parsed.data.name, email: normalizedEmail, role: 'customer', preferred_language: preferredLanguage },
     },
   });
 }));
@@ -1962,7 +1975,7 @@ router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
 
   const [rows] = await pool.execute(
-    `SELECT u.id, u.full_name, u.email, u.phone, u.password_hash, u.status,
+    `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.password_hash, u.status,
             LOWER(r.name) AS role
      FROM users u
      JOIN user_roles ur ON ur.user_id = u.id
@@ -2001,6 +2014,7 @@ router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        preferred_language: user.preferred_language,
       },
     },
   });
@@ -2026,6 +2040,7 @@ router.get('/me', sessionCheckLimiter, optionalPlatformUser, asyncHandler(async 
         email: req.platformUser.email,
         phone: req.platformUser.phone,
         role: req.platformUser.role,
+        preferred_language: req.platformUser.preferred_language,
         vendorProfile: profile
           ? {
               id: Number(profile.id),
@@ -2038,6 +2053,17 @@ router.get('/me', sessionCheckLimiter, optionalPlatformUser, asyncHandler(async 
       },
     },
   });
+}));
+
+router.patch('/preferences/language', requirePlatformUser, asyncHandler(async (req, res) => {
+  const parsed = z.object({ language: z.enum(['en', 'am']) }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Choose a supported language.' });
+  const database = req.app?.locals?.database || pool;
+  await database.execute(
+    'UPDATE users SET preferred_language = ? WHERE id = ?',
+    [parsed.data.language, req.platformUser.id],
+  );
+  res.json({ data: { language: parsed.data.language } });
 }));
 
 router.get('/profile/photo', requirePlatformUser, asyncHandler(async (req, res) => getProfilePhoto(pool, req.platformUser.id, res)));

@@ -2,13 +2,10 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { isStrongPassword, normalizeEmail } from './authFlow.js';
 
-const publicRoles = ['customer', 'organizer', 'vendor'];
-
 const registrationSchema = z.object({
   name: z.string().trim().min(2).max(160),
   email: z.string().trim().email().max(254).transform(normalizeEmail),
   password: z.string().min(12).max(16).refine(isStrongPassword),
-  role: z.enum(publicRoles).default('customer'),
 }).strict();
 
 const loginSchema = z.object({
@@ -25,7 +22,7 @@ export function parsePublicLogin(value) {
 }
 
 export function isPublicRole(role) {
-  return publicRoles.includes(String(role || '').toLowerCase());
+  return String(role || '').toLowerCase() === 'customer';
 }
 
 export async function hashPassword(password) {

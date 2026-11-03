@@ -68,7 +68,7 @@ publicRouter.get('/', asyncHandler(async (req, res) => {
       contact: settings,
       faq: [
         {
-          question: 'How do I create an EventFlow account?',
+          question: 'How do I create an EventHub account?',
           answer: 'Choose Register in the site header and create a customer, organizer, or vendor account.',
         },
         {
@@ -96,7 +96,7 @@ publicRouter.get('/', asyncHandler(async (req, res) => {
           answer: 'Options depend on the booking and its current status. Contact the event organizer or vendor before assuming a change or cancellation has been confirmed.',
         },
         {
-          question: 'How do I become an EventFlow vendor?',
+          question: 'How do I become an EventHub vendor?',
           answer: 'Register with a vendor account and complete your business profile. Vendor profiles are subject to platform verification.',
         },
         {

@@ -73,3 +73,40 @@
 .um-page .alert .dismiss{position:absolute;top:50%;right:12px;transform:translateY(-50%);display:grid;place-items:center}
 @media(max-width:900px){.um-filters{align-items:stretch}.um-filter{flex:1 1 140px}}
 @media(max-width:600px){.um-page .page-heading{align-items:flex-start}.um-create-button{flex:0 0 auto;padding:0 10px}.um-filters{padding:12px}.um-search{flex-basis:100%}.um-filter{flex:1 1 calc(50% - 8px);min-width:0}.um-table-heading{padding:14px}.um-pagination{align-items:flex-start;flex-direction:column}.um-backdrop{align-items:start;padding:10px}.um-modal{max-height:calc(100vh - 20px);padding:16px}.um-detail-grid{grid-template-columns:1fr}.um-history-list article{align-items:flex-start}.um-retention-note{align-items:flex-start;line-height:1.5}}
+
+.um-create-modal{width:min(100%,570px);max-height:min(90dvh,850px);border-radius:16px;padding:27px}
+.um-create-modal .um-modal-heading{align-items:center;margin-bottom:22px}
+.um-create-modal .um-modal-heading h3{color:#172541;font-size:22px;letter-spacing:-.3px}
+.um-create-modal .um-modal-heading .eyebrow{color:#74839a;font-size:10px;letter-spacing:.9px}
+.um-create-modal .um-icon-button{width:36px;height:36px;flex-basis:36px;border:1px solid #e6eaf0;border-radius:10px}
+.um-create-form{gap:15px}
+.um-create-form .um-field{gap:7px;color:#34435b;font-size:12px;font-weight:600}
+.um-create-form .um-field input,.um-create-form .um-field select{height:44px;border:1px solid #dfe5ee;border-radius:9px;padding:0 12px;color:#24324a;font-size:13px;font-weight:400;transition:border-color .16s ease,box-shadow .16s ease}
+.um-create-form .um-field input::placeholder{color:#9aa5b5}
+.um-create-form .um-field input:focus,.um-create-form .um-field select:focus{border-color:#5a82c7;outline:0;box-shadow:0 0 0 3px #416db51c}
+.um-create-form .um-field [aria-invalid=true]{border-color:#d94a55}
+.um-password-input{position:relative;display:block;min-width:0}
+.um-create-form .um-password-input input{padding-right:112px}
+.um-password-toggle{position:absolute;top:50%;right:9px;display:inline-flex;align-items:center;gap:6px;transform:translateY(-50%);border:0;background:transparent;color:#60718b;font-size:11px;font-weight:600;cursor:pointer}
+.um-password-toggle:hover{color:#315d99}
+.um-password-tools{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.um-create-form .um-password-tools small{max-width:330px;color:#8490a2;font-size:10px;font-weight:400;line-height:1.5}
+.um-generate-password{display:inline-flex;flex:0 0 auto;align-items:center;gap:5px;border:0;background:transparent;color:#315d99;font-size:11px;font-weight:700;cursor:pointer}
+.um-generate-password:disabled{opacity:.55;cursor:not-allowed}
+.um-field-error{color:#bd3441!important;font-size:11px!important;font-weight:500;line-height:1.4}
+.um-create-modal .um-modal-actions{gap:10px;margin-top:8px;padding-top:16px;border-top:1px solid #edf0f5}
+.um-create-modal .um-modal-actions .button{min-height:42px;padding:0 17px;border-radius:9px;font-size:12px}
+.um-create-modal .um-modal-actions .button:disabled{cursor:wait;opacity:.7}
+.um-create-modal .um-modal-actions .um-spinner{display:inline-block;width:14px;height:14px;margin-right:7px;vertical-align:-3px;border-width:2px}
+@media(max-width:600px){
+  .um-backdrop{align-items:center;padding:12px}
+  .um-create-modal{width:100%;max-height:calc(100dvh - 24px);padding:21px;border-radius:15px}
+  .um-create-modal .um-modal-heading h3{font-size:20px}
+  .um-create-form{gap:13px}
+  .um-password-tools{flex-direction:column;gap:7px}
+  .um-create-form .um-password-tools small{max-width:none}
+  .um-create-modal .um-modal-actions .button{flex:1}
+}
+@media(prefers-reduced-motion:reduce){
+  .um-create-form .um-field input,.um-create-form .um-field select{transition:none}
+}

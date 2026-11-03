@@ -6,6 +6,7 @@ import { getPublicServiceById, listPublicServices } from '../src/lib/serviceCata
 const services = [
   {
     id: 1,
+    vendorId: 1,
     title: 'Luxury Wedding Venue',
     vendorName: 'Aster Floral Studio',
     category: 'Wedding Venues',
@@ -20,6 +21,7 @@ const services = [
   },
   {
     id: 2,
+    vendorId: 2,
     title: 'Premium Catering Package',
     vendorName: 'Golden Horizon Catering',
     category: 'Catering',
@@ -34,6 +36,7 @@ const services = [
   },
   {
     id: 3,
+    vendorId: 1,
     title: 'Private Gala Styling',
     vendorName: 'Aster Floral Studio',
     category: 'Decoration',
@@ -47,6 +50,7 @@ const services = [
   },
   {
     id: 4,
+    vendorId: 3,
     title: 'Hidden Studio Setup',
     vendorName: 'Hidden Studio',
     category: 'Photography',
@@ -84,6 +88,12 @@ test('service lookup rejects hidden or invalid ids', () => {
   assert.equal(getPublicServiceById(services, 3), null);
   assert.equal(getPublicServiceById(services, 1)?.title, 'Luxury Wedding Venue');
   assert.equal(getPublicServiceById(services, 'abc'), null);
+});
+
+test('vendorId filter returns only one vendor\'s services', () => {
+  const result = listPublicServices(services, { vendorId: 1, page: 1, limit: 10 });
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.services.map((service) => service.id), [1]);
 });
 
 test('price, rating, and availability filters combine', () => {

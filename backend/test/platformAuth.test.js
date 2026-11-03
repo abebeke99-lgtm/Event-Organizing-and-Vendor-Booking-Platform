@@ -3,12 +3,11 @@ import assert from 'node:assert/strict';
 import bcrypt from 'bcryptjs';
 import { hashPassword, isPublicRole, parsePublicLogin, parsePublicRegistration } from '../src/lib/platformAuth.js';
 
-test('public registration accepts only customer, organizer, and vendor roles', () => {
-  for (const role of ['customer', 'organizer', 'vendor']) {
-    assert.equal(parsePublicRegistration({ name: 'Hana Bekele', email: 'HANA@example.com', password: 'StrongPass123', role }).success, true);
+test('public registration accepts customer accounts only', () => {
+  assert.equal(parsePublicRegistration({ name: 'Hana Bekele', email: 'HANA@example.com', password: 'StrongPass123' }).success, true);
+  for (const role of ['customer', 'organizer', 'vendor', 'admin', 'other']) {
+    assert.equal(parsePublicRegistration({ name: 'Hana Bekele', email: 'HANA@example.com', password: 'StrongPass123', role }).success, false);
   }
-  assert.equal(parsePublicRegistration({ name: 'Admin User', email: 'admin@example.com', password: 'StrongPass123', role: 'admin' }).success, false);
-  assert.equal(parsePublicRegistration({ name: 'Hana Bekele', email: 'hana@example.com', password: 'StrongPass123', role: 'other' }).success, false);
 });
 
 test('registration validates name, normalized email, and strong password', () => {
@@ -16,7 +15,7 @@ test('registration validates name, normalized email, and strong password', () =>
   assert.equal(result.success, true);
   assert.equal(result.data.name, 'Hana Bekele');
   assert.equal(result.data.email, 'hana@example.com');
-  assert.equal(result.data.role, 'customer');
+  assert.equal('role' in result.data, false);
   assert.equal(parsePublicRegistration({ name: 'H', email: 'bad', password: 'weak' }).success, false);
 });
 
@@ -52,7 +51,8 @@ test('password hashing uses bcrypt and does not preserve plaintext', async () =>
 });
 
 test('public role guard rejects privileged and unknown roles', () => {
-  assert.equal(isPublicRole('vendor'), true);
+  assert.equal(isPublicRole('customer'), true);
+  assert.equal(isPublicRole('vendor'), false);
   assert.equal(isPublicRole('admin'), false);
   assert.equal(isPublicRole(''), false);
 });

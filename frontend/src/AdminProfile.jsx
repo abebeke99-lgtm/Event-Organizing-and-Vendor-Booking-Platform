@@ -18,14 +18,17 @@ function formatDate(value) {
   }).format(date);
 }
 
-function actionLabel(value) {
-  return String(value || 'account activity').replaceAll('_', ' ').replaceAll('.', ' · ');
-}
-
 export default function AdminProfile({ user, onUserChange }) {
   const [profile, setProfile] = useState(null);
-  const [activity, setActivity] = useState([]);
   const [edit, setEdit] = useState({ full_name: '', phone: '' });
+  const [emailDraft, setEmailDraft] = useState('');
+  const [pendingEmail, setPendingEmail] = useState('');
+  const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
+  const [emailOtp, setEmailOtp] = useState('');
+  const [emailVerificationSent, setEmailVerificationSent] = useState(false);
+  const [changingEmail, setChangingEmail] = useState(false);
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
+  const [emailError, setEmailError] = useState('');
   const [password, setPassword] = useState(passwordInitial);
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState('');
@@ -46,14 +49,13 @@ export default function AdminProfile({ user, onUserChange }) {
     setError('');
     Promise.all([
       apiClient.get('/admin/profile'),
-      apiClient.get('/admin/profile/activity'),
       apiClient.get('/admin/profile/photo', { responseType: 'blob' }),
-    ]).then(([profileResponse, activityResponse, photoResponse]) => {
+    ]).then(([profileResponse, photoResponse]) => {
       if (!active) return;
       const current = profileResponse.data.data;
       setProfile(current);
       setEdit({ full_name: current.full_name || '', phone: current.phone || '' });
-      setActivity(activityResponse.data.data || []);
+      setEmailDraft((draft) => draft || current.email || '');
       if (photoResponse.data?.size) {
         imageUrl = URL.createObjectURL(photoResponse.data);
         setSavedPhoto(imageUrl);
@@ -93,17 +95,6 @@ export default function AdminProfile({ user, onUserChange }) {
     setNotice('');
   }
 
-  function recordActivity(action, severity = 'info') {
-    setActivity((current) => [{
-      id: `${action}-${Date.now()}`,
-      action,
-      entity_type: 'user',
-      entity_id: String(profile?.id || user.id),
-      severity,
-      created_at: new Date().toISOString(),
-    }, ...current].slice(0, 20));
-  }
-
   async function saveProfile(event) {
     event.preventDefault();
     setSavingProfile(true);
@@ -122,12 +113,77 @@ export default function AdminProfile({ user, onUserChange }) {
         ...updated,
         name: updated.full_name || current.name,
       }));
-      recordActivity('admin.profile_updated');
       setNotice('Profile information saved.');
     } catch (issue) {
       setError(errorText(issue));
     } finally {
       setSavingProfile(false);
+    }
+  }
+
+  async function requestEmailChange(event) {
+    event.preventDefault();
+    setEmailError('');
+    setError('');
+    setNotice('');
+    const normalizedEmail = emailDraft.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      setEmailError('Enter a valid email address.');
+      return;
+    }
+    if (normalizedEmail === String(profile.email || '').toLowerCase()) {
+      setEmailError('Enter an email address different from your current address.');
+      return;
+    }
+    if (!emailCurrentPassword) {
+      setEmailError('Enter your current password to verify this change.');
+      return;
+    }
+
+    setChangingEmail(true);
+    try {
+      const response = await apiClient.post('/admin/profile/email-change', {
+        email: normalizedEmail,
+        currentPassword: emailCurrentPassword,
+      });
+      setEmailCurrentPassword('');
+      setPendingEmail(normalizedEmail);
+      setEmailVerificationSent(true);
+      setEmailOtp('');
+      setNotice(response.data.message || 'A verification code was sent to your new email address.');
+    } catch (issue) {
+      setEmailError(errorText(issue));
+    } finally {
+      setChangingEmail(false);
+    }
+  }
+
+  async function verifyEmailChange(event) {
+    event.preventDefault();
+    setEmailError('');
+    setError('');
+    setNotice('');
+    if (!/^\d{6}$/.test(emailOtp)) {
+      setEmailError('Enter the six-digit verification code.');
+      return;
+    }
+
+    setVerifyingEmail(true);
+    try {
+      const response = await apiClient.post('/admin/profile/email-change/verify', { otp: emailOtp });
+      const updatedEmail = response.data.data.email;
+      setProfile((current) => ({ ...current, email: updatedEmail }));
+      setEmailDraft(updatedEmail);
+      setEmailCurrentPassword('');
+      setEmailOtp('');
+      setPendingEmail('');
+      setEmailVerificationSent(false);
+      onUserChange?.((current) => ({ ...current, email: updatedEmail }));
+      setNotice('Your email address has been verified and updated.');
+    } catch (issue) {
+      setEmailError(errorText(issue));
+    } finally {
+      setVerifyingEmail(false);
     }
   }
 
@@ -145,7 +201,6 @@ export default function AdminProfile({ user, onUserChange }) {
       setPhotoPreview('');
       setProfile((current) => ({ ...current, has_profile_photo: true }));
       onUserChange?.((current) => ({ ...current, profilePhotoVersion: Date.now() }));
-      recordActivity('admin.profile_photo_updated');
       setNotice('Profile image saved.');
     } catch (issue) {
       setPhotoError(errorText(issue));
@@ -166,7 +221,6 @@ export default function AdminProfile({ user, onUserChange }) {
       setSavedPhoto('');
       setProfile((current) => ({ ...current, has_profile_photo: false }));
       onUserChange?.((current) => ({ ...current, profilePhotoUrl: '', profilePhotoVersion: Date.now() }));
-      recordActivity('admin.profile_photo_removed');
       setNotice('Profile image removed.');
     } catch (issue) {
       setPhotoError(errorText(issue));
@@ -191,7 +245,6 @@ export default function AdminProfile({ user, onUserChange }) {
       });
       setPassword(passwordInitial);
       setNotice(response.data.message || 'Password changed. Other account sessions were signed out.');
-      recordActivity('admin.password_changed', 'critical');
     } catch (issue) {
       setError(errorText(issue));
     } finally {
@@ -249,17 +302,52 @@ export default function AdminProfile({ user, onUserChange }) {
                     <input required minLength={1} maxLength={160} autoComplete="name" value={edit.full_name} onChange={(event) => setEdit((current) => ({ ...current, full_name: event.target.value }))}/>
                   </label>
                   <label className="field">
-                    <span>Email address</span>
-                    <input type="email" value={profile.email || ''} readOnly aria-readonly="true"/>
-                    <small>Email changes require a separate verified workflow.</small>
-                  </label>
-                  <label className="field">
                     <span>Phone number</span>
                     <input maxLength={40} autoComplete="tel" value={edit.phone} onChange={(event) => setEdit((current) => ({ ...current, phone: event.target.value }))}/>
                   </label>
                 </div>
                 <button className="button" type="submit" disabled={savingProfile}>{savingProfile ? 'Saving…' : 'Save profile'}</button>
               </form>
+              <div className="admin-profile-email-section">
+                <label className="field admin-profile-email-address">
+                  <span>Email address</span>
+                  <input type="email" maxLength={254} autoComplete="email" value={emailDraft} disabled={changingEmail || verifyingEmail} onChange={(event) => {
+                    setEmailDraft(event.target.value);
+                    setEmailError('');
+                    if (emailVerificationSent) {
+                      setEmailVerificationSent(false);
+                      setPendingEmail('');
+                      setEmailOtp('');
+                    }
+                  }}/>
+                </label>
+                <form className="admin-profile-email-form" onSubmit={emailVerificationSent ? verifyEmailChange : requestEmailChange}>
+                <p className="admin-profile-email-note">To protect your account, your current email stays active until the new address is verified.</p>
+                {!emailVerificationSent ? <>
+                  <label className="field">
+                    <span>Current password</span>
+                    <input required type="password" autoComplete="current-password" maxLength={256} value={emailCurrentPassword} disabled={changingEmail} onChange={(event) => setEmailCurrentPassword(event.target.value)} />
+                  </label>
+                  <button className="button secondary" type="submit" disabled={changingEmail || emailDraft.trim().toLowerCase() === String(profile.email || '').toLowerCase()}>
+                    {changingEmail ? 'Sending code…' : 'Update email'}
+                  </button>
+                </> : <>
+                  <label className="field">
+                    <span>Verification code sent to {pendingEmail}</span>
+                    <input required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={emailOtp} disabled={verifyingEmail} onChange={(event) => setEmailOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} />
+                  </label>
+                  <div className="admin-profile-email-actions">
+                    <button className="button secondary" type="button" disabled={verifyingEmail} onClick={() => { setEmailVerificationSent(false); setPendingEmail(''); setEmailOtp(''); setEmailError(''); }}>
+                      Change address
+                    </button>
+                    <button className="button" type="submit" disabled={verifyingEmail}>
+                      {verifyingEmail ? 'Verifying…' : 'Verify email'}
+                    </button>
+                  </div>
+                </>}
+                {emailError && <p className="admin-profile-email-error" role="alert">{emailError}</p>}
+                </form>
+              </div>
             </section>
 
             <section className="admin-profile-card">
@@ -300,19 +388,6 @@ export default function AdminProfile({ user, onUserChange }) {
                 <dt>Account ID</dt><dd>#{profile.id}</dd>
               </dl>
               <p className="admin-profile-security-note">Changing your password signs out other active sessions. Your current session is securely renewed.</p>
-            </section>
-            <section className="admin-profile-card">
-              <h2>Recent account activity</h2>
-              {activity.length ? <ol className="admin-profile-activity">
-                {activity.map((item) => <li key={item.id}>
-                  <span className={`admin-profile-activity-dot ${item.severity || 'info'}`}/>
-                  <div>
-                    <strong>{actionLabel(item.action)}</strong>
-                    <span>{item.entity_type ? `${actionLabel(item.entity_type)}${item.entity_id ? ` #${item.entity_id}` : ''}` : 'Account activity'}</span>
-                    <time dateTime={item.created_at}>{formatDate(item.created_at)}</time>
-                  </div>
-                </li>)}
-              </ol> : <p className="admin-profile-empty">No recent account activity is recorded.</p>}
             </section>
           </aside>
         </div>

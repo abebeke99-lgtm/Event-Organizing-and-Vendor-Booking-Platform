@@ -33,9 +33,9 @@ export function buildPasswordResetOtpEmail({ email, name, otp }, environment = p
   return {
     from: config.from,
     to: email,
-    subject: 'EventFlow Password Reset Verification Code',
-    text: `${greeting}\n\nYour EventFlow password reset verification code is:\n\n${otp}\n\nThis code expires in 5 minutes.\n\nIf you did not request a password reset, ignore this email.\n\nEventFlow`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">EventFlow password reset</h1><p>${safeName ? `Hello ${safeName},` : 'Hello,'}</p><p>Your EventFlow password reset verification code is:</p><p style="font-size:30px;font-weight:700;letter-spacing:8px;color:#2165a6">${otp}</p><p>This code expires in 5 minutes.</p><p>If you did not request a password reset, ignore this email.</p><p style="margin-top:28px;color:#758198">EventFlow</p></div>`,
+    subject: 'EventHub Password Reset Verification Code',
+    text: `${greeting}\n\nYour EventHub password reset verification code is:\n\n${otp}\n\nThis code expires in 5 minutes.\n\nIf you did not request a password reset, ignore this email.\n\nEventHub`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">EventHub password reset</h1><p>${safeName ? `Hello ${safeName},` : 'Hello,'}</p><p>Your EventHub password reset verification code is:</p><p style="font-size:30px;font-weight:700;letter-spacing:8px;color:#2165a6">${otp}</p><p>This code expires in 5 minutes.</p><p>If you did not request a password reset, ignore this email.</p><p style="margin-top:28px;color:#758198">EventHub</p></div>`,
   };
 }
 

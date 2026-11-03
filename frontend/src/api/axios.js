@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getRetryAfterMilliseconds } from '../authSession.js';
+import { getLanguage } from '../language.js';
 
 function resolveApiBaseUrl() {
   const configuredUrl = (import.meta.env.VITE_API_URL || '').trim();
@@ -31,6 +32,7 @@ let invalidationQueued = false;
 
 apiClient.interceptors.request.use((config) => {
   config.withCredentials = true;
+  config.headers = { ...config.headers, 'Accept-Language': getLanguage() };
   return config;
 });
 

@@ -132,6 +132,10 @@ The platform includes the requested features for:
 3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173`. For API-backed authentication, keep `VITE_DEMO_AUTH=false`, configure `VITE_API_URL`, and start the backend with `backend/.env` configured for a provisioned MySQL database.
 4. For a real backend, apply migrations with `npm run migrate` after configuring the database. Never enable demo authentication in production.
 
+### Language and localization
+
+The interface supports English and Amharic (አማርኛ). The header selector applies changes immediately, keeps the selection in browser storage, and saves it to the signed-in account. The backend accepts `Accept-Language`; an authenticated account's saved preference takes precedence. Apply the database migrations to add account-level language preferences.
+
 ### Password reset email
 
 Password reset uses a six-digit email OTP, a five-minute expiry, up to five verification attempts, a 60-second resend cooldown, and a short-lived HttpOnly reset authorization cookie. Configure these variables only in the backend environment (never in the frontend):
@@ -217,6 +221,8 @@ The public contact form submits to `POST /api/contact`; `GET /api/contact` retur
 
 Apply `007_contact_inquiry_types.sql` with `npm run migrate` to enable the full inquiry type list and resolved status. Configure actual support contact details in `system_settings` (`support_email`, `support_phone`, `support_address`, `support_hours`, and `social_links`); unconfigured details are not shown publicly.
 
+The public footer displays the contact email `abebeke99@gmail.com` and Telegram, YouTube, Facebook, and LinkedIn icons in the Contact Us column. An icon is clickable only when its matching `VITE_EVENTHUB_TELEGRAM_URL`, `VITE_EVENTHUB_YOUTUBE_URL`, `VITE_EVENTHUB_FACEBOOK_URL`, or `VITE_EVENTHUB_LINKEDIN_URL` variable is set to a confirmed, non-root EventHub profile URL; otherwise it is shown as unconfigured with no link. Configure the URLs in `frontend/.env.example` only after verifying the official accounts. URLs must use HTTPS and the matching platform host. These URLs are public and included in the frontend bundle, so do not put credentials in them.
+
 ### Payment and refund management
 
 Apply `017_payment_refund_management.sql` with `npm run migrate`. Administrators can search and filter real payment records at `GET /api/admin/payments`, inspect financial history at `GET /api/admin/payments/:id`, and review requests at `GET /api/admin/refunds`. CSV reports are available from `/api/admin/payments/export` and `/api/admin/refunds/export`; `/api/admin/payments/report` returns grouped payment and refund totals. These routes require an administrator session and the corresponding payment/report permissions. Payment records cannot be created or have their statuses edited through generic admin CRUD.
@@ -267,7 +273,7 @@ Deployment settings and troubleshooting are maintained in the Deployment checkli
 - vendor verification workflow UI and document upload
 - integration of a specific payment provider adapter and policy-specific refund terms
 - notification and messaging modules
-- multi-language and multi-currency support
+- additional languages and multi-currency support
 
 ## 14. Conclusion
 

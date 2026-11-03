@@ -2,7 +2,8 @@ import express, { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { getPasswordResetEmailConfig, sendPasswordResetOtpEmail } from '../lib/passwordResetEmail.js';
-import { createPasswordResetOtp, hashPasswordResetOtp } from '../lib/passwordResetOtp.js';
+import { createPasswordResetOtp, hashPasswordResetOtp, verifyPasswordResetOtp } from '../lib/passwordResetOtp.js';
+import { sendAdminEmailChangeOtpEmail, sendAdminEmailChangeNotice } from '../lib/emailChangeEmail.js';
 import { pool, inTransaction } from '../db.js';
 import {
   ASSIGNABLE_PLATFORM_ROLES,
@@ -13,7 +14,7 @@ import {
   isCriticalPermission,
   ROLE_PERMISSION_MATRIX,
 } from '../lib/rbac.js';
-import { createSession, writeAudit } from '../lib/security.js';
+import { createSession, hashToken, writeAudit } from '../lib/security.js';
 import { createNotification } from '../lib/notificationService.js';
 import {
   checkBookingDateAvailability,
@@ -23,7 +24,9 @@ import {
 import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { isStrongPassword } from '../lib/authFlow.js';
+import { ensureVendorProfile } from '../lib/marketplace.js';
 import {
   getProfilePhoto,
   MAX_PROFILE_PHOTO_BYTES,
@@ -54,6 +57,12 @@ const categoryImageParser = express.raw({
   limit: MAX_PROFILE_PHOTO_BYTES,
 });
 const idSchema = z.coerce.number().int().positive();
+const adminCreatableRoles = new Set(['organizer', 'vendor']);
+const adminEmailChangeRateLimit = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: 'Too many email verification attempts. Try again later.',
+});
 const categoryFieldsSchema = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().trim().max(500).nullable().optional(),
@@ -988,6 +997,195 @@ router.patch('/profile', async (req, res, next) => {
   }
 });
 
+router.post('/profile/email-change', adminEmailChangeRateLimit, asyncHandler(async (req, res) => {
+  const parsed = z.object({
+    email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
+    currentPassword: z.string().min(1).max(256),
+  }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Provide a valid email address and your current password.' });
+
+  const services = req.app.locals.adminEmailChange || {};
+  const emailConfigured = services.emailConfigured || (() => Boolean(getPasswordResetEmailConfig()));
+  if (!emailConfigured()) return res.status(503).json({ error: 'Email verification is temporarily unavailable.' });
+
+  const database = getDatabase(req);
+  const otp = (services.otpGenerator || createPasswordResetOtp)();
+  const { hash: otpHash, salt: otpSalt } = await (services.otpHasher || hashPasswordResetOtp)(otp);
+  let challengeId;
+  let currentEmail;
+  let fullName;
+
+  try {
+    await inDatabaseTransaction(database, async (connection) => {
+      const [[account]] = await connection.execute(
+        'SELECT id, full_name, email, password_hash FROM users WHERE id = ? FOR UPDATE',
+        [req.admin.id],
+      );
+      if (!account || !await bcrypt.compare(parsed.data.currentPassword, account.password_hash)) {
+        throw Object.assign(new Error('The current password is incorrect.'), { status: 400 });
+      }
+      currentEmail = account.email;
+      fullName = account.full_name;
+      if (account.email.toLowerCase() === parsed.data.email) {
+        throw Object.assign(new Error('Enter an email address different from your current address.'), { status: 400 });
+      }
+
+      await connection.execute(
+        'DELETE FROM admin_email_change_otp_challenges WHERE expires_at <= NOW() OR consumed_at IS NOT NULL',
+      );
+      const [[existingEmail]] = await connection.execute(
+        'SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ? LIMIT 1',
+        [parsed.data.email, req.admin.id],
+      );
+      if (existingEmail) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
+
+      const [[currentChallenge]] = await connection.execute(
+        `SELECT (last_sent_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)) AS cooldown_active
+         FROM admin_email_change_otp_challenges WHERE user_id = ? LIMIT 1 FOR UPDATE`,
+        [req.admin.id],
+      );
+      if (currentChallenge?.cooldown_active) {
+        throw Object.assign(new Error('A verification code was sent recently. Try again shortly.'), { status: 429 });
+      }
+      await connection.execute('DELETE FROM admin_email_change_otp_challenges WHERE user_id = ?', [req.admin.id]);
+      const [created] = await connection.execute(
+        `INSERT INTO admin_email_change_otp_challenges
+          (user_id, current_email, pending_email, otp_hash, otp_salt, expires_at, failed_attempts, consumed_at, last_sent_at)
+         VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 10 MINUTE), 0, NULL, NOW())`,
+        [req.admin.id, account.email, parsed.data.email, otpHash, otpSalt],
+      );
+      challengeId = created.insertId;
+      await writeAudit(connection, {
+        actorId: req.admin.id,
+        action: 'admin.profile_email_change_requested',
+        entityType: 'user',
+        entityId: req.admin.id,
+        details: { verification_sent: true },
+        ip: req.ip,
+      });
+    });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'An account or pending request already uses this email.' });
+    throw error;
+  }
+
+  try {
+    await (services.emailSender || sendAdminEmailChangeOtpEmail)({
+      email: parsed.data.email,
+      name: fullName,
+      otp,
+    });
+  } catch (error) {
+    console.error('Email change verification delivery failed.', error?.code || error?.name || 'EMAIL_DELIVERY_FAILED');
+    try {
+      await database.execute(
+        'DELETE FROM admin_email_change_otp_challenges WHERE id = ? AND otp_hash = ?',
+        [challengeId, otpHash],
+      );
+    } catch (invalidationError) {
+      console.error('Failed to invalidate undelivered email change code.', invalidationError?.code || invalidationError?.name || 'DATABASE_ERROR');
+    }
+    return res.status(503).json({ error: 'The verification email could not be delivered. Try again later.' });
+  }
+
+  res.status(202).json({ message: 'A verification code was sent to the new email address.' });
+}));
+
+router.post('/profile/email-change/verify', adminEmailChangeRateLimit, asyncHandler(async (req, res) => {
+  const parsed = z.object({ otp: z.string().regex(/^[0-9]{6}$/) }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Enter the six-digit verification code.' });
+
+  const services = req.app.locals.adminEmailChange || {};
+  const database = getDatabase(req);
+  const verification = await inDatabaseTransaction(database, async (connection) => {
+    const [[challenge]] = await connection.execute(
+      `SELECT id, current_email, pending_email, otp_hash, otp_salt, expires_at, failed_attempts,
+              (expires_at <= NOW()) AS expired
+       FROM admin_email_change_otp_challenges WHERE user_id = ? LIMIT 1 FOR UPDATE`,
+      [req.admin.id],
+    );
+    if (!challenge) return { status: 400, error: 'No active email change verification was found.' };
+    if (challenge.expired || Number(challenge.failed_attempts) >= 5) {
+      await connection.execute('DELETE FROM admin_email_change_otp_challenges WHERE id = ?', [challenge.id]);
+      return { status: 400, error: 'The verification code expired or is no longer valid. Request a new code.' };
+    }
+
+    const [[account]] = await connection.execute('SELECT email FROM users WHERE id = ? FOR UPDATE', [req.admin.id]);
+    if (!account || account.email.toLowerCase() !== challenge.current_email.toLowerCase()) {
+      await connection.execute('DELETE FROM admin_email_change_otp_challenges WHERE id = ?', [challenge.id]);
+      return { status: 409, error: 'The account email changed. Request a new verification code.' };
+    }
+
+    const valid = await (services.otpVerifier || verifyPasswordResetOtp)(
+      parsed.data.otp,
+      challenge.otp_hash,
+      challenge.otp_salt,
+    );
+    if (!valid) {
+      const attempts = Number(challenge.failed_attempts) + 1;
+      if (attempts >= 5) {
+        await connection.execute('DELETE FROM admin_email_change_otp_challenges WHERE id = ?', [challenge.id]);
+        return { status: 400, error: 'The verification code is no longer valid. Request a new code.' };
+      }
+      await connection.execute('UPDATE admin_email_change_otp_challenges SET failed_attempts = ? WHERE id = ?', [attempts, challenge.id]);
+      return { status: 400, error: 'The verification code is incorrect.' };
+    }
+
+    try {
+      await connection.execute('UPDATE users SET email = ? WHERE id = ?', [challenge.pending_email, req.admin.id]);
+    } catch (error) {
+      if (error.code === 'ER_DUP_ENTRY') {
+        await connection.execute('DELETE FROM admin_email_change_otp_challenges WHERE id = ?', [challenge.id]);
+        return { status: 409, error: 'An account with this email already exists.' };
+      }
+      throw error;
+    }
+    await connection.execute('DELETE FROM admin_email_change_otp_challenges WHERE id = ?', [challenge.id]);
+    const currentTokenHash = hashToken(req.cookies.admin_session);
+    await connection.execute(
+      'DELETE FROM admin_sessions WHERE user_id = ? AND token_hash <> ?',
+      [req.admin.id, currentTokenHash],
+    );
+    await connection.execute('DELETE FROM user_sessions WHERE user_id = ?', [req.admin.id]);
+    await writeAudit(connection, {
+      actorId: req.admin.id,
+      action: 'admin.profile_email_changed',
+      entityType: 'user',
+      entityId: req.admin.id,
+      details: { sessions_revoked: true },
+      ip: req.ip,
+      severity: 'critical',
+    });
+    return {
+      email: challenge.pending_email,
+      previousEmail: challenge.current_email,
+    };
+  });
+
+  if (verification.status) return res.status(verification.status).json({ error: verification.error });
+
+  setImmediate(() => {
+    Promise.resolve()
+      .then(() => (services.noticeSender || sendAdminEmailChangeNotice)({
+        email: verification.previousEmail,
+      }))
+      .catch((error) => console.error('Previous email change notice delivery failed.', error?.code || error?.name || 'EMAIL_DELIVERY_FAILED'));
+  });
+
+  res.json({ data: { email: verification.email } });
+}));
+
+router.patch('/profile/language', asyncHandler(async (req, res) => {
+  const parsed = z.object({ language: z.enum(['en', 'am']) }).strict().safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: 'Choose a supported language.' });
+  await getDatabase(req).execute(
+    'UPDATE users SET preferred_language = ? WHERE id = ?',
+    [parsed.data.language, req.admin.id],
+  );
+  res.json({ data: { language: parsed.data.language } });
+}));
+
 router.get('/profile', asyncHandler(async (req, res) => {
   const database = getDatabase(req);
   const [[profile]] = await database.execute(
@@ -1321,9 +1519,12 @@ router.post('/users', async (req, res, next) => {
   const parsed = z.object({
     full_name: z.string().trim().min(1).max(160),
     email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
-    phone: z.string().trim().max(40).optional(),
-    password: z.string().min(16).max(128),
+    phone: z.string().trim().max(40).nullable().optional(),
+    password: z.string().min(16).max(128).refine((password) => (
+      /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password)
+    )),
     role_id: z.coerce.number().int().positive(),
+    status: z.enum(['active', 'suspended']).optional().default('active'),
   }).strict().safeParse(req.body);
 
   if (!parsed.success) return sendError(res, parsed.error);
@@ -1333,14 +1534,24 @@ router.post('/users', async (req, res, next) => {
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
     const id = await inDatabaseTransaction(database, async (db) => {
       const [[role]] = await db.execute('SELECT id, name FROM roles WHERE id = ? AND is_active = TRUE AND is_admin = FALSE FOR UPDATE', [parsed.data.role_id]);
-      if (!role || !ASSIGNABLE_PLATFORM_ROLES.includes(String(role.name).toLowerCase())) {
-        throw Object.assign(new Error('Select an active approved platform role.'), { status: 400 });
+      if (!role || !adminCreatableRoles.has(String(role.name).toLowerCase())) {
+        throw Object.assign(new Error('Administrator-created accounts must use the Organizer or Vendor role.'), { status: 400 });
       }
       const [[existing]] = await db.execute('SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1', [parsed.data.email]);
       if (existing) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
-      const [created] = await db.execute('INSERT INTO users (full_name, email, phone, password_hash) VALUES (?, ?, ?, ?)', [parsed.data.full_name, parsed.data.email.toLowerCase(), parsed.data.phone || null, passwordHash]);
+      if (parsed.data.phone) {
+        const [[existingPhone]] = await db.execute('SELECT id FROM users WHERE phone = ? LIMIT 1', [parsed.data.phone]);
+        if (existingPhone) throw Object.assign(new Error('An account with this phone number already exists.'), { status: 409 });
+      }
+      const [created] = await db.execute(
+        'INSERT INTO users (full_name, email, phone, password_hash, status) VALUES (?, ?, ?, ?, ?)',
+        [parsed.data.full_name, parsed.data.email, parsed.data.phone || null, passwordHash, parsed.data.status],
+      );
       await db.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [created.insertId, parsed.data.role_id]);
-      await writeAudit(db, { actorId: req.admin.id, action: 'user.created', entityType: 'user', entityId: created.insertId, details: { email: parsed.data.email.toLowerCase(), role_id: parsed.data.role_id }, ip: req.ip });
+      if (String(role.name).toLowerCase() === 'vendor') {
+        await ensureVendorProfile(created.insertId, parsed.data.full_name, db);
+      }
+      await writeAudit(db, { actorId: req.admin.id, action: 'user.created', entityType: 'user', entityId: created.insertId, details: { role: role.name, status: parsed.data.status }, ip: req.ip });
       return created.insertId;
     });
 
@@ -1366,6 +1577,9 @@ router.patch('/users/:id', async (req, res, next) => {
   if (!id.success || !parsed.success || Object.keys(parsed.data || {}).length === 0) {
     return res.status(400).json({ error: 'Provide a valid name, email, or phone number.' });
   }
+  if (id.data === req.admin.id && parsed.data.email) {
+    return res.status(409).json({ error: 'Use the verified email change workflow in your profile.' });
+  }
 
   try {
     const database = getDatabase(req);
@@ -1380,6 +1594,13 @@ router.patch('/users/:id', async (req, res, next) => {
           [parsed.data.email, id.data],
         );
         if (existing) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
+      }
+      if (parsed.data.phone) {
+        const [[existingPhone]] = await db.execute(
+          'SELECT id FROM users WHERE phone = ? AND id <> ? LIMIT 1',
+          [parsed.data.phone, id.data],
+        );
+        if (existingPhone) throw Object.assign(new Error('An account with this phone number already exists.'), { status: 409 });
       }
       await db.execute(`UPDATE users SET ${fields.map((field) => `${field} = ?`).join(', ')} WHERE id = ?`, [...values, id.data]);
       await writeAudit(db, { actorId: req.admin.id, action: 'user.updated', entityType: 'user', entityId: id.data, details: { fields }, ip: req.ip });

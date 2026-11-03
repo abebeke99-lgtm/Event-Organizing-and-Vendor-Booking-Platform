@@ -34,6 +34,7 @@ function createDatabase() {
   };
   const services = [];
   const verificationDocuments = [];
+  const auditLogs = [];
   const statements = [];
   let permissionKeys = ['services.manage_own', 'bookings.view_own'];
   let nextServiceId = 1;
@@ -64,9 +65,16 @@ function createDatabase() {
       services.push({ id, vendor_id: vendorId, category_id: categoryId, title, description, price, currency, status });
       return [{ insertId: id, affectedRows: 1 }, []];
     }
+    if (sql.startsWith('SELECT id FROM services WHERE id = ? AND vendor_id = ?')) {
+      const service = services.find((row) => row.id === Number(values[0]) && row.vendor_id === Number(values[1]));
+      return [service ? [{ id: service.id }] : [], []];
+    }
     if (sql.startsWith('SELECT id, status FROM services WHERE id = ? AND vendor_id = ?')) {
       const service = services.find((row) => row.id === Number(values[0]) && row.vendor_id === Number(values[1]));
       return [service ? [{ id: service.id, status: service.status }] : [], []];
+    }
+    if (sql.includes('FROM audit_logs') && sql.includes("entity_type = 'service'")) {
+      return [auditLogs.filter((entry) => entry.entity_id === values[0]).sort((left, right) => right.id - left.id), []];
     }
     if (sql.startsWith('SELECT COUNT(*) AS total FROM vendor_verification_documents')) {
       return [[{ total: verificationDocuments.length }], []];
@@ -83,7 +91,12 @@ function createDatabase() {
       verificationDocuments.push(document);
       return [{ insertId: document.id, affectedRows: 1 }, []];
     }
-    if (sql.startsWith('INSERT INTO audit_logs')) return [{ insertId: 1, affectedRows: 1 }, []];
+    if (sql.startsWith('INSERT INTO audit_logs')) {
+      const [actor_id, action, entity_type, entity_id, details] = values;
+      const entry = { id: auditLogs.length + 1, actor_id, action, entity_type, entity_id, details, created_at: new Date().toISOString() };
+      auditLogs.push(entry);
+      return [{ insertId: entry.id, affectedRows: 1 }, []];
+    }
     if (sql === "UPDATE services SET status = 'archived' WHERE id = ? AND vendor_id = ?") {
       const service = services.find((row) => row.id === Number(values[0]) && row.vendor_id === Number(values[1]));
       if (!service) return [{ affectedRows: 0 }, []];
@@ -120,6 +133,7 @@ function createDatabase() {
   return {
     vendor,
     services,
+    auditLogs,
     verificationDocuments,
     statements,
     setPlatformCurrency(value) { platformCurrency = value; },
@@ -288,6 +302,18 @@ test('vendor service deletion archives the owned record and rejects another vend
   const foreignResponse = await request('/api/vendor/services/500', { method: 'DELETE' });
   assert.equal(foreignResponse.status, 404);
   assert.equal(database.services.find((service) => service.id === 500).status, 'active');
+});
+
+test('vendor service history is owner-scoped and records lifecycle changes', async () => {
+  const owned = database.services[0];
+  const response = await request(`/api/vendor/services/${owned.id}/history`);
+  assert.equal(response.status, 200);
+  const history = (await response.json()).data;
+  assert.deepEqual(history.map((entry) => entry.action), ['service.archived', 'service.updated', 'service.created']);
+  assert.equal(database.auditLogs.every((entry) => entry.entity_type === 'service'), true);
+
+  const foreignResponse = await request('/api/vendor/services/500/history');
+  assert.equal(foreignResponse.status, 404);
 });
 
 test('revoking a role permission blocks the protected vendor operation on the next request', async () => {

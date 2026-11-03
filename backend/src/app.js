@@ -25,12 +25,19 @@ import adminReportsRoutes from './routes/adminReports.js';
 import adminAuditLogRoutes from './routes/adminAuditLogs.js';
 import userAvatarRoutes from './routes/userAvatar.js';
 import { requestContextMiddleware } from './lib/requestContext.js';
+import { localizationMiddleware } from './lib/localization.js';
 
 export function createApp({
   database = pool,
   expectedDatabase = process.env.DB_NAME,
   emailConfigured,
   emailSender,
+  emailChangeEmailConfigured,
+  emailChangeEmailSender,
+  emailChangeNoticeSender,
+  emailChangeOtpGenerator,
+  emailChangeOtpHasher,
+  emailChangeOtpVerifier,
   notificationEmailConfigured,
   notificationEmailSender,
   passwordHasher,
@@ -41,8 +48,17 @@ export function createApp({
 } = {}) {
   const app = express();
   app.use(requestContextMiddleware);
+  app.use(localizationMiddleware);
   app.locals.database = database;
   app.locals.passwordReset = { emailConfigured, emailSender, otpGenerator, otpHasher };
+  app.locals.adminEmailChange = {
+    emailConfigured: emailChangeEmailConfigured,
+    emailSender: emailChangeEmailSender,
+    noticeSender: emailChangeNoticeSender,
+    otpGenerator: emailChangeOtpGenerator,
+    otpHasher: emailChangeOtpHasher,
+    otpVerifier: emailChangeOtpVerifier,
+  };
   app.locals.notificationServices = {
     emailConfigured: notificationEmailConfigured,
     emailSender: notificationEmailSender,
@@ -83,7 +99,7 @@ export function createApp({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept-Language', 'X-Language'],
   }));
   app.use(cookieParser());
   app.use((req, res, next) => {

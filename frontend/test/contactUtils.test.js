@@ -68,10 +68,10 @@ test('contact validation accepts a valid form without an inquiry type', () => {
 test('buildContactInfo ignores unsafe social links', () => {
   const info = buildContactInfo({
     socials: [
-      { label: 'EventFlow', url: 'https://example.com' },
+      { label: 'EventHub', url: 'https://example.com' },
       { label: 'Unsafe', url: 'javascript:alert(1)' },
     ],
   });
 
-  assert.deepEqual(info.socials, [{ label: 'EventFlow', url: 'https://example.com' }]);
+  assert.deepEqual(info.socials, [{ label: 'EventHub', url: 'https://example.com' }]);
 });

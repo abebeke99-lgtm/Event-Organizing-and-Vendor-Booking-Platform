@@ -375,6 +375,31 @@ getPermissionRoute('/services', 'services.manage_own', async (req, res) => {
   })));
 });
 
+getPermissionRoute('/services/:id/history', 'services.manage_own', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Service ID is invalid.' });
+  const database = databaseFor(req);
+  const [[service]] = await database.execute(
+    'SELECT id FROM services WHERE id = ? AND vendor_id = ? LIMIT 1',
+    [id.data, req.vendor.id],
+  );
+  if (!service) return res.status(404).json({ error: 'Service not found.' });
+  const [rows] = await database.execute(
+    `SELECT id, action, details, created_at
+     FROM audit_logs
+     WHERE entity_type = 'service' AND entity_id = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT 50`,
+    [String(id.data)],
+  );
+  return ok(res, rows.map((row) => ({
+    id: Number(row.id),
+    action: row.action,
+    details: typeof row.details === 'string' ? JSON.parse(row.details) : row.details || {},
+    createdAt: row.created_at,
+  })));
+});
+
 postPermissionRoute('/services', 'services.manage_own', async (req, res) => {
   const parsed = serviceFieldsSchema.safeParse(req.body || {});
   if (!parsed.success) return sendValidationError(res, parsed.error);
@@ -388,11 +413,22 @@ postPermissionRoute('/services', 'services.manage_own', async (req, res) => {
     return res.status(409).json({ error: 'Vendor verification is required before publishing a service.' });
   }
 
-  const [result] = await database.execute(
-    `INSERT INTO services (vendor_id, category_id, title, description, price, currency, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [req.vendor.id, parsed.data.categoryId ?? null, parsed.data.title, parsed.data.description, parsed.data.price ?? null, currency, parsed.data.status]
-  );
+  const result = await runTransaction(database, async (connection) => {
+    const [created] = await connection.execute(
+      `INSERT INTO services (vendor_id, category_id, title, description, price, currency, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [req.vendor.id, parsed.data.categoryId ?? null, parsed.data.title, parsed.data.description, parsed.data.price ?? null, currency, parsed.data.status],
+    );
+    await writeAudit(connection, {
+      actorId: req.platformUser.id,
+      action: 'service.created',
+      entityType: 'service',
+      entityId: Number(created.insertId),
+      details: { title: parsed.data.title, status: parsed.data.status },
+      ip: req.ip,
+    });
+    return created;
+  });
   return res.status(201).json({
     success: true,
     data: {
@@ -440,10 +476,24 @@ patchPermissionRoute('/services/:id', 'services.manage_own', async (req, res) =>
     currency: 'currency',
     status: 'status',
   };
-  await database.execute(
-    `UPDATE services SET ${fields.map((field) => `${columns[field]} = ?`).join(', ')} WHERE id = ? AND vendor_id = ?`,
-    [...fields.map((field) => parsed.data[field] === undefined ? null : parsed.data[field]), id.data, req.vendor.id]
-  );
+  await runTransaction(database, async (connection) => {
+    await connection.execute(
+      `UPDATE services SET ${fields.map((field) => `${columns[field]} = ?`).join(', ')} WHERE id = ? AND vendor_id = ?`,
+      [...fields.map((field) => parsed.data[field] === undefined ? null : parsed.data[field]), id.data, req.vendor.id],
+    );
+    await writeAudit(connection, {
+      actorId: req.platformUser.id,
+      action: 'service.updated',
+      entityType: 'service',
+      entityId: id.data,
+      details: {
+        fields,
+        previousStatus: service.status,
+        status: parsed.data.status || service.status,
+      },
+      ip: req.ip,
+    });
+  });
   return ok(res, { id: id.data, status: statusLabel(parsed.data.status || service.status) });
 });
 
@@ -457,10 +507,20 @@ deletePermissionRoute('/services/:id', 'services.manage_own', async (req, res) =
   );
   if (!service) return res.status(404).json({ error: 'Service not found.' });
   if (service.status !== 'archived') {
-    await database.execute(
-      "UPDATE services SET status = 'archived' WHERE id = ? AND vendor_id = ?",
-      [id.data, req.vendor.id]
-    );
+    await runTransaction(database, async (connection) => {
+      await connection.execute(
+        "UPDATE services SET status = 'archived' WHERE id = ? AND vendor_id = ?",
+        [id.data, req.vendor.id],
+      );
+      await writeAudit(connection, {
+        actorId: req.platformUser.id,
+        action: 'service.archived',
+        entityType: 'service',
+        entityId: id.data,
+        details: { previousStatus: service.status, status: 'archived' },
+        ip: req.ip,
+      });
+    });
   }
   return res.status(204).end();
 });
