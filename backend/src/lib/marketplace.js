@@ -1,14 +1,5 @@
 import { pool } from '../db.js';
 
-const categoryImages = {
-  'wedding-venues': 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=80',
-  catering: 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=900&q=80',
-  photography: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80',
-  decoration: 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80',
-  entertainment: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=900&q=80',
-};
-const defaultCategoryImage = categoryImages.decoration;
-
 export function normalizeKey(value = '') {
   return String(value ?? '')
     .trim()
@@ -28,7 +19,14 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function mapVendor(row, services = []) {
+function mapVendor(row, services = [], media = []) {
+  const mediaUrl = (entry) => `/api/platform/vendors/${toNumber(row.id)}/media/${toNumber(entry.id)}`;
+  const startingPriceOptions = services.flatMap((service) => [
+    ...(service.price === null ? [] : [{ price: service.price, currency: service.currency, serviceId: service.id }]),
+    ...service.packages.map((item) => ({ price: item.price, currency: item.currency, serviceId: service.id })),
+  ]).sort((first, second) => first.price - second.price || first.serviceId - second.serviceId);
+  const startingPrice = startingPriceOptions[0]?.price
+    ?? (row.min_price === null || row.min_price === undefined ? null : toNumber(row.min_price));
   return {
     id: toNumber(row.id),
     userId: toNumber(row.user_id),
@@ -40,11 +38,21 @@ function mapVendor(row, services = []) {
     verified: row.verification_status === 'verified',
     rating: toNumber(row.rating),
     reviewCount: toNumber(row.review_count),
-    priceFrom: toNumber(row.min_price),
+    priceFrom: startingPrice,
+    currency: startingPriceOptions[0]?.currency || null,
+    createdAt: row.created_at,
+    available: services.some((service) => service.available === true),
     status: 'active',
     visibility: 'public',
     isPublished: true,
     services,
+    logoUrl: media.find((entry) => entry.media_type === 'logo') ? mediaUrl(media.find((entry) => entry.media_type === 'logo')) : null,
+    coverImageUrl: media.find((entry) => entry.media_type === 'cover') ? mediaUrl(media.find((entry) => entry.media_type === 'cover')) : null,
+    portfolio: media.filter((entry) => entry.media_type === 'portfolio').map((entry) => ({
+      id: toNumber(entry.id),
+      name: entry.original_name,
+      url: mediaUrl(entry),
+    })),
   };
 }
 
@@ -57,10 +65,12 @@ function mapService(row) {
     category: String(row.category || 'General').trim(),
     city: String(row.city || '').trim(),
     description: String(row.description || '').trim(),
-    price: toNumber(row.price),
+    price: row.price === null || row.price === undefined ? null : toNumber(row.price),
     currency: String(row.currency || 'ETB').trim().toUpperCase(),
     rating: toNumber(row.rating),
     reviewCount: toNumber(row.review_count),
+    packages: [],
+    images: [],
     status: 'active',
     published: true,
     visibility: 'public',
@@ -89,38 +99,118 @@ export async function loadPublicServices(db = pool) {
            ${vendorRatingSelect}
     FROM services s
     JOIN vendor_profiles vp ON vp.id = s.vendor_id
+    JOIN users u ON u.id = vp.user_id AND u.status = 'active'
     LEFT JOIN service_categories sc ON sc.id = s.category_id
     WHERE s.status = 'active' AND vp.verification_status = 'verified'
     ORDER BY s.id ASC`);
 
-  return rows
+  const services = rows
     .filter((row) => row.verification_status === 'verified')
     .map(mapService);
+  if (!services.length) return services;
+
+  const serviceIds = services.map((service) => service.id);
+  const placeholders = serviceIds.map(() => '?').join(', ');
+  const [packageRows] = await db.execute(
+    `SELECT p.id, p.service_id, p.name, p.description, p.price, p.currency,
+            p.included_features, p.extras, p.minimum_booking
+     FROM service_packages p
+     JOIN services s ON s.id = p.service_id
+     JOIN vendor_profiles vp ON vp.id = s.vendor_id
+     JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+     WHERE p.is_active = TRUE AND s.status = 'active'
+       AND vp.verification_status = 'verified' AND p.service_id IN (${placeholders})
+     ORDER BY p.price, p.id`,
+    serviceIds,
+  );
+  const servicesById = new Map(services.map((service) => [service.id, service]));
+  for (const row of packageRows) {
+    const service = servicesById.get(Number(row.service_id));
+    if (!service) continue;
+    const parseJson = (value) => {
+      if (!value) return [];
+      if (typeof value !== 'string') return value;
+      try { return JSON.parse(value); } catch { return []; }
+    };
+    service.packages.push({
+      id: toNumber(row.id),
+      name: row.name,
+      description: row.description || '',
+      price: toNumber(row.price),
+      currency: String(row.currency || 'ETB').toUpperCase(),
+      includedFeatures: parseJson(row.included_features),
+      extras: parseJson(row.extras),
+      minimumBooking: toNumber(row.minimum_booking),
+    });
+  }
+  const [mediaRows] = await db.execute(
+    `SELECT id, service_id, original_name
+     FROM vendor_media WHERE media_type = 'service' AND service_id IN (${placeholders})
+     ORDER BY created_at DESC, id DESC`,
+    serviceIds,
+  );
+  for (const row of mediaRows) {
+    const service = servicesById.get(Number(row.service_id));
+    if (service) service.images.push({
+      id: toNumber(row.id),
+      name: row.original_name,
+      url: `/api/platform/services/${service.id}/media/${toNumber(row.id)}`,
+    });
+  }
+  const vendorIds = [...new Set(services.map((service) => service.vendorId))];
+  if (vendorIds.length) {
+    const vendorPlaceholders = vendorIds.map(() => '?').join(', ');
+    const [availableVendors] = await db.execute(
+      `SELECT DISTINCT vendor_id FROM vendor_availability
+       WHERE status = 'available' AND available_date >= CURDATE()
+         AND vendor_id IN (${vendorPlaceholders})`,
+      vendorIds,
+    );
+    const vendorsWithAvailability = new Set(availableVendors.map((row) => Number(row.vendor_id)));
+    for (const service of services) service.available = vendorsWithAvailability.has(service.vendorId);
+  }
+  return services;
 }
 
 export async function loadPublicVendors(db = pool, providedServices = null) {
   const [rows] = await db.query(`
-    SELECT vp.id, vp.user_id, vp.business_name, vp.city, vp.description, vp.verification_status,
+    SELECT vp.id, vp.user_id, vp.business_name, vp.city, vp.description, vp.verification_status, vp.created_at,
            sc.name AS category,
-           COALESCE((
+           (
              SELECT MIN(s.price)
              FROM services s
              WHERE s.vendor_id = vp.id AND s.status = 'active'
-           ), 0) AS min_price,
+           ) AS min_price,
            ${vendorRatingSelect}
     FROM vendor_profiles vp
+    JOIN users u ON u.id = vp.user_id AND u.status = 'active'
     LEFT JOIN service_categories sc ON sc.id = vp.category_id
     WHERE vp.verification_status = 'verified'
     ORDER BY vp.id ASC`);
 
   const services = providedServices || await loadPublicServices(db);
+  const vendorIds = rows.map((row) => toNumber(row.id));
+  const mediaByVendor = new Map();
+  if (vendorIds.length) {
+    const placeholders = vendorIds.map(() => '?').join(', ');
+    const [mediaRows] = await db.execute(
+      `SELECT id, vendor_id, media_type, original_name FROM vendor_media
+       WHERE service_id IS NULL AND media_type IN ('logo', 'cover', 'portfolio')
+         AND vendor_id IN (${placeholders}) ORDER BY created_at DESC, id DESC`,
+      vendorIds,
+    );
+    for (const media of mediaRows) {
+      const vendorId = Number(media.vendor_id);
+      mediaByVendor.set(vendorId, [...(mediaByVendor.get(vendorId) || []), media]);
+    }
+  }
   const servicesByVendor = new Map();
   for (const service of services) {
     if (!servicesByVendor.has(service.vendorId)) servicesByVendor.set(service.vendorId, []);
     servicesByVendor.get(service.vendorId).push(service);
   }
 
-  return rows.map((row) => mapVendor(row, servicesByVendor.get(toNumber(row.id)) || []));
+  return rows.map((row) => mapVendor(row, servicesByVendor.get(toNumber(row.id)) || [], mediaByVendor.get(toNumber(row.id)) || []));
 }
 
 export async function loadPublicCategories(db = pool, providedVendors = null, providedServices = null) {
@@ -140,9 +230,7 @@ export async function loadPublicCategories(db = pool, providedVendors = null, pr
       name: String(row.name || '').trim(),
       slug,
       description: String(row.description || '').trim(),
-      image: row.image_mime
-        ? `/api/platform/categories/${toNumber(row.id)}/image`
-        : categoryImages[slug] || defaultCategoryImage,
+      image: row.image_mime ? `/api/platform/categories/${toNumber(row.id)}/image` : null,
       isActive: Boolean(row.is_active),
       displayOrder: Number(row.display_order || 0),
       vendorCount,
@@ -160,7 +248,9 @@ export async function loadPublicMarketplace(db = pool) {
 
 export async function loadVendorProfileForUser(userId, db = pool) {
   const [rows] = await db.execute(
-    `SELECT vp.id, vp.user_id, vp.business_name, vp.city, vp.description, vp.verification_status,
+        `SELECT vp.id, vp.user_id, vp.business_name, vp.city, vp.address, vp.service_areas,
+          vp.operating_hours, vp.website, vp.notification_preferences, vp.booking_preferences,
+          vp.description, vp.verification_status,
             vp.verification_reason, vp.verified_at, vp.created_at, vp.category_id,
             sc.name AS category_name,
             u.full_name, u.email, u.phone, u.status

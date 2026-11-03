@@ -13,6 +13,7 @@ const services = [
     price: 90000,
     currency: 'ETB',
     rating: 4.9,
+    available: true,
     status: 'active',
     published: true,
     visibility: 'public',
@@ -26,6 +27,7 @@ const services = [
     price: 56000,
     currency: 'ETB',
     rating: 4.8,
+    available: false,
     status: 'active',
     published: true,
     visibility: 'public',
@@ -82,4 +84,18 @@ test('service lookup rejects hidden or invalid ids', () => {
   assert.equal(getPublicServiceById(services, 3), null);
   assert.equal(getPublicServiceById(services, 1)?.title, 'Luxury Wedding Venue');
   assert.equal(getPublicServiceById(services, 'abc'), null);
+});
+
+test('price, rating, and availability filters combine', () => {
+  const result = listPublicServices(services, {
+    minPrice: 50000,
+    maxPrice: 100000,
+    minRating: 4.85,
+    availableOnly: true,
+    page: 1,
+    limit: 10,
+  });
+
+  assert.equal(result.total, 1);
+  assert.equal(result.services[0].id, 1);
 });

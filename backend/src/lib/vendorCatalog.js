@@ -24,7 +24,13 @@ export function normalizeVendorRecord(vendor = {}) {
   record.verified = Boolean(record.verified || record.verification_status === 'verified');
   record.rating = Number(record.rating ?? 0) || 0;
   record.reviewCount = Number(record.reviewCount ?? record.reviews_count ?? 0) || 0;
-  record.priceFrom = Number(record.priceFrom ?? record.starting_price ?? record.min_price ?? 0) || 0;
+  const startingPrice = record.priceFrom ?? record.starting_price ?? record.min_price;
+  record.priceFrom = startingPrice === null || startingPrice === undefined || startingPrice === ''
+    ? null
+    : Number(startingPrice);
+  if (!Number.isFinite(record.priceFrom)) record.priceFrom = null;
+  record.available = record.available === true;
+  record.createdAt = record.createdAt || record.created_at || null;
   record.isPublished = record.isPublished !== false && record.published !== false && record.visibility !== 'private';
   record.visibility = String(record.visibility || 'public').toLowerCase();
   record.status = String(record.status || 'active').toLowerCase();
@@ -41,6 +47,7 @@ export function buildVendorFilters(raw = {}) {
   const minRating = Number(raw.minRating ?? raw.min_rating ?? 0);
   const minPrice = Number(raw.minPrice ?? raw.min_price ?? 0);
   const maxPrice = Number(raw.maxPrice ?? raw.max_price ?? 0);
+  const availableOnly = raw.availableOnly === true || raw.availableOnly === 'true' || raw.availableOnly === '1';
   const sort = String(raw.sort || 'recommended').trim().toLowerCase();
   const page = Number.isFinite(Number(raw.page)) ? Math.max(1, Number(raw.page)) : 1;
   const limit = Number.isFinite(Number(raw.limit)) ? Math.max(1, Math.min(50, Number(raw.limit))) : 12;
@@ -53,7 +60,8 @@ export function buildVendorFilters(raw = {}) {
     minRating: Number.isFinite(minRating) ? Math.max(0, minRating) : 0,
     minPrice: Number.isFinite(minPrice) ? Math.max(0, minPrice) : 0,
     maxPrice: Number.isFinite(maxPrice) && maxPrice > 0 ? Math.max(minPrice || 0, maxPrice) : 0,
-    sort: ['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az'].includes(sort) ? sort : 'recommended',
+    availableOnly,
+    sort: ['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added'].includes(sort) ? sort : 'recommended',
     page,
     limit,
   };
@@ -70,14 +78,16 @@ export function listPublicVendors(vendors = [], filters = {}) {
   const options = buildVendorFilters(filters);
 
   const filtered = normalized.filter((vendor) => {
-    const haystack = [vendor.business_name, vendor.category, vendor.city, vendor.description].join(' ').toLowerCase();
+    const serviceText = vendor.services.map((service) => [service.title, service.description].join(' ')).join(' ');
+    const haystack = [vendor.business_name, vendor.category, vendor.city, vendor.description, serviceText].join(' ').toLowerCase();
     if (options.search && !haystack.includes(options.search)) return false;
     if (options.category && !matchesCategoryName(vendor.category, options.category)) return false;
     if (options.location && !vendor.city.toLowerCase().includes(options.location)) return false;
     if (options.verified && !vendor.verified) return false;
     if (options.minRating && vendor.rating < options.minRating) return false;
-    if (options.minPrice && vendor.priceFrom < options.minPrice) return false;
-    if (options.maxPrice && vendor.priceFrom > options.maxPrice) return false;
+    if (options.minPrice && (vendor.priceFrom === null || vendor.priceFrom < options.minPrice)) return false;
+    if (options.maxPrice && (vendor.priceFrom === null || vendor.priceFrom > options.maxPrice)) return false;
+    if (options.availableOnly && !vendor.available) return false;
     return true;
   });
 
@@ -91,9 +101,16 @@ export function listPublicVendors(vendors = [], filters = {}) {
       case 'most-reviewed':
         return (b.reviewCount || 0) - (a.reviewCount || 0) || (b.rating || 0) - (a.rating || 0) || a.business_name.localeCompare(b.business_name);
       case 'price-low':
-        return (a.priceFrom || 0) - (b.priceFrom || 0) || (b.rating || 0) - (a.rating || 0);
+        return (a.priceFrom === null ? 1 : 0) - (b.priceFrom === null ? 1 : 0)
+          || (a.priceFrom ?? 0) - (b.priceFrom ?? 0)
+          || (b.rating || 0) - (a.rating || 0);
       case 'price-high':
-        return (b.priceFrom || 0) - (a.priceFrom || 0) || (b.rating || 0) - (a.rating || 0);
+        return (a.priceFrom === null ? 1 : 0) - (b.priceFrom === null ? 1 : 0)
+          || (b.priceFrom ?? 0) - (a.priceFrom ?? 0)
+          || (b.rating || 0) - (a.rating || 0);
+      case 'recently-added':
+        return (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0)
+          || (b.rating || 0) - (a.rating || 0);
       case 'name-az':
         return (a.business_name || '').localeCompare(b.business_name || '') || (b.rating || 0) - (a.rating || 0);
       case 'recommended':

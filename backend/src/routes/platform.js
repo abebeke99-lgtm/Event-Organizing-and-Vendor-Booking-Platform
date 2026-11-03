@@ -21,6 +21,7 @@ import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } fro
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
 import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
 import { createEventSchema, dateTimeSchema, toMysqlDateTime } from '../lib/eventInput.js';
+import { partialEventSchema } from '../lib/eventInput.js';
 import { isEventOpenForBookings } from '../lib/adminEvents.js';
 import {
   checkBookingDateAvailability,
@@ -236,6 +237,7 @@ router.get('/categories/:id/image', async (req, res) => {
   res.set({
     'Cache-Control': 'public, max-age=300',
     'X-Content-Type-Options': 'nosniff',
+    'Cross-Origin-Resource-Policy': 'cross-origin',
     'Content-Type': category.image_mime,
     'Content-Disposition': 'inline',
   });
@@ -251,7 +253,7 @@ router.get('/categories/:slug', async (req, res) => {
   const key = category.slug;
   const vendors = marketplace.vendors.filter((vendor) => sanitizeText(vendor.category, '').toLowerCase().replace(/[^a-z0-9]+/g, '-') === key);
   const services = marketplace.services.filter((service) => sanitizeText(service.category, '').toLowerCase().replace(/[^a-z0-9]+/g, '-') === key);
-  const [eventRows] = await pool.query(
+  const [eventRows] = await databaseFor(req).query(
     `${publicEventSelect} ${publicEventWhere} AND LOWER(e.event_type) = LOWER(?) ORDER BY e.start_date ASC`,
     [category.name]
   );
@@ -259,21 +261,79 @@ router.get('/categories/:slug', async (req, res) => {
   return res.json({ data: { ...category, vendors, services, events, eventCount: events.length } });
 });
 
-router.get('/vendors', async (req, res) => {
-  const marketplace = await loadPublicMarketplace();
+router.get('/vendors', asyncHandler(async (req, res) => {
+  const filtersSchema = z.object({
+    search: z.string().trim().max(120).optional(),
+    category: z.string().trim().max(80).optional(),
+    location: z.string().trim().max(120).optional(),
+    verified: z.enum(['true', 'false', '1', '0']).optional(),
+    availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+    minRating: z.coerce.number().finite().min(0).max(5).optional(),
+    minPrice: z.coerce.number().finite().min(0).optional(),
+    maxPrice: z.coerce.number().finite().min(0).optional(),
+    sort: z.enum(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added']).optional(),
+    page: z.coerce.number().int().min(1).max(100000).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+  }).strict().superRefine((filters, context) => {
+    if (filters.minPrice !== undefined && filters.maxPrice !== undefined && filters.maxPrice < filters.minPrice) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxPrice'], message: 'Maximum price must be greater than or equal to minimum price.' });
+    }
+  });
+  const parsedFilters = filtersSchema.safeParse(req.query);
+  if (!parsedFilters.success) {
+    return res.status(400).json({
+      error: 'Invalid vendor filters.',
+      details: parsedFilters.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+    });
+  }
+  const marketplace = await loadPublicMarketplace(databaseFor(req));
   const result = listPublicVendors(marketplace.vendors, {
-    search: req.query.search,
-    category: req.query.category,
-    location: req.query.location,
-    sort: req.query.sort,
-    page: req.query.page,
-    limit: req.query.limit,
+    ...parsedFilters.data,
   });
   return res.json({
     data: result.vendors,
     pagination: { total: result.total, page: result.page, limit: result.limit, totalPages: result.totalPages },
   });
-});
+}));
+
+router.get('/vendors/:vendorId/media/:mediaId', asyncHandler(async (req, res) => {
+  const vendorId = z.coerce.number().int().positive().safeParse(req.params.vendorId);
+  const mediaId = z.coerce.number().int().positive().safeParse(req.params.mediaId);
+  if (!vendorId.success || !mediaId.success) return res.status(400).json({ error: 'Vendor image ID is invalid.' });
+  const [[media]] = await databaseFor(req).execute(
+    `SELECT m.content, m.content_type, m.file_size
+     FROM vendor_media m
+     JOIN vendor_profiles vp ON vp.id = m.vendor_id
+     JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+     WHERE m.id = ? AND m.vendor_id = ? AND m.service_id IS NULL
+       AND m.media_type IN ('logo', 'cover', 'portfolio') AND vp.verification_status = 'verified'
+     LIMIT 1`,
+    [mediaId.data, vendorId.data],
+  );
+  if (!media) return res.status(404).json({ error: 'Vendor image not found.' });
+  res.set({ 'Content-Type': media.content_type, 'Content-Length': media.file_size, 'Cache-Control': 'public, max-age=1800', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'cross-origin' });
+  res.send(media.content);
+}));
+
+router.get('/services/:serviceId/media/:mediaId', asyncHandler(async (req, res) => {
+  const serviceId = z.coerce.number().int().positive().safeParse(req.params.serviceId);
+  const mediaId = z.coerce.number().int().positive().safeParse(req.params.mediaId);
+  if (!serviceId.success || !mediaId.success) return res.status(400).json({ error: 'Service image ID is invalid.' });
+  const [[media]] = await databaseFor(req).execute(
+    `SELECT m.content, m.content_type, m.file_size
+     FROM vendor_media m
+     JOIN services s ON s.id = m.service_id
+     JOIN vendor_profiles vp ON vp.id = m.vendor_id
+     JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+     WHERE m.id = ? AND m.service_id = ? AND m.media_type = 'service'
+       AND s.status = 'active' AND vp.verification_status = 'verified'
+     LIMIT 1`,
+    [mediaId.data, serviceId.data],
+  );
+  if (!media) return res.status(404).json({ error: 'Service image not found.' });
+  res.set({ 'Content-Type': media.content_type, 'Content-Length': media.file_size, 'Cache-Control': 'public, max-age=1800', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'cross-origin' });
+  res.send(media.content);
+}));
 
 router.get('/vendors/:id', asyncHandler(async (req, res) => {
   const parsedId = z.string()
@@ -282,22 +342,29 @@ router.get('/vendors/:id', asyncHandler(async (req, res) => {
     .safeParse(req.params.id);
   if (!parsedId.success) return res.status(400).json({ error: 'Invalid vendor ID.' });
 
-  const marketplace = await loadPublicMarketplace();
+  const database = databaseFor(req);
+  const marketplace = await loadPublicMarketplace(database);
   const vendor = getPublicVendorById(marketplace.vendors, Number(parsedId.data));
   if (!vendor) return res.status(404).json({ error: 'Vendor not found.' });
-  const [[reviews], [availability]] = await Promise.all([
-    pool.execute(
-      `SELECT r.rating, r.comment, r.created_at, u.full_name AS customer_name
+  const [[reviews], [ratingRows], [availability]] = await Promise.all([
+    database.execute(
+      `SELECT r.rating, r.comment, r.created_at
        FROM reviews r
        JOIN bookings b ON b.id = r.booking_id
-       JOIN events e ON e.id = b.event_id
-       JOIN users u ON u.id = e.organizer_id
        WHERE b.vendor_id = ? AND r.status = 'published'
        ORDER BY r.created_at DESC
        LIMIT 20`,
       [vendor.id]
     ),
-    pool.execute(
+    database.execute(
+      `SELECT r.rating, COUNT(*) AS total
+       FROM reviews r
+       JOIN bookings b ON b.id = r.booking_id
+       WHERE b.vendor_id = ? AND r.status = 'published'
+       GROUP BY r.rating`,
+      [vendor.id]
+    ),
+    database.execute(
       `SELECT available_date, status
        FROM vendor_availability
        WHERE vendor_id = ? AND available_date >= CURDATE()
@@ -309,10 +376,14 @@ router.get('/vendors/:id', asyncHandler(async (req, res) => {
   return res.json({
     data: {
       ...vendor,
+      ratingDistribution: Object.fromEntries([1, 2, 3, 4, 5].map((rating) => [
+        rating,
+        Number(ratingRows.find((row) => Number(row.rating) === rating)?.total || 0),
+      ])),
       reviews: reviews.map((review) => ({
         rating: Number(review.rating),
         comment: review.comment || '',
-        customerName: review.customer_name || 'Customer',
+        customerName: 'Customer',
         createdAt: review.created_at,
       })),
       availability: availability.map((entry) => ({
@@ -323,12 +394,16 @@ router.get('/vendors/:id', asyncHandler(async (req, res) => {
   });
 }));
 
-router.get('/services', async (req, res) => {
-  const marketplace = await loadPublicMarketplace();
+router.get('/services', asyncHandler(async (req, res) => {
+  const marketplace = await loadPublicMarketplace(databaseFor(req));
   const result = listPublicServices(marketplace.services, {
     search: req.query.search,
     category: req.query.category,
     location: req.query.location,
+    minPrice: req.query.minPrice,
+    maxPrice: req.query.maxPrice,
+    minRating: req.query.minRating,
+    availableOnly: req.query.availableOnly,
     sort: req.query.sort,
     page: req.query.page,
     limit: req.query.limit,
@@ -337,25 +412,24 @@ router.get('/services', async (req, res) => {
     data: result.services,
     pagination: { total: result.total, page: result.page, limit: result.limit, totalPages: result.totalPages },
   });
-});
+}));
 
 router.get('/services/:id', asyncHandler(async (req, res) => {
-  const marketplace = await loadPublicMarketplace();
+  const database = databaseFor(req);
+  const marketplace = await loadPublicMarketplace(database);
   const service = getPublicServiceById(marketplace.services, req.params.id);
   if (!service) return res.status(404).json({ error: 'Service not found.' });
   const [[reviews], [availability]] = await Promise.all([
-    pool.execute(
-      `SELECT r.rating, r.comment, r.created_at, u.full_name AS customer_name
+    database.execute(
+      `SELECT r.rating, r.comment, r.created_at
        FROM reviews r
        JOIN bookings b ON b.id = r.booking_id
-       JOIN events e ON e.id = b.event_id
-       JOIN users u ON u.id = e.organizer_id
        WHERE b.service_id = ? AND r.status = 'published'
        ORDER BY r.created_at DESC
        LIMIT 20`,
       [service.id]
     ),
-    pool.execute(
+    database.execute(
       `SELECT available_date, status
        FROM vendor_availability
        WHERE vendor_id = ? AND available_date >= CURDATE()
@@ -368,7 +442,7 @@ router.get('/services/:id', asyncHandler(async (req, res) => {
   return res.json({
     data: {
       ...service,
-      packages: vendor?.services || [],
+      packages: service.packages || [],
       availability: availability.map((entry) => ({
         date: entry.available_date,
         status: entry.status,
@@ -376,7 +450,7 @@ router.get('/services/:id', asyncHandler(async (req, res) => {
       reviews: reviews.map((review) => ({
         rating: Number(review.rating),
         comment: review.comment || '',
-        customerName: review.customer_name || 'Customer',
+        customerName: 'Customer',
         createdAt: review.created_at,
       })),
     },
@@ -508,7 +582,7 @@ router.get('/events/:id/tickets/manage', requirePlatformUser, async (req, res) =
 });
 
 router.get('/events/mine', requirePlatformUser, async (req, res) => {
-  const [rows] = await pool.execute(
+  const [rows] = await databaseFor(req).execute(
     `SELECT id, organizer_id, title, event_type, description, city, venue, cover_image_url,
             gallery_images, start_date, end_date, budget, guest_count, capacity, notes, status,
             published_at, created_at
@@ -537,7 +611,8 @@ router.post('/events', requirePlatformUser, async (req, res) => {
   }
 
   const event = parsed.data;
-  const eventId = await inTransaction(async (connection) => {
+  const database = databaseFor(req);
+  const eventId = await inDatabaseTransaction(database, async (connection) => {
     const [result] = await connection.execute(
       `INSERT INTO events (
          organizer_id, title, event_type, description, city, venue, cover_image_url, gallery_images,
@@ -645,14 +720,15 @@ router.post('/events/:id/contact', requirePlatformUser, async (req, res) => {
 });
 
 router.patch('/events/:id', requirePlatformUser, async (req, res) => {
-  if (req.platformUser.role !== 'organizer') {
-    return res.status(403).json({ error: 'Only event organizers can edit events.' });
+  if (!['organizer', 'customer'].includes(req.platformUser.role)) {
+    return res.status(403).json({ error: 'Only event owners can edit events.' });
   }
-  const parsed = createEventSchema.partial().safeParse(req.body || {});
+  const parsed = partialEventSchema.safeParse(req.body || {});
   if (!parsed.success || Object.keys(parsed.data || {}).length === 0) {
     return res.status(400).json({ error: parsed.error?.issues[0]?.message || 'Provide valid event changes.' });
   }
-  const [rows] = await pool.execute(
+  const database = databaseFor(req);
+  const [rows] = await database.execute(
     `SELECT id, organizer_id, title, event_type, description, city, venue, cover_image_url,
             gallery_images, start_date, end_date, budget, guest_count, capacity, notes, status
      FROM events WHERE id = ? LIMIT 1`,
@@ -689,7 +765,7 @@ router.patch('/events/:id', requirePlatformUser, async (req, res) => {
   }
   const fields = Object.entries(changes).filter(([, fieldValue]) => fieldValue !== undefined);
   const assignments = fields.map(([field]) => `\`${field}\` = ?`).join(', ');
-  const updateResult = await inTransaction(async (connection) => {
+  const updateResult = await inDatabaseTransaction(database, async (connection) => {
     const [lockedRows] = await connection.execute(
       'SELECT id, organizer_id, capacity FROM events WHERE id = ? FOR UPDATE',
       [current.id]
@@ -736,17 +812,18 @@ router.patch('/events/:id', requirePlatformUser, async (req, res) => {
 });
 
 router.patch('/events/:id/publish', requirePlatformUser, async (req, res) => {
-  const [rows] = await pool.execute('SELECT id, organizer_id, status FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+  const database = databaseFor(req);
+  const [rows] = await database.execute('SELECT id, organizer_id, status FROM events WHERE id = ? LIMIT 1', [req.params.id]);
   const event = rows[0];
   if (!event) return res.status(404).json({ error: 'Event not found.' });
-  if (req.platformUser.role !== 'organizer'
+  if (!['organizer', 'customer'].includes(req.platformUser.role)
     || Number(event.organizer_id) !== Number(req.platformUser.id)) {
     return res.status(403).json({ error: 'You can only publish your own events.' });
   }
   if (event.status === 'cancelled' || event.status === 'completed') {
     return res.status(409).json({ error: 'This event cannot be published.' });
   }
-  await inTransaction(async (connection) => {
+  await inDatabaseTransaction(database, async (connection) => {
     await connection.execute(
       `UPDATE events SET status = 'active', published_at = COALESCE(published_at, NOW()) WHERE id = ?`,
       [event.id]
@@ -764,15 +841,26 @@ router.patch('/events/:id/publish', requirePlatformUser, async (req, res) => {
 });
 
 router.patch('/events/:id/cancel', requirePlatformUser, async (req, res) => {
-  const [rows] = await pool.execute('SELECT id, organizer_id, status FROM events WHERE id = ? LIMIT 1', [req.params.id]);
+  const database = databaseFor(req);
+  const [rows] = await database.execute('SELECT id, organizer_id, status FROM events WHERE id = ? LIMIT 1', [req.params.id]);
   const event = rows[0];
   if (!event) return res.status(404).json({ error: 'Event not found.' });
-  if (req.platformUser.role !== 'organizer'
+  if (!['organizer', 'customer'].includes(req.platformUser.role)
     || Number(event.organizer_id) !== Number(req.platformUser.id)) {
     return res.status(403).json({ error: 'You can only cancel your own events.' });
   }
   if (event.status === 'completed') return res.status(409).json({ error: 'Completed events cannot be cancelled.' });
-  await inTransaction(async (connection) => {
+  if (req.platformUser.role === 'customer') {
+    const [[activeBookings]] = await database.execute(
+      `SELECT COUNT(*) AS total FROM bookings
+       WHERE event_id = ? AND status IN ('requested', 'under_review', 'quoted', 'accepted', 'confirmed', 'in_progress')`,
+      [event.id],
+    );
+    if (Number(activeBookings?.total || 0)) {
+      return res.status(409).json({ error: 'Cancel or resolve active bookings before cancelling this event.' });
+    }
+  }
+  await inDatabaseTransaction(database, async (connection) => {
     await connection.execute(`UPDATE events SET status = 'cancelled' WHERE id = ?`, [event.id]);
     await writeAudit(connection, {
       actorId: req.platformUser.id,
@@ -1446,6 +1534,9 @@ router.patch('/bookings/:id/status', requirePlatformUser, async (req, res, next)
   });
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: 'Invalid booking status.' });
+  if (req.platformUser.role === 'vendor' && parsed.data.status === 'rejected' && parsed.data.reason.trim().length < 5) {
+    return res.status(400).json({ error: 'Provide a rejection reason of at least five characters.' });
+  }
 
   const bookingId = z.coerce.number().int().positive().safeParse(req.params.id);
   if (!bookingId.success) return res.status(400).json({ error: 'Booking ID is invalid.' });
@@ -1612,12 +1703,22 @@ router.post(['/event-package-requests', '/package-requests'], async (req, res) =
   return res.status(201).json({ data: { id: result.insertId, status: 'new' } });
 });
 
-router.post(['/quotes', '/service-quote-requests'], requirePlatformUser, async (req, res) => {
+router.post(['/quotes', '/service-quote-requests'], requirePlatformUser, asyncHandler(async (req, res) => {
   const schema = z.object({
+    vendorId: z.coerce.number().int().positive().optional(),
     serviceId: z.coerce.number().int().positive(),
     eventId: z.coerce.number().int().positive().optional(),
+    requestKey: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i).optional(),
+    eventName: z.string().trim().min(2).max(180).optional(),
+    eventDate: dateTimeSchema.refine((value) => new Date(value).getTime() > Date.now(), 'Event date must be in the future.'),
+    eventLocation: z.string().trim().min(1).max(120),
+    eventType: z.string().trim().min(2).max(80),
+    contactPhone: z.string().trim().min(7).max(30).regex(/^\+?[0-9][0-9 ()-]{5,28}$/),
     guestCount: z.coerce.number().int().positive().max(100000).optional(),
     budget: z.coerce.number().nonnegative().max(100000000).optional(),
+    requiredServices: z.string().trim().max(1000).optional().default(''),
+    additionalRequirements: z.string().trim().max(2000).optional().default(''),
+    message: z.string().trim().max(2000).optional().default(''),
     notes: z.string().trim().max(2000).optional().default(''),
   }).strict();
   if (!['customer', 'organizer'].includes(req.platformUser.role)) {
@@ -1625,56 +1726,99 @@ router.post(['/quotes', '/service-quote-requests'], requirePlatformUser, async (
   }
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid quote request.' });
-
-  const [serviceRows] = await pool.execute(
-    `SELECT s.id, s.title, s.price, s.currency, s.vendor_id
-     FROM services s
-     JOIN vendor_profiles vp ON vp.id = s.vendor_id
-     WHERE s.id = ? AND s.status = 'active' AND vp.verification_status = 'verified'
-     LIMIT 1`,
-    [parsed.data.serviceId]
-  );
-  const service = serviceRows[0];
-  if (!service) return res.status(404).json({ error: 'Service not found.' });
-
-  if (parsed.data.eventId) {
-    const [events] = await pool.execute(
-      'SELECT id FROM events WHERE id = ? AND organizer_id = ? LIMIT 1',
-      [parsed.data.eventId, req.platformUser.id]
+  const result = await inDatabaseTransaction(databaseFor(req), async (connection) => {
+    const [serviceRows] = await connection.execute(
+      `SELECT s.id, s.title, s.price, s.currency, s.vendor_id, vp.user_id AS vendor_user_id
+       FROM services s
+       JOIN vendor_profiles vp ON vp.id = s.vendor_id
+       JOIN users vu ON vu.id = vp.user_id AND vu.status = 'active'
+       WHERE s.id = ? AND s.status = 'active' AND vp.verification_status = 'verified'
+       LIMIT 1`,
+      [parsed.data.serviceId]
     );
-    if (!events.length) return res.status(404).json({ error: 'Event not found.' });
-  }
+    const service = serviceRows[0];
+    if (!service) throw Object.assign(new Error('Service not found.'), { status: 404, expose: true });
+    if (parsed.data.vendorId && Number(service.vendor_id) !== parsed.data.vendorId) {
+      throw Object.assign(new Error('The selected service does not belong to this vendor.'), { status: 400, expose: true });
+    }
 
-  const [result] = await pool.execute(
-    `INSERT INTO quotations (
-       vendor_id, customer_id, event_id, service_description, amount, currency, status, notes
-     ) VALUES (?, ?, ?, ?, ?, ?, 'draft', ?)`,
-    [
-      service.vendor_id,
-      req.platformUser.id,
-      parsed.data.eventId || null,
-      service.title,
-      0,
-      service.currency || 'ETB',
+    if (parsed.data.requestKey) {
+      const [existingRows] = await connection.execute(
+        `SELECT id, service_id, status, customer_id FROM quotations
+         WHERE request_key = ? LIMIT 1`,
+        [parsed.data.requestKey]
+      );
+      if (existingRows.length) {
+        const existing = existingRows[0];
+        if (Number(existing.customer_id) !== Number(req.platformUser.id)) {
+          throw Object.assign(new Error('This request key has already been used.'), { status: 409, expose: true });
+        }
+        if (Number(existing.service_id) !== service.id) {
+          throw Object.assign(new Error('This request key has already been used.'), { status: 409, expose: true });
+        }
+        return {
+          duplicate: true,
+          data: { id: Number(existing.id), status: existing.status, serviceId: service.id, serviceTitle: service.title },
+        };
+      }
+    }
+
+    if (parsed.data.eventId) {
+      const [events] = await connection.execute(
+        'SELECT id FROM events WHERE id = ? AND organizer_id = ? LIMIT 1',
+        [parsed.data.eventId, req.platformUser.id]
+      );
+      if (!events.length) throw Object.assign(new Error('Event not found.'), { status: 404, expose: true });
+    }
+
+    const [created] = await connection.execute(
+      `INSERT INTO quotations (
+         vendor_id, customer_id, event_id, service_id, request_key, requested_event_name,
+         requested_date, requested_location, guest_count, budget, requested_event_type,
+         requested_phone, required_services, additional_requirements, request_message,
+         service_description, amount, currency, status, notes
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'draft', ?)`,
       [
-        parsed.data.guestCount ? `Guest count: ${parsed.data.guestCount}` : '',
-        parsed.data.budget !== undefined ? `Budget: ${parsed.data.budget}` : '',
-        parsed.data.notes,
-      ].filter(Boolean).join('\n') || null,
-    ]
-  );
+        service.vendor_id,
+        req.platformUser.id,
+        parsed.data.eventId || null,
+        service.id,
+        parsed.data.requestKey || null,
+        parsed.data.eventName || null,
+        parsed.data.eventDate ? toMysqlDateTime(parsed.data.eventDate) : null,
+        parsed.data.eventLocation || null,
+        parsed.data.guestCount ?? null,
+        parsed.data.budget ?? null,
+        parsed.data.eventType || null,
+        parsed.data.contactPhone || req.platformUser.phone || null,
+        parsed.data.requiredServices || null,
+        parsed.data.additionalRequirements || null,
+        parsed.data.message || null,
+        service.title,
+        service.currency || 'ETB',
+        parsed.data.notes || null,
+      ]
+    );
+    await createNotification(connection, {
+      userId: service.vendor_user_id,
+      title: 'New service request',
+      message: `${req.platformUser.full_name || 'A customer'} requested ${service.title}${parsed.data.eventName ? ` for ${parsed.data.eventName}` : ''}.`,
+      type: 'quotation',
+      relatedType: 'quotation',
+      relatedId: created.insertId,
+      idempotencyKey: `quotation-request:${created.insertId}:${service.vendor_user_id}`,
+      actorId: req.platformUser.id,
+    });
 
-  return res.status(201).json({
-    data: {
-      id: result.insertId,
-      status: 'draft',
-      serviceId: service.id,
-      serviceTitle: service.title,
-    },
+    return {
+      duplicate: false,
+      data: { id: Number(created.insertId), status: 'draft', serviceId: service.id, serviceTitle: service.title },
+    };
   });
-});
+  return res.status(result.duplicate ? 200 : 201).json({ data: result.data });
+}));
 
-router.patch('/quotations/:id/respond', requirePlatformUser, async (req, res) => {
+router.patch('/quotations/:id/respond', requirePlatformUser, asyncHandler(async (req, res) => {
   if (req.platformUser.role !== 'vendor') {
     return res.status(403).json({ error: 'Vendor access is required.' });
   }
@@ -1691,38 +1835,60 @@ router.patch('/quotations/:id/respond', requirePlatformUser, async (req, res) =>
   if (parsed.data.status === 'sent' && parsed.data.amount === undefined) {
     return res.status(400).json({ error: 'Enter the quote amount before sending a response.' });
   }
-  const [vendors] = await pool.execute(
-    "SELECT id FROM vendor_profiles WHERE user_id = ? AND verification_status = 'verified' LIMIT 1",
-    [req.platformUser.id]
-  );
-  if (!vendors.length) return res.status(404).json({ error: 'Vendor profile not found.' });
-  const [result] = await pool.execute(
-    `UPDATE quotations
-     SET status = ?, amount = COALESCE(?, amount),
-         notes = CONCAT_WS('\n\n', NULLIF(notes, ''), NULLIF(?, '')),
-         valid_until = ?, updated_at = NOW()
-     WHERE id = ? AND vendor_id = ? AND status IN ('draft', 'revision_requested')`,
-    [
-      parsed.data.status,
-      parsed.data.amount ?? null,
-      parsed.data.notes ? `Vendor response: ${parsed.data.notes}` : '',
-      parsed.data.validUntil || null,
-      id,
-      vendors[0].id,
-    ]
-  );
-  if (!result.affectedRows) return res.status(404).json({ error: 'Open quote request not found.' });
-  return res.json({
-    data: {
+  const result = await inDatabaseTransaction(databaseFor(req), async (connection) => {
+    const [rows] = await connection.execute(
+      `SELECT q.id, q.customer_id, q.status, vp.id AS vendor_id
+       FROM quotations q
+       JOIN vendor_profiles vp ON vp.id = q.vendor_id
+       JOIN users vu ON vu.id = vp.user_id AND vu.status = 'active'
+       WHERE q.id = ? AND vp.user_id = ? AND vp.verification_status = 'verified'
+       LIMIT 1 FOR UPDATE`,
+      [id, req.platformUser.id],
+    );
+    const quote = rows[0];
+    if (!quote) throw Object.assign(new Error('Open quote request not found.'), { status: 404, expose: true });
+    if (!['draft', 'revision_requested'].includes(quote.status)) {
+      throw Object.assign(new Error('Open quote request not found.'), { status: 404, expose: true });
+    }
+    await connection.execute(
+      `UPDATE quotations
+       SET status = ?, amount = COALESCE(?, amount),
+           notes = CONCAT_WS('\n\n', NULLIF(notes, ''), NULLIF(?, '')),
+           valid_until = ?, updated_at = NOW()
+       WHERE id = ? AND vendor_id = ?`,
+      [
+        parsed.data.status,
+        parsed.data.amount ?? null,
+        parsed.data.notes ? `Vendor response: ${parsed.data.notes}` : '',
+        parsed.data.validUntil || null,
+        id,
+        quote.vendor_id,
+      ]
+    );
+    if (quote.customer_id) {
+      await createNotification(connection, {
+        userId: quote.customer_id,
+        title: parsed.data.status === 'sent' ? 'Vendor quotation received' : 'Vendor declined request',
+        message: parsed.data.status === 'sent'
+          ? `A vendor responded to quotation #${id}. Review the quotation in your dashboard.`
+          : `A vendor declined quotation request #${id}.`,
+        type: 'quotation',
+        relatedType: 'quotation',
+        relatedId: id,
+        actorId: req.platformUser.id,
+      });
+    }
+    return {
       id,
       status: parsed.data.status,
       amount: parsed.data.amount,
       validUntil: parsed.data.validUntil || null,
-    },
+    };
   });
-});
+  return res.json({ data: result });
+}));
 
-router.post('/register', registrationLimiter, async (req, res) => {
+router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
   const schema = z.object({
     name: z.string().trim().min(2).max(120),
     email: emailSchema,
@@ -1785,9 +1951,9 @@ router.post('/register', registrationLimiter, async (req, res) => {
       user: { id: created.id, name: parsed.data.name, email: normalizedEmail, role: registrationRole },
     },
   });
-});
+}));
 
-router.post('/login', platformLoginLimiter, async (req, res) => {
+router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
   const schema = z.object({
     email: emailSchema,
     password: z.string().min(1).max(128),
@@ -1838,7 +2004,7 @@ router.post('/login', platformLoginLimiter, async (req, res) => {
       },
     },
   });
-});
+}));
 
 router.post('/logout', async (req, res) => {
   const token = req.cookies?.platform_session;

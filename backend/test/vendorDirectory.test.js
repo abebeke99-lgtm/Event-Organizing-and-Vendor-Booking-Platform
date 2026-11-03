@@ -78,6 +78,11 @@ test('search matches vendor names, categories, location and descriptions', () =>
   assert.equal(result.vendors[0].business_name, 'Golden Horizon Catering');
 });
 
+test('search includes published service names and descriptions', () => {
+  const result = listPublicVendors(sampleVendors, { search: 'wedding styling', page: 1, limit: 10 });
+  assert.deepEqual(result.vendors.map((vendor) => vendor.id), [1]);
+});
+
 test('verified-only and location/category filters combine correctly', () => {
   const result = listPublicVendors(sampleVendors, {
     verified: true,
@@ -89,6 +94,26 @@ test('verified-only and location/category filters combine correctly', () => {
 
   assert.equal(result.total, 1);
   assert.equal(result.vendors[0].id, 1);
+});
+
+test('minimum rating and price range filters combine', () => {
+  const result = listPublicVendors(sampleVendors, {
+    minRating: 4.8,
+    minPrice: 20000,
+    maxPrice: 30000,
+    page: 1,
+    limit: 10,
+  });
+  assert.deepEqual(result.vendors.map((vendor) => vendor.id), [2]);
+});
+
+test('availability filter and recent ordering use real vendor fields', () => {
+  const available = listPublicVendors([
+    { ...sampleVendors[0], available: true, createdAt: '2026-03-01T10:00:00Z' },
+    { ...sampleVendors[1], available: false, createdAt: '2026-04-01T10:00:00Z' },
+    { ...sampleVendors[2], verified: true, available: true, createdAt: '2026-05-01T10:00:00Z' },
+  ], { availableOnly: true, sort: 'recently-added', page: 1, limit: 10 });
+  assert.deepEqual(available.vendors.map((vendor) => vendor.id), [3, 1]);
 });
 
 test('sorting and pagination produce stable results', () => {

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -8,8 +9,9 @@ import { loadPublicMarketplace, mapBookingRecord } from '../lib/marketplace.js';
 import { listPublicServices } from '../lib/serviceCatalog.js';
 import { listPublicVendors } from '../lib/vendorCatalog.js';
 import { createRefundRequest, isSafeFinancialNote } from '../lib/paymentManagement.js';
-import { writeAudit } from '../lib/security.js';
-import { notifyAdministrators } from '../lib/notificationService.js';
+import { hashToken, writeAudit } from '../lib/security.js';
+import { createNotification, notifyAdministrators } from '../lib/notificationService.js';
+import { isStrongPassword } from '../lib/authFlow.js';
 import {
   complaintAttachmentParser,
   sanitizeComplaintAttachmentName,
@@ -25,6 +27,7 @@ function ok(res, data) {
 const databaseFor = (req) => req.app?.locals?.database || pool;
 const getRoute = (path, handler) => router.get(path, asyncHandler(handler));
 const postRoute = (path, handler) => router.post(path, asyncHandler(handler));
+const patchRoute = (path, handler) => router.patch(path, asyncHandler(handler));
 const deleteRoute = (path, handler) => router.delete(path, asyncHandler(handler));
 const getPermissionRoute = (path, permission, handler) => router.get(path, requirePermission(permission), asyncHandler(handler));
 const postPermissionRoute = (path, permission, handler) => router.post(path, requirePermission(permission), asyncHandler(handler));
@@ -56,9 +59,10 @@ const catalogQueryFields = {
   limit: z.coerce.number().int().min(1).max(50).optional(),
 };
 
-function catalogQuerySchema(sorts) {
+function catalogQuerySchema(sorts, extraFields = {}) {
   return z.object({
     ...catalogQueryFields,
+    ...extraFields,
     sort: z.enum(sorts).optional(),
   }).strict().superRefine((query, context) => {
   if (query.minPrice !== undefined && query.maxPrice !== undefined && query.maxPrice < query.minPrice) {
@@ -67,7 +71,10 @@ function catalogQuerySchema(sorts) {
   });
 }
 const vendorCatalogQuerySchema = catalogQuerySchema(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az']);
-const serviceCatalogQuerySchema = catalogQuerySchema(['recommended', 'highest-rated', 'price-low', 'price-high', 'alphabetical']);
+const serviceCatalogQuerySchema = catalogQuerySchema(
+  ['recommended', 'highest-rated', 'price-low', 'price-high', 'alphabetical'],
+  { availableOnly: z.enum(['true', 'false', '1', '0']).optional() },
+);
 const favoriteSchema = z.object({ vendorId: z.coerce.number().int().positive() }).strict();
 
 function parseCatalogQuery(req, res, schema) {
@@ -105,7 +112,7 @@ getRoute('/overview', async (req, res) => {
   const database = databaseFor(req);
   const userId = req.platformUser.id;
   const [bookingRows, eventRows, quotationRows, paymentRows, messageRows, notificationRows] = await Promise.all([
-    database.execute('SELECT status FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?', [userId]),
+    database.execute('SELECT b.status FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?', [userId]),
     database.execute("SELECT id FROM events WHERE organizer_id = ? AND start_date >= NOW() AND status <> 'cancelled'", [userId]),
     database.execute(
       `SELECT q.status FROM quotations q
@@ -129,7 +136,8 @@ getRoute('/overview', async (req, res) => {
   return ok(res, {
     totalBookings: bookings.length,
     pendingBookings: bookings.filter((booking) => ['requested', 'under_review', 'quoted'].includes(booking.status)).length,
-    confirmedBookings: bookings.filter((booking) => ['accepted', 'completed'].includes(booking.status)).length,
+    confirmedBookings: bookings.filter((booking) => ['accepted', 'confirmed', 'in_progress'].includes(booking.status)).length,
+    completedBookings: bookings.filter((booking) => booking.status === 'completed').length,
     upcomingEvents: eventRows[0].length,
     pendingQuotations: quotationRows[0].filter((quote) => ['draft', 'sent', 'revision_requested'].includes(quote.status)).length,
     unreadMessages: messageRows[0].length,
@@ -187,7 +195,8 @@ getRoute('/history', async (req, res) => {
 
 getRoute('/events', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT id, title, event_type, city, start_date, end_date, budget, guest_count, status
+        `SELECT id, title, event_type, description, city, venue, cover_image_url, start_date,
+          end_date, budget, guest_count, capacity, notes, status
      FROM events WHERE organizer_id = ? ORDER BY start_date DESC`,
     [req.platformUser.id]
   );
@@ -195,12 +204,18 @@ getRoute('/events', async (req, res) => {
     id: Number(row.id),
     title: row.title,
     type: row.event_type,
+    description: row.description || '',
     city: row.city || '',
+    location: row.city || '',
+    venue: row.venue || '',
+    coverImage: row.cover_image_url || null,
     date: row.start_date,
     startDate: row.start_date,
     endDate: row.end_date,
     budget: row.budget === null ? null : Number(row.budget),
     guestCount: row.guest_count === null ? null : Number(row.guest_count),
+    capacity: row.capacity === null ? null : Number(row.capacity),
+    notes: row.notes || '',
     status: row.status,
   })));
 });
@@ -261,10 +276,71 @@ deletePermissionRoute('/favorites/:vendorId', 'favorites.manage_own', async (req
   return res.status(204).end();
 });
 
+getPermissionRoute('/saved-services', 'favorites.manage_own', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
+    `SELECT s.id, s.title, s.description, s.price, s.currency, vp.business_name,
+            vp.city, sc.name AS category, s.status
+     FROM customer_service_favorites f
+     JOIN services s ON s.id = f.service_id
+     JOIN vendor_profiles vp ON vp.id = s.vendor_id
+     LEFT JOIN service_categories sc ON sc.id = s.category_id
+     WHERE f.user_id = ? AND s.status <> 'archived' AND vp.verification_status = 'verified'
+     ORDER BY f.created_at DESC`,
+    [req.platformUser.id],
+  );
+  return ok(res, rows.map((row) => ({
+    id: Number(row.id),
+    title: row.title,
+    description: row.description || '',
+    price: Number(row.price || 0),
+    currency: row.currency,
+    vendorName: row.business_name,
+    city: row.city || '',
+    category: row.category || 'General',
+    status: row.status,
+  })));
+});
+
+postPermissionRoute('/saved-services', 'favorites.manage_own', async (req, res) => {
+  const parsed = z.object({ serviceId: z.coerce.number().int().positive() }).strict().safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: 'A valid service ID is required.' });
+  const database = databaseFor(req);
+  const [rows] = await database.execute(
+    `SELECT s.id FROM services s JOIN vendor_profiles vp ON vp.id = s.vendor_id
+     WHERE s.id = ? AND s.status = 'active' AND vp.verification_status = 'verified'`,
+    [parsed.data.serviceId],
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Published service not found.' });
+  try {
+    const [result] = await database.execute(
+      'INSERT INTO customer_service_favorites (user_id, service_id) VALUES (?, ?)',
+      [req.platformUser.id, parsed.data.serviceId],
+    );
+    return res.status(201).json({ data: { id: Number(result.insertId), serviceId: parsed.data.serviceId } });
+  } catch (error) {
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'Service is already saved.' });
+    throw error;
+  }
+});
+
+deletePermissionRoute('/saved-services/:serviceId', 'favorites.manage_own', async (req, res) => {
+  const serviceId = z.coerce.number().int().positive().safeParse(req.params.serviceId);
+  if (!serviceId.success) return res.status(400).json({ error: 'Service ID is invalid.' });
+  const [result] = await databaseFor(req).execute(
+    'DELETE FROM customer_service_favorites WHERE user_id = ? AND service_id = ?',
+    [req.platformUser.id, serviceId.data],
+  );
+  if (!result.affectedRows) return res.status(404).json({ error: 'Saved service not found.' });
+  return res.status(204).end();
+});
+
 getRoute('/quotations', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT q.id, q.vendor_id, q.event_id, q.service_description, q.amount, q.currency,
-            q.status, q.valid_until, q.notes, q.created_at, vp.business_name AS vendor_name,
+    `SELECT q.id, q.vendor_id, q.event_id, q.service_id, q.service_description, q.amount, q.currency,
+            q.status, q.valid_until, q.requested_event_name, q.requested_date, q.requested_location,
+            q.guest_count, q.budget, q.requested_event_type, q.requested_phone,
+            q.required_services, q.additional_requirements, q.request_message,
+            q.notes, q.created_at, vp.business_name AS vendor_name,
             e.title AS event_title
      FROM quotations q
      JOIN vendor_profiles vp ON vp.id = q.vendor_id
@@ -278,7 +354,17 @@ getRoute('/quotations', async (req, res) => {
     vendorId: Number(row.vendor_id),
     vendorName: row.vendor_name,
     eventId: row.event_id ? Number(row.event_id) : null,
-    event: row.event_title || null,
+    serviceId: row.service_id === null ? null : Number(row.service_id),
+    event: row.requested_event_name || row.event_title || null,
+    eventDate: row.requested_date || null,
+    eventLocation: row.requested_location || null,
+    guestCount: row.guest_count === null ? null : Number(row.guest_count),
+    budget: row.budget === null ? null : Number(row.budget),
+    eventType: row.requested_event_type || null,
+    contactPhone: row.requested_phone || null,
+    requiredServices: row.required_services || '',
+    additionalRequirements: row.additional_requirements || '',
+    requestMessage: row.request_message || '',
     service: row.service_description,
     status: row.status,
     amount: Number(row.amount || 0),
@@ -287,6 +373,61 @@ getRoute('/quotations', async (req, res) => {
     notes: row.notes || '',
     createdAt: row.created_at,
   })));
+});
+
+patchRoute('/quotations/:id/decision', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  const parsed = z.object({
+    status: z.enum(['accepted', 'declined', 'revision_requested', 'cancelled']),
+    reason: z.string().trim().max(500).optional().default(''),
+  }).strict().safeParse(req.body || {});
+  if (!id.success || !parsed.success) return res.status(400).json({ error: parsed.error?.issues[0]?.message || 'Quotation decision is invalid.' });
+  if (parsed.data.status === 'revision_requested' && parsed.data.reason.length < 5) {
+    return res.status(400).json({ error: 'Describe the requested revision in at least five characters.' });
+  }
+  const database = databaseFor(req);
+  try {
+    await transaction(database, async (connection) => {
+      const [[quote]] = await connection.execute(
+        `SELECT q.id, q.status, q.event_id, q.vendor_id, vp.user_id AS vendor_user_id, e.organizer_id
+         FROM quotations q JOIN vendor_profiles vp ON vp.id = q.vendor_id
+         LEFT JOIN events e ON e.id = q.event_id
+         WHERE q.id = ? AND q.customer_id = ? LIMIT 1 FOR UPDATE`,
+        [id.data, req.platformUser.id],
+      );
+      if (!quote || (quote.event_id && Number(quote.organizer_id) !== Number(req.platformUser.id))) {
+        throw Object.assign(new Error('Quotation not found.'), { status: 404 });
+      }
+      if (parsed.data.status === 'cancelled' ? quote.status !== 'draft' : !['sent', 'revision_requested'].includes(quote.status)) {
+        throw Object.assign(new Error('This quotation is no longer awaiting a decision.'), { status: 409 });
+      }
+      await connection.execute(
+        'UPDATE quotations SET status = ?, updated_at = NOW(), notes = CONCAT_WS(\'\\n\\n\', NULLIF(notes, \'\'), NULLIF(?, \'\')) WHERE id = ?',
+        [parsed.data.status, parsed.data.reason ? `Customer: ${parsed.data.reason}` : '', id.data],
+      );
+      await createNotification(connection, {
+        userId: quote.vendor_user_id,
+        title: 'Quotation update',
+        message: `The customer ${parsed.data.status.replaceAll('_', ' ')} quotation #${id.data}.${parsed.data.reason ? ` ${parsed.data.reason}` : ''}`,
+        type: 'booking',
+        relatedType: 'quotation',
+        relatedId: id.data,
+        actorId: req.platformUser.id,
+      });
+      await writeAudit(connection, {
+        actorId: req.platformUser.id,
+        action: `customer.quotation_${parsed.data.status}`,
+        entityType: 'quotation',
+        entityId: id.data,
+        details: { eventId: quote.event_id === null ? null : Number(quote.event_id) },
+        ip: req.ip,
+      });
+    });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
+  return res.json({ data: { id: id.data, status: parsed.data.status } });
 });
 
 getRoute('/payments', async (req, res) => {
@@ -314,6 +455,56 @@ getRoute('/payments', async (req, res) => {
   })));
 });
 
+getRoute('/refunds', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
+    `SELECT rr.id, rr.payment_id, rr.amount, rr.currency, rr.reason, rr.status,
+            rr.decision_reason, rr.created_at, rr.decided_at, p.provider_reference
+     FROM refund_requests rr
+     JOIN payments p ON p.id = rr.payment_id
+     JOIN bookings b ON b.id = p.booking_id
+     JOIN events e ON e.id = b.event_id
+     WHERE e.organizer_id = ? ORDER BY rr.created_at DESC`,
+    [req.platformUser.id],
+  );
+  return ok(res, rows.map((row) => ({
+    id: Number(row.id),
+    paymentId: Number(row.payment_id),
+    reference: row.provider_reference || null,
+    amount: Number(row.amount),
+    currency: row.currency,
+    reason: row.reason,
+    status: row.status,
+    decisionReason: row.decision_reason || null,
+    createdAt: row.created_at,
+    decidedAt: row.decided_at,
+  })));
+});
+
+getRoute('/refunds', async (req, res) => {
+  const [rows] = await databaseFor(req).execute(
+    `SELECT rr.id, rr.payment_id, rr.amount, rr.currency, rr.reason, rr.status,
+            rr.decision_reason, rr.created_at, rr.decided_at, p.provider_reference
+     FROM refund_requests rr
+     JOIN payments p ON p.id = rr.payment_id
+     JOIN bookings b ON b.id = p.booking_id
+     JOIN events e ON e.id = b.event_id
+     WHERE e.organizer_id = ? ORDER BY rr.created_at DESC`,
+    [req.platformUser.id],
+  );
+  return ok(res, rows.map((row) => ({
+    id: Number(row.id),
+    paymentId: Number(row.payment_id),
+    reference: row.provider_reference || null,
+    amount: Number(row.amount),
+    currency: row.currency,
+    reason: row.reason,
+    status: row.status,
+    decisionReason: row.decision_reason || null,
+    createdAt: row.created_at,
+    decidedAt: row.decided_at,
+  })));
+});
+
 postRoute('/payments/:id/refunds', async (req, res) => {
   const paymentId = z.coerce.number().int().positive().safeParse(req.params.id);
   const parsed = z.object({
@@ -335,21 +526,85 @@ postRoute('/payments/:id/refunds', async (req, res) => {
 
 getRoute('/messages', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT m.id, m.subject, m.body, m.read_at, m.created_at, u.full_name AS sender
+    `SELECT m.id, m.booking_id, m.sender_id, m.recipient_id, m.subject, m.body, m.read_at, m.created_at,
+            u.full_name AS sender, e.id AS event_id, e.title AS event_title, vp.business_name AS vendor_name
      FROM messages m
      JOIN users u ON u.id = m.sender_id
-     WHERE m.recipient_id = ?
+     JOIN bookings b ON b.id = m.booking_id
+     JOIN events e ON e.id = b.event_id
+     JOIN vendor_profiles vp ON vp.id = b.vendor_id
+     WHERE e.organizer_id = ? AND (m.sender_id = ? OR m.recipient_id = ?)
      ORDER BY m.created_at DESC`,
-    [req.platformUser.id]
+    [req.platformUser.id, req.platformUser.id, req.platformUser.id]
   );
   return ok(res, rows.map((row) => ({
     id: Number(row.id),
+    bookingId: Number(row.booking_id),
+    eventId: Number(row.event_id),
+    event: row.event_title,
+    vendor: row.vendor_name,
+    senderId: Number(row.sender_id),
+    recipientId: Number(row.recipient_id),
     sender: row.sender,
     subject: row.subject || '',
     body: row.body,
     read: Boolean(row.read_at),
     createdAt: row.created_at,
   })));
+});
+
+postRoute('/messages', async (req, res) => {
+  const parsed = z.object({
+    bookingId: z.coerce.number().int().positive(),
+    body: z.string().trim().min(1).max(4000),
+  }).strict().safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Message details are invalid.' });
+  const database = databaseFor(req);
+  const [[booking]] = await database.execute(
+    `SELECT b.id, e.title AS event_title, e.organizer_id, vp.user_id AS vendor_user_id, vp.business_name
+     FROM bookings b JOIN events e ON e.id = b.event_id JOIN vendor_profiles vp ON vp.id = b.vendor_id
+     WHERE b.id = ? AND e.organizer_id = ? AND b.status NOT IN ('cancelled', 'rejected') LIMIT 1`,
+    [parsed.data.bookingId, req.platformUser.id],
+  );
+  if (!booking) return res.status(404).json({ error: 'Active booking not found.' });
+  const messageId = await transaction(database, async (connection) => {
+    const [result] = await connection.execute(
+      'INSERT INTO messages (sender_id, recipient_id, booking_id, subject, body) VALUES (?, ?, ?, ?, ?)',
+      [req.platformUser.id, booking.vendor_user_id, booking.id, `Question about ${booking.event_title}`.slice(0, 180), parsed.data.body],
+    );
+    await createNotification(connection, {
+      userId: booking.vendor_user_id,
+      title: 'New customer message',
+      message: `New message about ${booking.event_title}.`,
+      type: 'booking',
+      relatedType: 'booking',
+      relatedId: booking.id,
+      actorId: req.platformUser.id,
+    });
+    await writeAudit(connection, {
+      actorId: req.platformUser.id,
+      action: 'customer.message_sent',
+      entityType: 'booking',
+      entityId: booking.id,
+      details: { messageId: Number(result.insertId) },
+      ip: req.ip,
+    });
+    return Number(result.insertId);
+  });
+  res.status(201).json({ data: { id: messageId, bookingId: Number(booking.id), status: 'sent' } });
+});
+
+postRoute('/messages/:id/read', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'A valid message ID is required.' });
+  const [result] = await databaseFor(req).execute(
+    `UPDATE messages m JOIN bookings b ON b.id = m.booking_id JOIN events e ON e.id = b.event_id
+     SET m.read_at = COALESCE(m.read_at, NOW())
+     WHERE m.id = ? AND m.recipient_id = ? AND e.organizer_id = ?`,
+    [id.data, req.platformUser.id, req.platformUser.id],
+  );
+  if (!result.affectedRows) return res.status(404).json({ error: 'Message not found.' });
+  res.json({ data: { id: id.data, read: true } });
 });
 
 getRoute('/reviews', async (req, res) => {
@@ -579,7 +834,7 @@ getRoute('/complaints/:id/attachments/:attachmentId', async (req, res) => {
 
 getRoute('/notifications', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT id, title, message, status, created_at
+    `SELECT id, title, message, notification_type, related_entity_type, related_entity_id, status, created_at
      FROM notifications
      WHERE user_id = ?
      ORDER BY created_at DESC
@@ -590,9 +845,51 @@ getRoute('/notifications', async (req, res) => {
     id: Number(row.id),
     title: row.title,
     message: row.message,
+    type: row.notification_type,
+    relatedType: row.related_entity_type,
+    relatedId: row.related_entity_id,
     read: row.status === 'read',
     createdAt: row.created_at,
   })));
+});
+
+postRoute('/notifications/:id/read', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'A valid notification ID is required.' });
+  const database = databaseFor(req);
+  const changed = await transaction(database, async (connection) => {
+    const [result] = await connection.execute(
+      `UPDATE notifications SET status = 'read', read_at = COALESCE(read_at, NOW())
+       WHERE id = ? AND user_id = ? AND status <> 'read'`,
+      [id.data, req.platformUser.id],
+    );
+    if (result.affectedRows) {
+      await connection.execute("INSERT INTO notification_history (notification_id, actor_id, action) VALUES (?, ?, 'read')", [id.data, req.platformUser.id]);
+      return true;
+    }
+    const [owned] = await connection.execute('SELECT id FROM notifications WHERE id = ? AND user_id = ?', [id.data, req.platformUser.id]);
+    return owned.length > 0;
+  });
+  if (!changed) return res.status(404).json({ error: 'Notification not found.' });
+  res.json({ data: { id: id.data, read: true } });
+});
+
+postRoute('/notifications/read-all', async (req, res) => {
+  const database = databaseFor(req);
+  const changed = await transaction(database, async (connection) => {
+    await connection.execute(
+      `INSERT INTO notification_history (notification_id, actor_id, action)
+       SELECT id, ?, 'read' FROM notifications WHERE user_id = ? AND status <> 'read'`,
+      [req.platformUser.id, req.platformUser.id],
+    );
+    const [result] = await connection.execute(
+      `UPDATE notifications SET status = 'read', read_at = COALESCE(read_at, NOW())
+       WHERE user_id = ? AND status <> 'read'`,
+      [req.platformUser.id],
+    );
+    return Number(result.affectedRows || 0);
+  });
+  res.json({ data: { changed } });
 });
 
 getRoute('/profile', async (req, res) => {
@@ -603,6 +900,59 @@ getRoute('/profile', async (req, res) => {
     role: req.platformUser.role,
     status: req.platformUser.status,
   });
+});
+
+patchRoute('/profile', async (req, res) => {
+  const parsed = z.object({
+    fullName: z.string().trim().min(2).max(160),
+    phone: z.string().trim().max(40).optional().default(''),
+  }).strict().safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Profile details are invalid.' });
+  await databaseFor(req).execute('UPDATE users SET full_name = ?, phone = ? WHERE id = ?', [parsed.data.fullName, parsed.data.phone || null, req.platformUser.id]);
+  await writeAudit(databaseFor(req), {
+    actorId: req.platformUser.id,
+    action: 'customer.profile_updated',
+    entityType: 'user',
+    entityId: req.platformUser.id,
+    details: { fields: ['full_name', 'phone'] },
+    ip: req.ip,
+  });
+  res.json({ data: { fullName: parsed.data.fullName, email: req.platformUser.email, phone: parsed.data.phone || null, role: req.platformUser.role } });
+});
+
+postRoute('/profile/password', async (req, res) => {
+  const parsed = z.object({
+    currentPassword: z.string().min(1).max(256),
+    newPassword: z.string().min(12).max(16).refine(isStrongPassword),
+  }).strict().safeParse(req.body || {});
+  if (!parsed.success) return res.status(400).json({ error: 'Provide your current password and a 12–16 character new password with uppercase, lowercase, and a number.' });
+  if (parsed.data.currentPassword === parsed.data.newPassword) return res.status(400).json({ error: 'Choose a new password different from your current password.' });
+  const database = databaseFor(req);
+  const currentTokenHash = hashToken(req.cookies.platform_session);
+  try {
+    await transaction(database, async (connection) => {
+      const [[account]] = await connection.execute('SELECT password_hash FROM users WHERE id = ? FOR UPDATE', [req.platformUser.id]);
+      if (!account || !await bcrypt.compare(parsed.data.currentPassword, account.password_hash)) {
+        throw Object.assign(new Error('The current password is incorrect.'), { status: 400 });
+      }
+      const passwordHash = await bcrypt.hash(parsed.data.newPassword, 12);
+      await connection.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, req.platformUser.id]);
+      await connection.execute('DELETE FROM user_sessions WHERE user_id = ? AND token_hash <> ?', [req.platformUser.id, currentTokenHash]);
+      await writeAudit(connection, {
+        actorId: req.platformUser.id,
+        action: 'customer.password_changed',
+        entityType: 'user',
+        entityId: req.platformUser.id,
+        details: { otherSessionsInvalidated: true },
+        ip: req.ip,
+        severity: 'critical',
+      });
+    });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
+  res.json({ message: 'Password changed. Other account sessions have been signed out.' });
 });
 
 export default router;

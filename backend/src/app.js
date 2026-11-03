@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import { createAuthRouter } from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import platformRoutes from './routes/platform.js';
+import organizerRoutes from './routes/organizer.js';
 import aboutRoutes, { adminRouter as adminAboutRoutes } from './routes/about.js';
 import contactRoutes, { adminRouter as adminContactRoutes } from './routes/contact.js';
 import vendorRoutes from './routes/vendor.js';
@@ -22,6 +23,7 @@ import adminNotificationsRoutes from './routes/adminNotifications.js';
 import paymentWebhookRoutes from './routes/paymentWebhook.js';
 import adminReportsRoutes from './routes/adminReports.js';
 import adminAuditLogRoutes from './routes/adminAuditLogs.js';
+import userAvatarRoutes from './routes/userAvatar.js';
 import { requestContextMiddleware } from './lib/requestContext.js';
 
 export function createApp({
@@ -46,7 +48,8 @@ export function createApp({
     emailSender: notificationEmailSender,
   };
   app.locals.paymentProvider = paymentProvider;
-  const localOrigins = process.env.NODE_ENV === 'production'
+  const isProduction = process.env.NODE_ENV === 'production';
+  const localOrigins = isProduction
     ? []
     : ['http://127.0.0.1:5173', 'http://localhost:5173'];
   const configuredOrigins = (process.env.WEB_ORIGIN || '')
@@ -55,7 +58,18 @@ export function createApp({
     .filter(Boolean);
   if (process.env.CLIENT_URL?.trim()) configuredOrigins.push(process.env.CLIENT_URL.trim());
   const allowedOrigins = new Set([...localOrigins, ...configuredOrigins]);
-  const isAllowedOrigin = (requestOrigin) => !requestOrigin || allowedOrigins.has(requestOrigin);
+  const isAllowedOrigin = (requestOrigin) => {
+    if (!requestOrigin || allowedOrigins.has(requestOrigin)) return true;
+    if (isProduction) return false;
+
+    try {
+      const origin = new URL(requestOrigin);
+      return origin.protocol === 'http:'
+        && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
+    } catch {
+      return false;
+    }
+  };
   app.locals.systemSettings = {
     platform_status: process.env.PLATFORM_STATUS || 'open',
     maintenance_mode: process.env.MAINTENANCE_MODE === 'true',
@@ -121,6 +135,7 @@ export function createApp({
       },
     });
   }));
+  app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'), organizerRoutes);
   app.use('/api/platform', requirePlatformAvailable, platformRoutes);
   app.use('/api/about', requirePlatformAvailable, aboutRoutes);
   app.use('/api/contact', requirePlatformAvailable, contactRoutes);
@@ -135,6 +150,7 @@ export function createApp({
     otpHasher,
     otpVerifier,
   }));
+  app.use('/api/users/me/avatar', userAvatarRoutes);
   app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
   app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
   app.use('/api/admin', requireAdmin);

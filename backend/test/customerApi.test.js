@@ -37,6 +37,14 @@ function createDatabase() {
     if (sql.includes('FROM user_sessions s')) {
       return [values[0] === hashToken(sessionToken) ? [{ ...user, permission_keys: permissionKeys.join(',') }] : [], []];
     }
+    if (sql === 'SELECT b.status FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?') {
+      return [[{ status: 'confirmed' }, { status: 'requested' }, { status: 'completed' }], []];
+    }
+    if (sql.startsWith('SELECT id FROM events WHERE organizer_id = ?')) return [[{ id: 1 }], []];
+    if (sql.startsWith('SELECT q.status FROM quotations q')) return [[{ status: 'draft' }], []];
+    if (sql.startsWith('SELECT p.status, p.amount FROM payments p')) return [[{ status: 'pending', amount: '25.50' }], []];
+    if (sql.startsWith('SELECT id FROM messages WHERE recipient_id = ?')) return [[{ id: 1 }], []];
+    if (sql.startsWith("SELECT id FROM notifications WHERE user_id = ?")) return [[{ id: 1 }], []];
     if (sql === "SELECT id FROM vendor_profiles WHERE id = ? AND verification_status = 'verified'") {
       return [vendorRows.some((vendor) => vendor.id === Number(values[0])) ? [{ id: Number(values[0]) }] : [], []];
     }
@@ -69,6 +77,8 @@ function createDatabase() {
           };
         }), []];
     }
+      if (sql.includes('FROM service_packages p') || sql.includes('FROM vendor_media')) return [[], []];
+    if (sql.includes('FROM vendor_availability')) return [[{ vendor_id: 10 }, { vendor_id: 12 }], []];
     throw new Error(`Unexpected test SQL: ${sql}`);
   }
 
@@ -126,6 +136,24 @@ async function request(path, { method = 'GET', body, authenticated = true } = {}
   });
 }
 
+test('customer overview qualifies booking status and returns dashboard counts', async () => {
+  const response = await request('/api/customer/overview');
+
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data, {
+    totalBookings: 3,
+    pendingBookings: 1,
+    confirmedBookings: 1,
+    completedBookings: 1,
+    upcomingEvents: 1,
+    pendingQuotations: 1,
+    unreadMessages: 1,
+    unreadNotifications: 1,
+    outstandingPayments: 25.5,
+  });
+  assert.ok(database.statements.some(({ sql }) => sql.startsWith('SELECT b.status FROM bookings b')));
+});
+
 test('customer marketplace filters and sorts vendors with pagination metadata', async () => {
   const response = await request('/api/customer/vendors?category=Catering&location=Addis&page=2&limit=1&sort=price-low');
 
@@ -144,6 +172,14 @@ test('customer marketplace filters and sorts services with pagination metadata',
   assert.equal(result.data.length, 1);
   assert.equal(result.data[0].title, 'Wedding Buffet');
   assert.deepEqual(result.pagination, { page: 1, limit: 1, total: 2, totalPages: 2 });
+});
+
+test('customer marketplace filters services to vendors with future availability', async () => {
+  const response = await request('/api/customer/services?availableOnly=true&limit=10');
+
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.data.map((service) => service.id), [102, 100]);
 });
 
 test('customer catalog rejects malformed query parameters', async () => {

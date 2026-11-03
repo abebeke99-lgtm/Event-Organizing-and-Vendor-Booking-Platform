@@ -207,6 +207,24 @@ test('administrator profile image validates content and audits successful upload
   assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.profile_photo_removed'));
 });
 
+test('shared avatar endpoint stores and removes the authenticated administrator photo', async () => {
+  const form = new FormData();
+  form.append('avatar', new Blob([imageBytes], { type: 'image/png' }), 'avatar.png');
+  const uploaded = await adminRequest('/api/users/me/avatar', { method: 'POST', body: form });
+  assert.equal(uploaded.status, 200);
+  assert.deepEqual(profile.profile_photo, imageBytes);
+  assert.equal(profile.profile_photo_mime, 'image/png');
+
+  const fetched = await adminRequest('/api/users/me/avatar');
+  assert.equal(fetched.status, 200);
+  assert.equal(fetched.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await fetched.arrayBuffer()), imageBytes);
+
+  const removed = await adminRequest('/api/users/me/avatar', { method: 'DELETE' });
+  assert.equal(removed.status, 204);
+  assert.equal(profile.profile_photo, null);
+});
+
 test('password change requires the current password and rotates administrator sessions', async () => {
   const wrongPassword = await adminRequest('/api/admin/profile/password', {
     method: 'POST',

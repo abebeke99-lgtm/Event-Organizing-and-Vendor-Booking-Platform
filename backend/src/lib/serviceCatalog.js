@@ -29,7 +29,9 @@ export function normalizeServiceRecord(service = {}) {
   record.category = sanitizeText(record.category || record.service_category || 'General');
   record.city = sanitizeText(record.city || record.location || 'Addis Ababa');
   record.description = sanitizeText(record.description || record.summary || '');
-  record.price = Number(record.price ?? record.base_price ?? 0) || 0;
+  const price = record.price ?? record.base_price;
+  record.price = price === null || price === undefined || price === '' ? null : Number(price);
+  if (!Number.isFinite(record.price)) record.price = null;
   record.currency = sanitizeText(record.currency || 'ETB', 'ETB').toUpperCase();
   record.rating = Number(record.rating ?? record.average_rating ?? 0) || 0;
   record.reviewCount = Number(record.reviewCount ?? record.reviews_count ?? 0) || 0;
@@ -46,6 +48,7 @@ export function buildServiceFilters(raw = {}) {
   const minPrice = Number.isFinite(Number(raw.minPrice)) ? Math.max(0, Number(raw.minPrice)) : 0;
   const maxPrice = Number.isFinite(Number(raw.maxPrice)) ? Math.max(minPrice, Number(raw.maxPrice)) : 0;
   const minRating = Number.isFinite(Number(raw.minRating)) ? Math.max(0, Number(raw.minRating)) : 0;
+  const availableOnly = raw.availableOnly === true || raw.availableOnly === 'true' || raw.availableOnly === '1';
   const sort = sanitizeText(raw.sort, 'recommended').toLowerCase();
   const page = Number.isFinite(Number(raw.page)) ? Math.max(1, Number(raw.page)) : 1;
   const limit = Number.isFinite(Number(raw.limit)) ? Math.max(1, Math.min(50, Number(raw.limit))) : 6;
@@ -57,6 +60,7 @@ export function buildServiceFilters(raw = {}) {
     minPrice,
     maxPrice,
     minRating,
+    availableOnly,
     sort: ['recommended', 'highest-rated', 'price-low', 'price-high', 'alphabetical'].includes(sort) ? sort : 'recommended',
     page,
     limit,
@@ -79,9 +83,10 @@ export function listPublicServices(services = [], filters = {}) {
     if (options.search && !haystack.includes(options.search)) return false;
     if (options.category && !matchesCategoryName(service.category, options.category)) return false;
     if (options.location && !service.city.toLowerCase().includes(options.location)) return false;
-    if (options.minPrice && service.price < options.minPrice) return false;
-    if (options.maxPrice && service.price > options.maxPrice) return false;
+    if (options.minPrice && (service.price === null || service.price < options.minPrice)) return false;
+    if (options.maxPrice && (service.price === null || service.price > options.maxPrice)) return false;
     if (options.minRating && service.rating < options.minRating) return false;
+    if (options.availableOnly && service.available !== true) return false;
     return true;
   });
 
@@ -90,9 +95,13 @@ export function listPublicServices(services = [], filters = {}) {
       case 'highest-rated':
         return (b.rating || 0) - (a.rating || 0) || (b.reviewCount || 0) - (a.reviewCount || 0) || a.title.localeCompare(b.title);
       case 'price-low':
-        return (a.price || 0) - (b.price || 0) || (b.rating || 0) - (a.rating || 0);
+        return (a.price === null ? 1 : 0) - (b.price === null ? 1 : 0)
+          || (a.price ?? 0) - (b.price ?? 0)
+          || (b.rating || 0) - (a.rating || 0);
       case 'price-high':
-        return (b.price || 0) - (a.price || 0) || (b.rating || 0) - (a.rating || 0);
+        return (a.price === null ? 1 : 0) - (b.price === null ? 1 : 0)
+          || (b.price ?? 0) - (a.price ?? 0)
+          || (b.rating || 0) - (a.rating || 0);
       case 'alphabetical':
         return a.title.localeCompare(b.title) || (b.rating || 0) - (a.rating || 0);
       case 'recommended':

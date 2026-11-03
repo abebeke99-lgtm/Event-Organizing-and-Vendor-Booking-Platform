@@ -1,0 +1,49 @@
+.organizer-workspace { display: grid; gap: 16px; min-width: 0; }
+.organizer-workspace-heading { margin-bottom: 0; }
+.organizer-workspace-filters { display: grid; grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(130px, 1fr)); gap: 12px; align-items: end; padding: 16px; }
+.organizer-search { display: grid; gap: 5px; color: var(--muted, #667085); font-size: 12px; }
+.organizer-search > div { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 0 10px; border: 1px solid var(--border, #d0d5dd); border-radius: 6px; background: var(--surface, #fff); }
+.organizer-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; }
+.organizer-market-list { display: grid; gap: 10px; }
+.organizer-market-item { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px; }
+.organizer-market-item h3 { margin: 8px 0 4px; font-size: 17px; }
+.organizer-market-item p { margin: 5px 0; color: var(--muted, #667085); }
+.organizer-market-item small { display: block; margin-top: 6px; color: var(--muted, #667085); }
+.organizer-market-actions, .organizer-quote-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.organizer-quote-actions { max-width: 340px; justify-content: flex-end; }
+.organizer-quote-actions .field { min-width: 180px; }
+.organizer-form { display: grid; gap: 12px; align-content: start; padding: 18px; }
+.organizer-form h3 { margin: 0 0 4px; }
+.organizer-form .field, .organizer-compact-field { display: grid; gap: 5px; min-width: 150px; color: var(--muted, #667085); font-size: 12px; }
+.organizer-form input, .organizer-form select, .organizer-form textarea, .organizer-compact-field select { min-width: 0; min-height: 40px; }
+.organizer-inline-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.organizer-calendar-toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.organizer-calendar-nav { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.organizer-calendar-nav strong { min-width: 180px; text-align: center; }
+.organizer-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--border, #d0d5dd); border-left: 1px solid var(--border, #d0d5dd); }
+.organizer-calendar-day { display: grid; align-content: start; gap: 6px; min-width: 0; min-height: 112px; padding: 8px; border-right: 1px solid var(--border, #d0d5dd); border-bottom: 1px solid var(--border, #d0d5dd); background: var(--surface, #fff); }
+.organizer-calendar-day.outside-month { background: var(--surface-muted, #f8fafc); color: var(--muted, #667085); }
+.organizer-calendar-event { display: grid; gap: 2px; min-width: 0; padding: 6px; border: 0; border-radius: 4px; background: var(--surface-muted, #eef2f6); color: var(--text, #101828); text-align: left; cursor: pointer; }
+.organizer-calendar-event span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.organizer-calendar-event small { color: var(--muted, #667085); }
+.organizer-calendar-grid.day { grid-template-columns: minmax(0, 1fr); }
+.organizer-calendar-grid.week { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.organizer-task, .organizer-message { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; }
+.organizer-task > div, .organizer-message > div { min-width: 0; }
+.organizer-task p, .organizer-message p { margin: 5px 0; overflow-wrap: anywhere; }
+.organizer-task small, .organizer-message small { display: block; margin-top: 4px; color: var(--muted, #667085); }
+.organizer-message.unread { border-left: 3px solid var(--primary, #286a8b); }
+.organizer-over-budget { color: var(--danger, #b42318); }
+@media (max-width: 900px) {
+  .organizer-workspace-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .organizer-market-item { align-items: flex-start; }
+  .organizer-calendar-day { min-height: 88px; padding: 5px; }
+}
+@media (max-width: 620px) {
+  .organizer-workspace-filters { grid-template-columns: minmax(0, 1fr); }
+  .organizer-market-item, .organizer-task, .organizer-message { align-items: stretch; flex-direction: column; }
+  .organizer-market-actions, .organizer-quote-actions { justify-content: flex-start; }
+  .organizer-calendar-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .organizer-calendar-grid.day { grid-template-columns: minmax(0, 1fr) !important; }
+  .organizer-calendar-day { min-height: 86px; }
+}

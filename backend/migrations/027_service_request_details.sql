@@ -1,0 +1,17 @@
+ALTER TABLE quotations
+  ADD COLUMN IF NOT EXISTS service_id BIGINT UNSIGNED NULL AFTER event_id,
+  ADD COLUMN IF NOT EXISTS request_key VARCHAR(64) NULL AFTER service_id,
+  ADD COLUMN IF NOT EXISTS requested_event_name VARCHAR(180) NULL AFTER request_key,
+  ADD COLUMN IF NOT EXISTS requested_date DATETIME NULL AFTER requested_event_name,
+  ADD COLUMN IF NOT EXISTS requested_location VARCHAR(120) NULL AFTER requested_date,
+  ADD COLUMN IF NOT EXISTS guest_count INT UNSIGNED NULL AFTER requested_location,
+  ADD COLUMN IF NOT EXISTS budget DECIMAL(12,2) NULL AFTER guest_count,
+  ADD COLUMN IF NOT EXISTS requested_event_type VARCHAR(80) NULL AFTER budget,
+  ADD COLUMN IF NOT EXISTS requested_phone VARCHAR(30) NULL AFTER requested_event_type,
+  ADD COLUMN IF NOT EXISTS required_services TEXT NULL AFTER requested_phone,
+  ADD COLUMN IF NOT EXISTS additional_requirements TEXT NULL AFTER required_services,
+  ADD COLUMN IF NOT EXISTS request_message TEXT NULL AFTER additional_requirements,
+  MODIFY COLUMN status ENUM('draft','sent','revision_requested','accepted','declined','expired','cancelled') NOT NULL DEFAULT 'sent',
+  ADD UNIQUE KEY uq_quotations_request_key (request_key),
+  ADD KEY idx_quotations_service_status (service_id, status),
+  ADD CONSTRAINT fk_quotations_service FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE SET NULL;

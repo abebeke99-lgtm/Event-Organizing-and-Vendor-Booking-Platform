@@ -1,17 +1,23 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import apiClient from './api/axios.js';
-import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, Mail, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
+import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, Mail, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, PanelLeftClose, PanelLeftOpen, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate } from './eventUtils.js';
 import { setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
 import { setTheme, useTheme } from './theme.js';
 import { getDashboardDateRange } from './dashboardUtils.js';
+import { summarizeOrganizerDashboard } from './organizerDashboardUtils.js';
 import { createAuthSessionLoader } from './authSession.js';
+import { adminPathForSlug, adminSlugFromPath } from './adminNavigation.js';
 import { withStableKeys } from './listKeys.js';
 import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
+import { createDemoDataService } from './demoData.js';
 import { EventDetailsPage, MyEventBookingsPage, OrganizerEventsManager } from './EventsExperience.jsx';
+import OrganizerWorkspace from './OrganizerWorkspace.jsx';
+import VendorWorkspace from './VendorWorkspace.jsx';
+import CustomerWorkspace from './CustomerWorkspace.jsx';
 import AdminUserManagement from './AdminUserManagement.jsx';
 import AdminRoleManagement from './AdminRoleManagement.jsx';
 import AdminVendorVerification from './AdminVendorVerification.jsx';
@@ -22,8 +28,11 @@ import AdminPaymentManagement from './AdminPaymentManagement.jsx';
 import AdminNotifications from './AdminNotifications.jsx';
 import AdminAuditLogs from './AdminAuditLogs.jsx';
 import AdminProfile from './AdminProfile.jsx';
+import AdminSystemSettings from './AdminSystemSettings.jsx';
+import './vendorDirectory.css';
 
 const DEMO_AUTH_ENABLED = import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTH === 'true';
+const demoDataService = createDemoDataService({ getSession: readDemoSession });
 const menu = [
   ['overview','Dashboard Overview',LayoutDashboard], ['users','User Management',Users], ['roles','Role and Permission Management',Shield],
   ['vendors','Vendor Verification',BadgeCheck], ['categories','Service Category Management',Tags], ['events','Event Management',CalendarDays],
@@ -53,7 +62,6 @@ const modules = {
   'audit-logs':{title:'Audit Logs', endpoint:'audit-logs', columns:['id','actor_id','action','entity_type','entity_id','details','ip_address','created_at'], readonly:true},
 };
 const permissions = ['users:read','users:write','vendors:verify','events:write','bookings:moderate','payments:read','reviews:moderate','categories:write','reports:read','notifications:write'];
-const slugPath = (slug) => slug === 'overview' ? '/admin' : `/admin/${slug}`;
 const dashboardPathForRole = (role) => role === 'admin' ? '/admin' : `/${role}/dashboard`;
 
 const dashboardMenuIcons = {
@@ -82,7 +90,7 @@ const dashboardMenuIcons = {
   reports: ChartNoAxesCombined,
 };
 
-function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, onToggle, collapsed, mobileOpen, onCloseMobile, language, className = '' }) {
+function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileOpen, onCloseMobile, language, className = '' }) {
   const sidebarRef = useRef(null);
   const [expandedGroups, setExpandedGroups] = useState(() => Object.fromEntries(groups.map((group) => [group.id, true])));
   const [flyout, setFlyout] = useState(null);
@@ -130,7 +138,6 @@ function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, onToggle,
   }
 
   return <aside ref={sidebarRef} className={`sidebar role-dashboard-sidebar ${className} ${mobileOpen ? 'open' : ''}`} aria-label={`${roleTitle} navigation`}>
-    <button className="sidebar-collapse-toggle" type="button" onClick={onToggle} aria-label={collapsed ? 'Expand dashboard navigation' : 'Collapse dashboard navigation'} aria-expanded={!collapsed} title={collapsed ? 'Expand navigation' : 'Collapse navigation'}><span className="desktop-sidebar-chevron" aria-hidden="true">{collapsed ? <ChevronRight size={18}/> : <ChevronLeft size={18}/>}</span></button>
     <div className="sidebar-brand"><div className="brand-mark small" aria-label="EventFlow">EF</div><div className="sidebar-brand-copy"><strong>EventFlow</strong><span>{roleTitle}</span></div></div>
     <nav aria-label="Dashboard sections">{groups.map((group) => <div className={`nav-group ${group.flyoutWhenCollapsed ? 'has-collapsed-flyout' : 'nav-group-flat'}`} key={group.id}>
       <button className="nav-group-toggle" type="button" title={group.label} data-tooltip={group.label} aria-label={`${group.label} navigation section`} aria-expanded={collapsed && !mobileOpen ? flyout?.groupId === group.id : Boolean(expandedGroups[group.id])} onClick={(event) => toggleGroup(event, group)}><span>{group.label}</span><span className="nav-group-indicator" aria-hidden="true">{collapsed && !mobileOpen ? <ChevronRight size={15}/> : expandedGroups[group.id] ? '−' : '+'}</span></button>
@@ -156,10 +163,6 @@ const toDemoUser = (profile) => {
 function navigateBrowserPath(path) {
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
-}
-
-function DemoModeBanner() {
-  return null;
 }
 
 async function api(path, options={}) {
@@ -231,45 +234,7 @@ async function api(path, options={}) {
         },
       };
     }
-    if (method !== 'GET') {
-      let data = {};
-      if (options.body) {
-        try {
-          data = JSON.parse(options.body);
-        } catch {
-          throw new Error('Invalid demo request data.');
-        }
-      }
-      return { data: { ...data, id: `demo-${Date.now()}` }, message: 'Demo mode: changes are not sent to a server.' };
-    }
-    if (route === '/admin/dashboard/overview') {
-      return {
-        data: {
-          users: { total_users: 0 },
-          vendors: { total_vendors: 0, verified_vendors: 0, pending_vendors: 0 },
-          events: { total_events: 0, published_events: 0, upcoming_events: 0 },
-          bookings: { total_bookings: 0, pending_bookings: 0, confirmed_bookings: 0, completed_bookings: 0, cancelled_bookings: 0 },
-          payments: { total_payments: 0, successful_payments: 0, pending_payments: 0, refund_requests: 0 },
-          complaints: { open_complaints: 0, total_complaints: 0 },
-          reviews: { total_reviews: 0 },
-          bookingTrend: [],
-          eventCategories: [],
-          revenueByCurrency: [],
-          bookingStatuses: [],
-          recentBookings: [],
-          recentVendorRequests: [],
-          recentComplaints: [],
-          recentReviews: [],
-        },
-      };
-    }
-    if (route === '/platform/overview' || route === '/customer/overview' || route === '/vendor/overview') {
-      return { data: {} };
-    }
-    if (route === '/about' || route === '/contact' || route === '/vendor/profile' || route === '/vendor/account' || route === '/customer/profile') {
-      return { data: {} };
-    }
-    return { data: [], pagination: { page: 1, total: 0, totalPages: 1, limit: 12 } };
+    return demoDataService.request(path, options);
   }
   try {
     const response = await apiClient.request({
@@ -409,7 +374,9 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   const role = user?.role || 'customer';
   const dashboardPath = dashboardPathForRole(role);
   const displayName = user?.name || user?.full_name || user?.email || 'EventHub User';
-  const notificationEndpoint = isAuthenticated ? PUBLIC_NOTIFICATION_ENDPOINTS[role] : null;
+  const notificationEndpoint = isAuthenticated && authSessionState.status === 'authenticated'
+    ? PUBLIC_NOTIFICATION_ENDPOINTS[role]
+    : null;
   const unreadCount = notificationItems.filter((item) => !(item.read || item.status === 'read')).length;
 
   useEffect(() => {
@@ -539,7 +506,7 @@ function ProfilePhotoDisplay({ user, isAdmin = false }) {
   </div>;
 }
 
-function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, sidebarExpanded, isAdmin = false }) {
+function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sidebarExpanded, isAdmin = false, isOrganizer = false, isVendor = false, isCustomer = false }) {
   const language = useLanguage();
   const [activePanel, setActivePanel] = useState('');
   const [viewingPhoto, setViewingPhoto] = useState(false);
@@ -562,13 +529,80 @@ function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, sideba
   const photoEndpoint = isAdmin || user.role === 'admin' || /admin/i.test(roleNames)
     ? '/admin/profile/photo'
     : '/platform/profile/photo';
-  const notifications = [
+  const hasServerNotifications = isAdmin || isOrganizer || isVendor || isCustomer;
+  const localNotifications = [
     { id: 'booking', title: 'Booking update', message: 'Your recent booking activity is ready to review.', unread: true },
     { id: 'profile', title: 'Profile reminder', message: 'Keep your account details up to date.', unread: true },
     { id: 'welcome', title: 'Welcome to EventHub', message: 'Explore your dashboard and discover what you can do.', unread: false },
   ];
-  const [items, setItems] = useState(notifications);
+  const [items, setItems] = useState(() => hasServerNotifications ? [] : localNotifications);
+  const [notificationLoading, setNotificationLoading] = useState(hasServerNotifications);
+  const [notificationBusy, setNotificationBusy] = useState(false);
+  const [notificationError, setNotificationError] = useState('');
   const unreadCount = items.filter((item) => item.unread).length;
+
+  const loadAdminNotifications = useCallback(async () => {
+    if (!hasServerNotifications) return;
+    setNotificationLoading(true);
+    setNotificationError('');
+    try {
+      const endpoint = isAdmin
+        ? '/admin/notifications?page=1&pageSize=5&sortBy=created_at&sortDirection=desc'
+        : isOrganizer ? '/platform/organizer/notifications' : isVendor ? '/vendor/notifications' : '/customer/notifications';
+      const response = await api(endpoint);
+      setItems((response.data || []).map((item) => ({ ...item, unread: !item.read })));
+    } catch (issue) {
+      setNotificationError(issue.message || 'Notifications could not be loaded.');
+    } finally {
+      setNotificationLoading(false);
+    }
+  }, [hasServerNotifications, isAdmin, isOrganizer, isVendor]);
+
+  useEffect(() => {
+    if (hasServerNotifications) loadAdminNotifications();
+  }, [hasServerNotifications, loadAdminNotifications]);
+
+  async function markNotificationRead(item) {
+    if (!item.unread) return;
+    if (!hasServerNotifications) {
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry));
+      return;
+    }
+    setNotificationBusy(true);
+    setNotificationError('');
+    try {
+      const endpoint = isAdmin
+        ? `/admin/notifications/${item.id}/read`
+        : isOrganizer ? `/platform/organizer/notifications/${item.id}/read`
+          : isVendor ? `/vendor/notifications/${item.id}/read` : `/customer/notifications/${item.id}/read`;
+      await api(endpoint, { method: 'POST' });
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry));
+    } catch (issue) {
+      setNotificationError(issue.message || 'The notification could not be marked as read.');
+    } finally {
+      setNotificationBusy(false);
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    if (!hasServerNotifications) {
+      setItems((current) => current.map((item) => ({ ...item, unread: false })));
+      return;
+    }
+    setNotificationBusy(true);
+    setNotificationError('');
+    try {
+      const endpoint = isAdmin ? '/admin/notifications/read-all'
+        : isOrganizer ? '/platform/organizer/notifications/read-all'
+          : isVendor ? '/vendor/notifications/read-all' : '/customer/notifications/read-all';
+      await api(endpoint, { method: 'POST' });
+      setItems((current) => current.map((item) => ({ ...item, unread: false })));
+    } catch (issue) {
+      setNotificationError(issue.message || 'Notifications could not be marked as read.');
+    } finally {
+      setNotificationBusy(false);
+    }
+  }
 
   function updateAvatar(url, ownsObjectUrl = false, refreshProfileViews = false) {
     if (avatarObjectUrlRef.current && avatarObjectUrlRef.current !== url) {
@@ -731,17 +765,18 @@ function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, sideba
     setViewingPhoto(false);
   }
 
-  return <header className="dashboard-header" ref={headerRef}>
-    <button className="icon-button dashboard-menu-toggle" type="button" onClick={onToggleSidebar} aria-label={sidebarExpanded ? 'Close dashboard navigation' : 'Open dashboard navigation'} aria-expanded={sidebarExpanded}><Menu size={19}/></button>
+  return <header className={`dashboard-header ${sidebarExpanded ? 'sidebar-expanded' : ''}`} ref={headerRef}>
+    <button className="icon-button dashboard-sidebar-toggle" type="button" onClick={onToggleSidebar} aria-label={sidebarExpanded ? 'Collapse dashboard navigation' : 'Expand dashboard navigation'} aria-expanded={sidebarExpanded} title={sidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}>{sidebarExpanded ? <PanelLeftClose size={19}/> : <PanelLeftOpen size={19}/>}</button>
     <div className="dashboard-header-actions">
       <LanguageSelector/>
       <ThemeToggle/>
       <div className="dashboard-popover-anchor">
-        <button className="icon-button notification-toggle" type="button" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} aria-expanded={activePanel === 'notifications'} onClick={() => setActivePanel((current) => current === 'notifications' ? '' : 'notifications')}><Bell size={19}/>{unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}</button>
+        <button className="icon-button notification-toggle" type="button" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ''}`} aria-expanded={activePanel === 'notifications'} onClick={() => { const opening = activePanel !== 'notifications'; setActivePanel(opening ? 'notifications' : ''); if (opening && hasServerNotifications) loadAdminNotifications(); }}><Bell size={19}/>{unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}</button>
         {activePanel === 'notifications' && <section className="dashboard-popover notification-popover" aria-label="Notifications">
-          <div className="popover-heading"><div><strong>Notifications</strong><span>{unreadCount ? `${unreadCount} unread` : 'All caught up'}</span></div><button className="text-action" type="button" onClick={() => setItems((current) => current.map((item) => ({ ...item, unread: false })))} disabled={!unreadCount}>Mark all read</button></div>
-          {items.length ? <div className="notification-list">{items.map((item) => <article className={`notification-item ${item.unread ? 'unread' : ''}`} key={item.id}><div><strong>{item.title}</strong><p>{item.message}</p></div>{item.unread && <button className="text-action" type="button" onClick={() => setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry))}>Mark read</button>}</article>)}</div> : <div className="notification-empty"><Bell size={20}/><strong>No notifications</strong><span>You’re all caught up.</span></div>}
-          <div className="popover-footer"><button className="text-action subtle-danger" type="button" onClick={() => setItems([])} disabled={!items.length}>Clear notifications</button></div>
+          <div className="popover-heading"><div><strong>Notifications</strong><span>{unreadCount ? `${unreadCount} unread` : 'All caught up'}</span></div><button className="text-action" type="button" onClick={markAllNotificationsRead} disabled={!unreadCount || notificationBusy}>Mark all read</button></div>
+          {notificationError && <div className="alert error" role="alert">{notificationError}</div>}
+          {notificationLoading ? <div className="notification-empty" role="status">Loading notifications...</div> : items.length ? <div className="notification-list">{items.map((item) => <article className={`notification-item ${item.unread ? 'unread' : ''}`} key={item.id}><div>{(isOrganizer || isVendor || isCustomer) && item.relatedType ? <button className="organizer-notification-link" type="button" onClick={() => { if (item.unread) markNotificationRead(item); setActivePanel(''); onNavigate?.(item.relatedType === 'booking' ? 'bookings' : item.relatedType === 'quotation' ? 'quotations' : item.relatedType === 'review' ? 'reviews' : 'events'); }}>{item.title}<ExternalLink size={13}/></button> : <strong>{item.title}</strong>}<p>{item.message}</p></div>{item.unread && <button className="text-action" type="button" onClick={() => markNotificationRead(item)} disabled={notificationBusy}>Mark read</button>}</article>)}</div> : <div className="notification-empty"><Bell size={20}/><strong>No notifications</strong><span>You’re all caught up.</span></div>}
+          <div className="popover-footer">{hasServerNotifications ? <button className="text-action" type="button" onClick={() => { setActivePanel(''); onNavigate?.('notifications'); }}>View all notifications</button> : <button className="text-action subtle-danger" type="button" onClick={() => setItems([])} disabled={!items.length}>Clear notifications</button>}</div>
         </section>}
       </div>
       <button ref={photoButtonRef} className="dashboard-photo-toggle" type="button" aria-label={`${translate('profilePhoto', language)}: ${name}`} title={translate('profilePhoto', language)} onClick={() => { setActivePanel(''); setPhotoError(''); setPhotoSuccess(''); setViewingPhoto(true); }}>
@@ -880,11 +915,13 @@ function BackToTopButton() {
   return <button type="button" className="back-to-top" aria-label="Back to top" onClick={() => window.scrollTo({ top: 0, behavior: prefersReducedMotion ? 'auto' : 'smooth' })}>↑</button>;
 }
 
-function SearchResultsPage({ initialQuery, onNavigate }) {
+function SearchResultsPage({ initialQuery, initialCategory = '', initialLocation = '', onNavigate }) {
   const [query, setQuery] = useState(initialQuery);
+  const [category, setCategory] = useState(initialCategory);
+  const [location, setLocation] = useState(initialLocation);
   const [results, setResults] = useState({ events: [], vendors: [], services: [], categories: [] });
   const [errors, setErrors] = useState({});
-  const [loading, setLoading] = useState(Boolean(initialQuery));
+  const [loading, setLoading] = useState(Boolean(initialQuery || initialCategory || initialLocation));
   const [searchError, setSearchError] = useState('');
   const [retryKey, setRetryKey] = useState(0);
 
@@ -894,7 +931,7 @@ function SearchResultsPage({ initialQuery, onNavigate }) {
 
   useEffect(() => {
     const term = initialQuery.trim();
-    if (!term) {
+    if (!term && !initialCategory && !initialLocation) {
       setLoading(false);
       setResults({ events: [], vendors: [], services: [], categories: [] });
       setErrors({});
@@ -904,12 +941,19 @@ function SearchResultsPage({ initialQuery, onNavigate }) {
     let active = true;
     setLoading(true);
     setErrors({});
-    const encoded = encodeURIComponent(term);
+    const params = new URLSearchParams();
+    if (term) params.set('search', term);
+    if (initialCategory) params.set('category', initialCategory);
+    if (initialLocation) params.set('location', initialLocation);
+    params.set('page', '1');
+    params.set('limit', '6');
+    const listingQuery = params.toString();
+    const categorySearch = new URLSearchParams({ search: term || initialCategory }).toString();
     Promise.allSettled([
-      api(`/platform/events?search=${encoded}&page=1&limit=6`),
-      api(`/platform/vendors?search=${encoded}&page=1&limit=6`),
-      api(`/platform/services?search=${encoded}&page=1&limit=6`),
-      api(`/platform/categories?search=${encoded}`),
+      api(`/platform/events?${listingQuery}`),
+      api(`/platform/vendors?${listingQuery}`),
+      api(`/platform/services?${listingQuery}`),
+      api(`/platform/categories?${categorySearch}`),
     ]).then((responses) => {
       if (!active) return;
       const keys = ['events', 'vendors', 'services', 'categories'];
@@ -931,17 +975,21 @@ function SearchResultsPage({ initialQuery, onNavigate }) {
     });
 
     return () => { active = false; };
-  }, [initialQuery, retryKey]);
+  }, [initialQuery, initialCategory, initialLocation, retryKey]);
 
   function submitSearch(event) {
     event.preventDefault();
     const term = query.trim();
-    if (!term) {
-      setSearchError('Enter a search term.');
+    if (!term && !category && !location) {
+      setSearchError('Enter a search term or choose a category or location.');
       return;
     }
     setSearchError('');
-    onNavigate(`/search?q=${encodeURIComponent(term)}`);
+    const params = new URLSearchParams();
+    if (term) params.set('q', term);
+    if (category) params.set('category', category);
+    if (location) params.set('location', location);
+    onNavigate(`/search?${params.toString()}`);
   }
 
   const sections = [
@@ -951,16 +999,21 @@ function SearchResultsPage({ initialQuery, onNavigate }) {
     { key: 'categories', title: 'Categories', getTitle: (item) => item.name, getPath: (item) => `/categories/${encodeURIComponent(item.slug || item.name)}` },
   ];
   const hasResults = Object.values(results).some((items) => items.length > 0);
+  const categoryOptions = results.categories;
+  const searchLocations = [...new Set([...results.events, ...results.vendors, ...results.services].map((item) => item.city || item.location).filter(Boolean))].sort();
+  const hasSearch = Boolean(initialQuery || initialCategory || initialLocation);
 
   return <main className="page-shell"><div className="content-stack">
     <div className="section-header"><div><p className="eyebrow">DISCOVERY</p><h1>Search EventFlow</h1><p className="muted">Search events, vendors, services, categories, and locations.</p></div></div>
     <form className="panel home-global-search" role="search" onSubmit={submitSearch}>
       <label className="search-box"><Search size={16}/><input autoFocus type="search" maxLength="120" value={query} onChange={(event) => { setQuery(event.target.value); setSearchError(''); }} aria-label="Search events, vendors, services, categories, and locations" placeholder="Try a service, city, or category" /></label>
+      <label className="field"><span>Category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categoryOptions.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
+      <label className="field"><span>Location</span><select value={location} onChange={(event) => setLocation(event.target.value)}><option value="">All locations</option>{searchLocations.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
       <button className="button" type="submit">Search</button>
     </form>
     {searchError && <p className="field-error" role="alert">{searchError}</p>}
     {loading ? <div className="loading" role="status"><span className="spinner"/>Searching public listings…</div>
-      : initialQuery ? <div className="search-result-sections">
+      : hasSearch ? <div className="search-result-sections">
         {sections.map((section) => <section key={section.key} className="content-stack">
           <div className="section-header compact-header"><div><p className="eyebrow">{section.title.toUpperCase()}</p><h2>{section.title}</h2></div></div>
           {errors[section.key] ? <div className="alert error" role="alert">{errors[section.key]}<button className="button secondary small" type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry search</button></div>
@@ -1137,6 +1190,8 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   const [activeSlide, setActiveSlide] = useState(0);
   const [carouselPaused, setCarouselPaused] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchCategory, setSearchCategory] = useState('');
+  const [searchLocation, setSearchLocation] = useState('');
   const [searchError, setSearchError] = useState('');
   const [requestService, setRequestService] = useState(null);
   const touchStartX = useRef(null);
@@ -1147,17 +1202,11 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
     { title: t('birthdayCelebrations'), image: 'https://images.unsplash.com/photo-1469371670807-013ccf25f16a?auto=format&fit=crop&w=1200&q=80', description: t('birthdayCelebrationsCopy') },
   ], [language]);
 
-  const categoryExamples = [
-    { name: t('weddings'), image: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=80' },
-    { name: t('catering'), image: 'https://images.unsplash.com/photo-1555244162-803834f70033?auto=format&fit=crop&w=900&q=80' },
-    { name: t('photography'), image: 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=900&q=80' },
-    { name: t('decorStyling'), image: 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80' },
-  ];
-  const categoryCards = categories.slice(0, 4).map((category, index) => ({
+  const categoryCards = categories.slice(0, 4).map((category) => ({
     ...category,
-    image: category.image || categoryExamples[index % categoryExamples.length].image,
     path: `/categories/${encodeURIComponent(category.slug || category.name)}`,
   }));
+  const searchLocations = [...new Set([...vendors.map((vendor) => vendor.city), ...events.map((event) => event.location || event.city)].filter(Boolean))].sort();
   const categoryChips = ['Weddings', 'Corporate', 'Graduations', 'Catering', 'Decor', 'Photography'].map((name) => {
     const category = categories.find((item) => `${item.name} ${item.slug}`.toLowerCase().includes(name.toLowerCase()));
     return {
@@ -1231,12 +1280,16 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   function submitSearch(event) {
     event.preventDefault();
     const query = searchTerm.trim();
-    if (!query) {
-      setSearchError('Enter a search term to find events, vendors, services, categories, or locations.');
+    if (!query && !searchCategory && !searchLocation) {
+      setSearchError('Enter a search term or choose a category or location.');
       return;
     }
     setSearchError('');
-    onNavigate(`/search?q=${encodeURIComponent(query)}`);
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (searchCategory) params.set('category', searchCategory);
+    if (searchLocation) params.set('location', searchLocation);
+    onNavigate(`/search?${params.toString()}`);
   }
 
   function moveSlide(direction) {
@@ -1269,6 +1322,8 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           </div>
           <form className="hero-search" role="search" onSubmit={submitSearch}>
             <input type="search" maxLength="120" value={searchTerm} onChange={(event) => { setSearchTerm(event.target.value); setSearchError(''); }} placeholder={t('searchAll')} aria-label={t('searchAll')} />
+            <select aria-label="Event category" value={searchCategory} onChange={(event) => setSearchCategory(event.target.value)}><option value="">All categories</option>{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select>
+            <select aria-label="Location" value={searchLocation} onChange={(event) => setSearchLocation(event.target.value)}><option value="">All locations</option>{searchLocations.map((location) => <option key={location} value={location}>{location}</option>)}</select>
             <button type="submit">{t('search')}</button>
           </form>
           {searchError && <p className="hero-search-error" role="alert">{searchError}</p>}
@@ -1311,8 +1366,10 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
             ? <div className="empty-card">No public categories are available right now. <button type="button" className="button secondary small" onClick={() => onNavigate('/categories')}>Browse categories</button></div>
             : categoryCards.map((category) => (
             <button key={category.name} type="button" className="category-card" onClick={() => onNavigate(category.path)}>
-              <img src={resolveApiAssetUrl(category.image)} alt={category.name} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
-              <span>{category.name}</span>
+              {category.image ? <img src={resolveApiAssetUrl(category.image)} alt={category.name} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} /> : <span className="media-placeholder" role="img" aria-label={`${category.name} image unavailable`} />}
+              <span className="category-card-name">{category.name}</span>
+              <span className="category-card-description">{category.description || t('availableServiceCategory')}</span>
+              <span className="category-card-counts">{category.vendorCount} vendors · {category.serviceCount} services</span>
             </button>
           ))}
         </div>
@@ -1373,13 +1430,16 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
               return (
             <article key={vendor.id} className="vendor-card">
               <div className="card-image-wrap">
-                <img src={vendor.image || vendor.logo || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendorName} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+                {vendor.coverImageUrl || vendor.logoUrl || vendor.image || vendor.logo
+                  ? <img src={resolveApiAssetUrl(vendor.coverImageUrl || vendor.logoUrl || vendor.image || vendor.logo)} alt={vendorName} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+                  : <div className="media-placeholder" role="img" aria-label={`${vendorName} image unavailable`} />}
                 {vendor.verified && <span className="verify-badge">{t('verified')}</span>}
               </div>
               <div className="card-body">
-                <div className="meta-row"><span>{vendor.category || 'Event Services'}</span>{vendor.reviewCount > 0 && Number.isFinite(Number(vendor.rating)) && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div>
+                <div className="meta-row"><span>{vendor.category || 'Event Services'}</span>{vendor.reviewCount > 0 && Number.isFinite(Number(vendor.rating)) && <span>★ {Number(vendor.rating).toFixed(1)} ({vendor.reviewCount})</span>}</div>
                 <h3>{vendorName}</h3>
                 <p>{vendor.description || vendor.city || vendor.location || translateText('Service area available', language)}</p>
+                {vendor.priceFrom > 0 && <p className="muted">From ETB {Number(vendor.priceFrom).toLocaleString()}</p>}
                 <div className="card-actions">
                   <button className="button secondary small" type="button" onClick={() => onNavigate(vendor.id ? `/vendors/${encodeURIComponent(vendor.id)}` : '/vendors')}>{t('viewProfile')}</button>
                   <button className="button small" type="button" onClick={() => quoteService ? setRequestService(quoteService) : onNavigate(`/vendors/${encodeURIComponent(vendor.id)}`)}>Request Quote</button>
@@ -1404,7 +1464,9 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
             : displayServices.length ? displayServices.map((service) => (
             <article key={service.id} className="service-card">
               <div className="card-image-wrap">
-                <img src={service.image || service.coverImage || 'https://images.unsplash.com/photo-1556911220-bff31c812dba?auto=format&fit=crop&w=900&q=80'} alt={service.title} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+                {service.images?.[0]?.url || service.image || service.coverImage
+                  ? <img src={resolveApiAssetUrl(service.images?.[0]?.url || service.image || service.coverImage)} alt={service.title} loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
+                  : <div className="media-placeholder" role="img" aria-label={`${service.title} image unavailable`} />}
               </div>
               <div className="card-body">
                 <div className="meta-row"><span>{service.category || 'Event service'}</span>{service.reviewCount > 0 && Number.isFinite(Number(service.rating)) && <span>★ {Number(service.rating).toFixed(1)}</span>}</div>
@@ -1434,7 +1496,9 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           {loading ? <div className="home-card-skeletons" role="status" aria-label="Loading public events"><span/><span/><span/><span/></div>
             : displayEvents.length ? displayEvents.map((event) => (
             <article key={event.id} className="event-card">
-              <img src={event.coverImage || event.image || 'https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=900&q=80'} alt={event.title} loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />
+              {event.coverImage || event.image
+                ? <img src={event.coverImage || event.image} alt={event.title} loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />
+                : <div className="media-placeholder event-image-placeholder" role="img" aria-label={`${event.title} image unavailable`} />}
               <div className="event-content">
                 <span className="event-tag">{event.type || 'Event'}</span>
                 <h3>{event.title}</h3>
@@ -1756,11 +1820,43 @@ function EventsPage({ onNavigate }) {
   </main>;
 }
 
-function QuoteRequestModal({ service, user, onNavigate, onClose }) {
-  const [form, setForm] = useState({ guestCount: '', budget: '', notes: '' });
+function QuoteRequestModal({ service, services = [service], vendorId = service?.vendorId, user, onNavigate, onClose }) {
+  const activeServices = (Array.isArray(services) ? services : [service])
+    .filter((item) => item && item.published !== false && item.visibility !== 'private');
+  const [serviceId, setServiceId] = useState(String(service?.id || ''));
+  const [form, setForm] = useState({
+    eventType: '',
+    eventName: '',
+    eventDate: '',
+    eventLocation: '',
+    contactPhone: user?.phone || '',
+    guestCount: '',
+    budget: '',
+    requiredServices: '',
+    additionalRequirements: '',
+    message: '',
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const requestKey = useRef(window.crypto?.randomUUID?.() || '');
+  const selectedService = activeServices.find((item) => String(item.id) === serviceId) || service;
+  const minimumEventDate = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+  function updateField(event) {
+    const { name, value } = event.target;
+    setForm((current) => ({ ...current, [name]: value }));
+    setSuccess('');
+    setError('');
+    requestKey.current = window.crypto?.randomUUID?.() || '';
+  }
+
+  function updateService(event) {
+    setServiceId(event.target.value);
+    setSuccess('');
+    setError('');
+    requestKey.current = window.crypto?.randomUUID?.() || '';
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -1774,20 +1870,38 @@ function QuoteRequestModal({ service, user, onNavigate, onClose }) {
       setError('Only customer and organizer accounts can request quotes.');
       return;
     }
+    if (!selectedService?.id || (vendorId && Number(selectedService.vendorId) !== Number(vendorId))) {
+      setError('Select a service offered by this vendor.');
+      return;
+    }
+    if (new Date(form.eventDate).getTime() <= Date.now()) {
+      setError('Choose a future event date and time.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const body = {
-        serviceId: service.id,
+        vendorId: Number(vendorId || selectedService.vendorId),
+        serviceId: Number(selectedService.id),
+        ...(requestKey.current ? { requestKey: requestKey.current } : {}),
+        ...(form.eventName.trim() ? { eventName: form.eventName.trim() } : {}),
+        eventDate: form.eventDate,
+        eventLocation: form.eventLocation.trim(),
+        eventType: form.eventType.trim(),
+        contactPhone: form.contactPhone.trim(),
         ...(form.guestCount ? { guestCount: Number(form.guestCount) } : {}),
         ...(form.budget ? { budget: Number(form.budget) } : {}),
-        notes: form.notes.trim(),
+        requiredServices: form.requiredServices.trim(),
+        additionalRequirements: form.additionalRequirements.trim(),
+        message: form.message.trim(),
       };
-      await api('/platform/service-quote-requests', {
+      const response = await api('/platform/service-quote-requests', {
         method: 'POST',
         body: JSON.stringify(body),
       });
-      setSuccess('Your request was sent to the vendor. Track its status in your dashboard quotations.');
+      if (!response?.data?.id) throw new Error('The server did not confirm that your request was saved.');
+      setSuccess(`Request #${response.data.id} was saved. Track its status in your dashboard quotations.`);
     } catch (issue) {
       setError(issue.message || 'Unable to send the quote request.');
     } finally {
@@ -1796,13 +1910,25 @@ function QuoteRequestModal({ service, user, onNavigate, onClose }) {
   }
 
   return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
-    <form className="modal" role="dialog" aria-modal="true" aria-labelledby="quote-request-title" onSubmit={submit}>
+    <form className="modal quote-request-modal" role="dialog" aria-modal="true" aria-labelledby="quote-request-title" onSubmit={submit}>
       <div className="modal-head"><h2 id="quote-request-title">Request a quote</h2><button className="icon-button" type="button" onClick={onClose} aria-label="Close" disabled={busy}><X size={18}/></button></div>
       <div className="modal-body">
-        <p><strong>{service.title}</strong> · {service.vendorName}</p>
-        <label className="field"><span>Guest count (optional)</span><input type="number" min="1" max="100000" step="1" value={form.guestCount} onChange={(event) => setForm((current) => ({ ...current, guestCount: event.target.value }))}/></label>
-        <label className="field"><span>Budget (optional)</span><input type="number" min="0" max="100000000" step="0.01" value={form.budget} onChange={(event) => setForm((current) => ({ ...current, budget: event.target.value }))}/></label>
-        <label className="field"><span>Requirements</span><textarea rows="4" maxLength="2000" value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))}/></label>
+        <p><strong>{selectedService?.vendorName || service?.vendorName}</strong></p>
+        {activeServices.length > 1
+          ? <label className="field"><span>Service</span><select name="serviceId" required value={serviceId} onChange={updateService}>{activeServices.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select></label>
+          : <p className="quote-selected-service"><strong>Service:</strong> {selectedService?.title}</p>}
+        <label className="field"><span>Customer full name</span><input value={user?.full_name || ''} readOnly aria-readonly="true" /></label>
+        <label className="field"><span>Contact phone</span><input name="contactPhone" type="tel" autoComplete="tel" minLength="7" maxLength="30" pattern="\+?[0-9][0-9 ()-]{5,28}" required value={form.contactPhone} onChange={updateField} /></label>
+        <label className="field"><span>Event type</span><input name="eventType" minLength="2" maxLength="80" required value={form.eventType} onChange={updateField} placeholder="Wedding, conference, celebration..." /></label>
+        <label className="field"><span>Event name (optional)</span><input name="eventName" maxLength="180" value={form.eventName} onChange={updateField}/></label>
+        <label className="field"><span>Event date</span><input name="eventDate" type="datetime-local" min={minimumEventDate} required value={form.eventDate} onChange={updateField}/></label>
+        <label className="field"><span>Event location</span><input name="eventLocation" maxLength="120" required value={form.eventLocation} onChange={updateField}/></label>
+        <label className="field"><span>Expected guest count (optional)</span><input name="guestCount" type="number" min="1" max="100000" step="1" value={form.guestCount} onChange={updateField}/></label>
+        <label className="field"><span>Budget range in {selectedService?.currency || 'ETB'} (optional)</span><input name="budget" type="number" min="0" max="100000000" step="0.01" value={form.budget} onChange={updateField}/></label>
+        <label className="field"><span>Required services / scope</span><textarea name="requiredServices" rows="2" maxLength="1000" value={form.requiredServices} onChange={updateField}/></label>
+        <label className="field"><span>Additional requirements</span><textarea name="additionalRequirements" rows="3" maxLength="2000" value={form.additionalRequirements} onChange={updateField}/></label>
+        <label className="field"><span>Message to vendor</span><textarea name="message" rows="3" maxLength="2000" value={form.message} onChange={updateField}/></label>
+        <section className="quote-request-summary" aria-label="Review request details"><h3>Review request</h3><p><strong>Vendor and service:</strong> {selectedService?.vendorName} · {selectedService?.title}</p><p><strong>Event:</strong> {form.eventType || 'Event type'}{form.eventName ? ` · ${form.eventName}` : ''}{form.eventDate ? ` · ${form.eventDate.replace('T', ' ')}` : ''}</p><p><strong>Location:</strong> {form.eventLocation || 'Not entered'}{form.guestCount ? ` · ${form.guestCount} guests` : ''}</p><p><strong>Budget:</strong> {form.budget ? `${selectedService?.currency || 'ETB'} ${Number(form.budget).toLocaleString()}` : 'Not specified'}</p></section>
         {error && <div className="alert error" role="alert">{error}</div>}
         {success && <div className="alert success" role="status">{success}</div>}
       </div>
@@ -1893,14 +2019,15 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
 
   return <main className="page-shell"><div className="content-stack">
     <button className="text-action" type="button" onClick={() => onNavigate('/services')}>← Back to Services</button>
+    {service.images?.length > 0 && <div className="public-vendor-gallery">{service.images.map((image) => <img key={image.id} src={resolveApiAssetUrl(image.url)} alt={image.name || service.title} loading="lazy" />)}</div>}
     <section className="info-card wide"><p className="eyebrow">{service.category}</p><h1>{service.title}</h1><p>{service.description}</p><div className="detail-meta-grid">
       <div><span>Provider</span><strong>{service.vendorName}</strong></div>
       <div><span>Location</span><strong>{service.city || t('locationAvailable')}</strong></div>
       <div><span>Starting price</span><strong>{service.price ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('priceOnRequest')}</strong></div>
       {service.reviewCount > 0 && <div><span>Customer rating</span><strong>{Number(service.rating).toFixed(1)} / 5 ({service.reviewCount})</strong></div>}
     </div><button className="button" type="button" onClick={() => setRequestOpen(true)}>Request Service</button></section>
-    <section className="panel"><div className="panel-header"><h2>Other services from this provider</h2></div>
-      {service.packages?.filter((item) => item.id !== service.id).length ? <div className="card-grid">{service.packages.filter((item) => item.id !== service.id).map((item) => <article className="info-card" key={item.id}><h3>{item.title}</h3><p>{item.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{item.price ? `${item.currency} ${Number(item.price).toLocaleString()}` : t('priceOnRequest')}</strong><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${item.id}`)}>View Details</button></div></article>)}</div> : <p>No other published services are listed for this provider.</p>}
+    <section className="panel"><div className="panel-header"><h2>Service packages</h2></div>
+      {service.packages?.length ? <div className="card-grid">{service.packages.map((item) => <article className="info-card" key={item.id}><h3>{item.name}</h3><p>{item.description || t('customServicePackage')}</p><strong>{item.currency} {Number(item.price).toLocaleString()}</strong><small>Minimum booking: {item.minimumBooking}</small>{item.includedFeatures?.length > 0 && <ul>{item.includedFeatures.map((feature) => <li key={feature}>{feature}</li>)}</ul>}{item.extras?.length > 0 && <div className="public-package-extras"><strong>Optional extras</strong>{item.extras.map((extra) => <p key={extra.name}>{extra.name} · {item.currency} {Number(extra.price).toLocaleString()} {extra.description && `· ${extra.description}`}</p>)}</div>}</article>)}</div> : <p>No packages are published for this service yet.</p>}
     </section>
     {availabilityItems.length > 0 && <section className="panel"><div className="panel-header"><h2>Availability</h2></div><div className="list-stack">{availabilityItems.map(({ item: entry, key }) => <div className="list-card" key={key}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
     <section className="panel"><div className="panel-header"><h2>Customer reviews</h2></div>
@@ -1909,37 +2036,64 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
   </div>{requestOpen && <QuoteRequestModal service={service} user={user} onNavigate={onNavigate} onClose={() => setRequestOpen(false)}/>}</main>;
 }
 
+function VendorMedia({ src, alt, className = '', loading = 'lazy' }) {
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => setFailed(false), [src]);
+
+  if (!src || failed) {
+    return <div className={`media-placeholder ${className}`} role="img" aria-label={`${alt} image unavailable`} />;
+  }
+  return <img
+    className={className}
+    src={resolveApiAssetUrl(src)}
+    alt={alt}
+    loading={loading}
+    onError={() => setFailed(true)}
+  />;
+}
+
 function VendorDetailPage({ vendorId, user, onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [vendor, setVendor] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notFound, setNotFound] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
   const [requestService, setRequestService] = useState(null);
+  const [previewImage, setPreviewImage] = useState(null);
 
   useEffect(() => {
+    const controller = new AbortController();
     async function loadVendor() {
       try {
         setLoading(true);
-        const response = await api(`/platform/vendors/${vendorId}`);
-        setVendor(response.data || null);
         setError('');
+        setNotFound(false);
+        const response = await api(`/platform/vendors/${vendorId}`, { signal: controller.signal });
+        setVendor(response.data || null);
       } catch (issue) {
-        setError(issue.message || 'Vendor record not found.');
+        if (issue.name !== 'AbortError') {
+          setVendor(null);
+          setNotFound(issue.response?.status === 404 || issue.status === 404);
+          setError(issue.message || 'Unable to load this vendor profile.');
+        }
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
 
     loadVendor();
-  }, [vendorId]);
+    return () => controller.abort();
+  }, [vendorId, reloadToken]);
 
   if (loading) {
     return <main className="page-shell"><div className="content-stack"><div className="info-card wide"><div className="loading"><span className="spinner" />{t('loadingVendorProfile')}</div></div></div></main>;
   }
 
   if (error || !vendor) {
-    return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">{t('profileUnavailable')}</p><h2>{t('vendorNotFound')}</h2><p>{error ? translateText(error, language) : t('vendorUnavailable')}</p><button className="button" type="button" onClick={() => onNavigate('/vendors')}>{t('browseAllVendors')}</button></div></div></main>;
+    return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">{t('profileUnavailable')}</p><h2>{notFound ? t('vendorNotFound') : 'Unable to load vendor profile'}</h2><p>{error ? translateText(error, language) : t('vendorUnavailable')}</p>{!notFound && <button className="button secondary" type="button" onClick={() => setReloadToken((token) => token + 1)}>Retry</button>}<button className="button" type="button" onClick={() => onNavigate('/vendors')}>{t('browseAllVendors')}</button></div></div></main>;
   }
 
   const reviewItems = withStableKeys(vendor.reviews || [], (review) => review.id ?? JSON.stringify([
@@ -1956,28 +2110,37 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
   return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorProfile')}</p><h2>{vendor.business_name || vendor.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>{t('browseAllVendors')}</button></div>
     <article className="info-card wide">
       <div className="profile-panel">
-        <div className="profile-avatar">{(vendor.business_name || vendor.name || 'V').slice(0, 1).toUpperCase()}</div>
+        <VendorMedia className="public-vendor-logo" src={vendor.logoUrl || vendor.coverImageUrl} alt={`${vendor.business_name || vendor.name} profile`} />
         <div>
           <h3>{vendor.business_name || vendor.name}</h3>
-          <p className="muted">{vendor.category || 'Event services'} • {vendor.city || 'Remote service area'}</p>
-          <p>{vendor.verified ? t('verifiedBusinessProfile') : t('publicListing')}{vendor.reviewCount > 0 ? ` • ${vendor.reviewCount} ${t('vendorReviews')} • ★ ${Number(vendor.rating).toFixed(1)}` : ''}</p>
+          <p className="muted">{vendor.category || 'Event services'} • {vendor.city || t('locationAvailable')}</p>
+          <p>{vendor.verified && <span className="verify-badge-inline">{t('verified')}</span>} {vendor.reviewCount > 0 ? `${vendor.reviewCount} ${t('vendorReviews')} • ★ ${Number(vendor.rating).toFixed(1)}` : 'No published reviews yet'}</p>
         </div>
         {vendor.services?.some((service) => service.published !== false && service.visibility !== 'private') && <button className="button" type="button" onClick={() => setRequestService(vendor.services.find((service) => service.published !== false && service.visibility !== 'private'))}>Request Quote</button>}
       </div>
       <div className="report-grid" style={{ marginTop: '18px' }}>
-        <div className="info-card"><h3>{t('about')}</h3><p>{vendor.description || translateText('A trusted event partner helping clients plan memorable experiences.', language)}</p></div>
-        <div className="info-card"><h3>{t('startingFrom')}</h3><p>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('priceOnRequest')}</p></div>
+        <div className="info-card"><h3>{t('about')}</h3><p className="vendor-description">{vendor.description || 'No business description has been provided.'}</p></div>
+        <div className="info-card"><h3>{t('startingFrom')}</h3><p>{vendor.priceFrom !== null && vendor.priceFrom !== undefined ? `${vendor.currency || 'ETB'} ${Number(vendor.priceFrom).toLocaleString()}` : t('priceOnRequest')}</p></div>
         <div className="info-card"><h3>{t('location')}</h3><p>{vendor.city || t('serviceAreaRequest')}</p></div>
       </div>
     </article>
 
+    {vendor.coverImageUrl && <VendorMedia className="public-vendor-cover" src={vendor.coverImageUrl} alt={`${vendor.business_name || vendor.name} cover`} />}
+    {vendor.portfolio?.length > 0 && <section className="panel"><div className="panel-header"><h3>Portfolio</h3></div><div className="public-vendor-gallery">{vendor.portfolio.map((image) => <button className="vendor-gallery-item" key={image.id} type="button" onClick={() => setPreviewImage(image)} aria-label={`Preview ${image.name || 'vendor portfolio image'}`}><VendorMedia src={image.url} alt={image.name || 'Vendor portfolio'} /></button>)}</div></section>}
+
     <section className="content-stack">
       <div className="section-header compact-header"><div><p className="eyebrow">{t('publishedServices')}</p><h2>{t('availableServicePackages')}</h2></div></div>
-      {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card"><h3>{service.title}</h3><p>{service.description || t('customServicePackage')}</p><div className="pricing-row"><strong>{service.price ? `ETB ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong><button className="button secondary small" type="button" onClick={() => setRequestService(service)}>Request Quote</button></div></article>)}</div> : <div className="empty-card">{t('noPublishedServices')}</div>}
+      {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card vendor-profile-service">
+        {service.images?.[0] && <VendorMedia className="vendor-service-image" src={service.images[0].url} alt={`${service.title} portfolio`} />}
+        <p className="eyebrow">{service.category || vendor.category}</p><h3>{service.title}</h3><p className="vendor-description">{service.description || 'No service description has been provided.'}</p>
+        <div className="pricing-row"><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}${service.packages?.length ? ' · starting price' : ''}` : t('priceOnRequest')}</strong><button className="button secondary small" type="button" onClick={() => setRequestService(service)}>Request Quote</button></div>
+        {service.packages?.length > 0 && <div className="vendor-package-list"><h4>Packages</h4>{service.packages.map((item) => <div className="vendor-package-detail" key={item.id}><strong>{item.name} · {item.currency} {Number(item.price).toLocaleString()}</strong>{item.description && <p>{item.description}</p>}{item.includedFeatures?.length > 0 && <ul>{item.includedFeatures.map((feature) => <li key={feature}>{feature}</li>)}</ul>}{item.extras?.length > 0 && <p>Extras: {item.extras.map((extra) => `${extra.name} (${item.currency} ${Number(extra.price).toLocaleString()})`).join(', ')}</p>}</div>)}</div>}
+      </article>)}</div> : <div className="empty-card">{t('noPublishedServices')}</div>}
     </section>
-    {reviewItems.length > 0 && <section className="panel"><div className="panel-header"><h3>Customer reviews</h3></div><div className="list-stack">{reviewItems.map(({ item: review, key }) => <article className="list-card" key={key}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div></section>}
+    <section className="panel"><div className="panel-header"><div><h3>Customer reviews</h3><p>{vendor.reviewCount || 0} published reviews · {vendor.reviewCount > 0 ? `${Number(vendor.rating).toFixed(1)} / 5` : 'No rating yet'}</p></div></div><div className="vendor-rating-distribution">{[5, 4, 3, 2, 1].map((rating) => <div key={rating}><span>{rating} stars</span><meter min="0" max={Math.max(1, vendor.reviewCount || 0)} value={vendor.ratingDistribution?.[rating] || 0} /><span>{vendor.ratingDistribution?.[rating] || 0}</span></div>)}</div>{reviewItems.length > 0 ? <div className="list-stack">{reviewItems.map(({ item: review, key }) => <article className="list-card" key={key}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div> : <p>No published reviews are available yet.</p>}</section>
     {availabilityItems.length > 0 && <section className="panel"><div className="panel-header"><h3>Availability</h3></div><div className="list-stack">{availabilityItems.map(({ item: entry, key }) => <div className="list-card" key={key}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
-  </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
+  </div>{requestService && <QuoteRequestModal service={requestService} services={vendor.services} vendorId={vendor.id} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}
+  {previewImage && <div className="overlay vendor-image-preview" role="dialog" aria-modal="true" aria-label="Vendor image preview" onMouseDown={(event) => event.target === event.currentTarget && setPreviewImage(null)}><button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="Close image preview"><X size={18}/></button><VendorMedia src={previewImage.url} alt={previewImage.name || 'Vendor portfolio'} loading="eager" /></div>}</main>;
 }
 
 function VendorsPage({ onNavigate, user }) {
@@ -1988,18 +2151,22 @@ function VendorsPage({ onNavigate, user }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
   const [category, setCategory] = useState(() => new URLSearchParams(window.location.search).get('category') || 'all');
-  const [location, setLocation] = useState('all');
+  const [location, setLocation] = useState(() => new URLSearchParams(window.location.search).get('location') || '');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
+  const [minRating, setMinRating] = useState('');
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+  const [availableOnly, setAvailableOnly] = useState(false);
   const [sort, setSort] = useState('recommended');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: 12 });
   const [notice, setNotice] = useState('');
   const [categoryError, setCategoryError] = useState('');
   const [filterError, setFilterError] = useState('');
-  const [requestService, setRequestService] = useState(null);
+  const [requestVendor, setRequestVendor] = useState(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
-  const fetchVendors = useCallback(async (nextPage, nextFilters) => {
+  const fetchVendors = useCallback(async (nextPage, nextFilters, signal) => {
     setLoading(true);
     setNotice('');
     try {
@@ -2009,7 +2176,10 @@ function VendorsPage({ onNavigate, user }) {
       if (nextFilters.location && nextFilters.location !== 'all') params.set('location', nextFilters.location);
       if (nextFilters.minPrice) params.set('minPrice', nextFilters.minPrice);
       if (nextFilters.maxPrice) params.set('maxPrice', nextFilters.maxPrice);
-      const response = await api(`/platform/vendors?${params.toString()}`);
+      if (nextFilters.minRating) params.set('minRating', nextFilters.minRating);
+      if (nextFilters.verifiedOnly) params.set('verified', 'true');
+      if (nextFilters.availableOnly) params.set('availableOnly', 'true');
+      const response = await api(`/platform/vendors?${params.toString()}`, { signal });
       setVendors(response.data || []);
       setPagination({
         page: response.pagination?.page || 1,
@@ -2018,93 +2188,96 @@ function VendorsPage({ onNavigate, user }) {
         limit: response.pagination?.limit || 12,
       });
     } catch (issue) {
-      setVendors([]);
-      setPagination({ page: 1, totalPages: 1, total: 0, limit: 12 });
-      setNotice(issue.message || 'Unable to load vendor listings.');
+      if (issue.name !== 'AbortError' && !signal?.aborted) {
+        setVendors([]);
+        setPagination({ page: 1, totalPages: 1, total: 0, limit: 12 });
+        setNotice(issue.message || 'Unable to load vendor listings.');
+      }
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
     async function loadCategories() {
       try {
-        const response = await api('/platform/categories');
-        if (active) setCategoryOptions(Array.isArray(response.data) ? response.data : []);
+        const response = await api('/platform/categories', { signal: controller.signal });
+        setCategoryOptions(Array.isArray(response.data) ? response.data : []);
       } catch (issue) {
-        if (active) {
+        if (issue.name !== 'AbortError' && !controller.signal.aborted) {
           setCategoryOptions([]);
           setCategoryError(issue.message || 'Unable to load vendor category filters.');
         }
       }
     }
     loadCategories();
-    return () => { active = false; };
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
     if (minPrice && maxPrice && Number(maxPrice) < Number(minPrice)) {
       setLoading(false);
       setFilterError('Maximum price must be greater than or equal to minimum price.');
-      return;
+      return () => controller.abort();
     }
     setFilterError('');
-    fetchVendors(page, { search, category, location, minPrice, maxPrice, sort });
-  }, [fetchVendors, page, search, category, location, minPrice, maxPrice, sort]);
+    fetchVendors(page, { search, category, location, minPrice, maxPrice, minRating, verifiedOnly, availableOnly, sort }, controller.signal);
+    return () => controller.abort();
+  }, [fetchVendors, page, search, category, location, minPrice, maxPrice, minRating, verifiedOnly, availableOnly, sort, reloadToken]);
 
   const categories = Array.from(new Set(vendors.map((vendor) => vendor.category).filter(Boolean))).sort();
-  const locations = Array.from(new Set(vendors.map((vendor) => vendor.city).filter(Boolean))).sort();
 
   const handleQuoteRequest = (vendorRecord) => {
-    const selectedService = Array.isArray(vendorRecord?.services) ? vendorRecord.services.find((service) => service && service.published !== false && service.visibility !== 'private') : null;
-    if (selectedService) setRequestService(selectedService);
-    else setNotice('This vendor has no published services available for a quote request.');
+    const services = Array.isArray(vendorRecord?.services) ? vendorRecord.services.filter((service) => service && service.published !== false && service.visibility !== 'private') : [];
+    if (services.length) setRequestVendor(vendorRecord);
   };
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div></div>
-    {notice && <div className="alert success">{notice}</div>}
+  return <main className="page-shell vendor-directory-page"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div></div>
     {categoryError && <div className="alert error" role="alert">{categoryError}</div>}
     {filterError && <div className="alert error" role="alert">{filterError}</div>}
     <div className="panel" style={{ padding: '18px 20px' }}>
-      <div className="toolbar">
+      <div className="toolbar vendor-directory-toolbar">
         <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder={t('searchVendors')} /></div>
-        <select className="filter-select" value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
+        <select className="filter-select" aria-label={t('allCategories')} value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
           <option value="all">{t('allCategories')}</option>
           {(categoryOptions.length ? categoryOptions.map((item) => item.name) : categories).map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-        <select className="filter-select" value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }}>
-          <option value="all">{t('allLocations')}</option>
-          {locations.map((item) => <option key={item} value={item}>{item}</option>)}
-        </select>
+        <input className="filter-select" aria-label="Vendor city or location" value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }} placeholder={t('allLocations')} />
         <input className="filter-select" aria-label="Minimum vendor price" type="number" min="0" value={minPrice} onChange={(event) => { setPage(1); setMinPrice(event.target.value); }} placeholder="Min price" />
         <input className="filter-select" aria-label="Maximum vendor price" type="number" min="0" value={maxPrice} onChange={(event) => { setPage(1); setMaxPrice(event.target.value); }} placeholder="Max price" />
-        <select className="filter-select" value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
+        <select className="filter-select" aria-label="Minimum vendor rating" value={minRating} onChange={(event) => { setPage(1); setMinRating(event.target.value); }}><option value="">Any rating</option><option value="3">3+ stars</option><option value="4">4+ stars</option><option value="4.5">4.5+ stars</option></select>
+        <label className="vendor-verified-filter"><input type="checkbox" checked={verifiedOnly} onChange={(event) => { setPage(1); setVerifiedOnly(event.target.checked); }} /> Verified vendors</label>
+        <label className="vendor-verified-filter"><input type="checkbox" checked={availableOnly} onChange={(event) => { setPage(1); setAvailableOnly(event.target.checked); }} /> Available</label>
+        <select className="filter-select" aria-label="Sort vendors" value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
           <option value="recommended">{t('recommended')}</option>
           <option value="highest-rated">{t('highestRated')}</option>
           <option value="most-reviewed">{t('mostReviewed')}</option>
           <option value="price-low">{t('priceLowHigh')}</option>
           <option value="price-high">{t('priceHighLow')}</option>
+          <option value="recently-added">Recently added</option>
         </select>
-        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearch(''); setCategory('all'); setLocation('all'); setMinPrice(''); setMaxPrice(''); setSort('recommended'); }}>{t('reset')}</button>
+        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearch(''); setCategory('all'); setLocation(''); setMinPrice(''); setMaxPrice(''); setMinRating(''); setVerifiedOnly(false); setAvailableOnly(false); setSort('recommended'); }}>{t('reset')}</button>
       </div>
     </div>
 
-    {loading ? <div className="loading"><span className="spinner" />{t('loadingVendorDirectory')}</div> : vendors.length ? <>
+    {loading ? <div className="content-stack" role="status" aria-label="Loading vendor listings"><p className="loading"><span className="spinner" />{t('loadingVendorDirectory')}</p><div className="card-grid">{Array.from({ length: 6 }, (_, index) => <article className="vendor-card vendor-card-skeleton" key={index} aria-hidden="true"><div className="card-image-wrap vendor-skeleton-shimmer" /><div className="card-body"><div className="vendor-skeleton-line short vendor-skeleton-shimmer" /><div className="vendor-skeleton-line vendor-skeleton-shimmer" /><div className="vendor-skeleton-line long vendor-skeleton-shimmer" /></div></article>)}</div></div> : notice ? <div className="info-card wide danger-card" role="alert"><p>{notice}</p><button className="button secondary" type="button" onClick={() => setReloadToken((token) => token + 1)}>Retry</button></div> : vendors.length ? <>
       <div className="card-grid">
         {vendors.map((vendor) => <article key={vendor.id} className="vendor-card">
           <div className="card-image-wrap">
-            <img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.business_name || vendor.name} loading="lazy" />
+            <VendorMedia src={vendor.coverImageUrl || vendor.logoUrl} alt={vendor.business_name || vendor.name} />
             {vendor.verified && <span className="verify-badge">{t('verified')}</span>}
           </div>
           <div className="card-body">
-            <div className="meta-row"><span>{vendor.category || 'Event services'}</span>{vendor.reviewCount > 0 && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div>
+            <div className="meta-row"><span>{vendor.category || 'Event services'}</span>{vendor.verified && <span className="verify-badge-inline">{t('verified')}</span>}</div>
             <h3>{vendor.business_name || vendor.name}</h3>
-            <p>{vendor.city || t('locationAvailable')}</p><p>{vendor.description || ''}</p>
-            <div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount || 0} {t('vendorReviews')}</span></div>
+            <p>{vendor.city || t('locationAvailable')}</p>{vendor.description && <p className="vendor-card-description">{vendor.description}</p>}
+            {vendor.services?.[0] && <p className="vendor-card-service"><strong>{vendor.services[0].title}</strong>{vendor.services[0].description ? ` · ${vendor.services[0].description}` : ''}</p>}
+            <div className="pricing-row"><strong>{vendor.priceFrom !== null && vendor.priceFrom !== undefined ? `${vendor.currency || 'ETB'} ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount > 0 ? `★ ${Number(vendor.rating).toFixed(1)} · ` : ''}{vendor.reviewCount} {t('vendorReviews')}</span></div>
             <div className="card-actions">
               <button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button>
-              <button className="button small" type="button" onClick={() => handleQuoteRequest(vendor)}>Request Quote</button>
+              <button className="button small" type="button" disabled={!vendor.services?.some((service) => service && service.published !== false && service.visibility !== 'private')} onClick={() => handleQuoteRequest(vendor)}>Request Quote</button>
             </div>
           </div>
         </article>)}
@@ -2116,7 +2289,7 @@ function VendorsPage({ onNavigate, user }) {
         <button className="icon-button" type="button" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage((value) => Math.min(pagination.totalPages || 1, value + 1))}><ChevronRight size={18}/></button>
       </div></div>
     </> : <EmptyState title={t('noVendorMatches')} message={t('tryDifferentFilters')} />}
-  </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
+  </div>{requestVendor && <QuoteRequestModal service={requestVendor.services?.find((service) => service && service.published !== false && service.visibility !== 'private')} services={requestVendor.services} vendorId={requestVendor.id} user={user} onNavigate={onNavigate} onClose={() => setRequestVendor(null)}/>}</main>;
 }
 
 function ServicesPage({ onNavigate, user }) {
@@ -2127,7 +2300,7 @@ function ServicesPage({ onNavigate, user }) {
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const [filters, setFilters] = useState(() => {
     const params = new URLSearchParams(window.location.search);
-    return { search: params.get('search') || '', category: params.get('category') || 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' };
+    return { search: params.get('search') || '', category: params.get('category') || 'all', location: 'all', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -2149,6 +2322,8 @@ function ServicesPage({ onNavigate, user }) {
       if (nextFilters.location && nextFilters.location !== 'all') params.set('location', nextFilters.location);
       if (nextFilters.minPrice) params.set('minPrice', nextFilters.minPrice);
       if (nextFilters.maxPrice) params.set('maxPrice', nextFilters.maxPrice);
+      if (nextFilters.minRating) params.set('minRating', nextFilters.minRating);
+      if (nextFilters.availableOnly) params.set('availableOnly', nextFilters.availableOnly);
       const response = await api(`/platform/services?${params.toString()}`);
       setServices(Array.isArray(response.data) ? response.data : []);
       setPagination(response.pagination || { page: 1, totalPages: 1, total: 0 });
@@ -2182,7 +2357,7 @@ function ServicesPage({ onNavigate, user }) {
   const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
   const applyFilters = () => loadServices(filters, 1);
   const resetFilters = () => {
-    const emptyFilters = { search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', sort: 'recommended' };
+    const emptyFilters = { search: '', category: 'all', location: 'all', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
     setFilters(emptyFilters);
     loadServices(emptyFilters, 1);
   };
@@ -2196,6 +2371,8 @@ function ServicesPage({ onNavigate, user }) {
       <select className="filter-select" aria-label={t('allLocations')} value={filters.location} onChange={(event) => updateFilter('location', event.target.value)}><option value="all">{t('allLocations')}</option>{locations.map((location) => <option key={location} value={location}>{location}</option>)}</select>
       <input className="filter-select" aria-label="Minimum price" type="number" min="0" value={filters.minPrice} onChange={(event) => updateFilter('minPrice', event.target.value)} placeholder="Min price" />
       <input className="filter-select" aria-label="Maximum price" type="number" min="0" value={filters.maxPrice} onChange={(event) => updateFilter('maxPrice', event.target.value)} placeholder="Max price" />
+      <select className="filter-select" aria-label="Minimum service rating" value={filters.minRating} onChange={(event) => updateFilter('minRating', event.target.value)}><option value="">Any rating</option><option value="3">3+ stars</option><option value="4">4+ stars</option><option value="4.5">4.5+ stars</option></select>
+      <select className="filter-select" aria-label="Service availability" value={filters.availableOnly} onChange={(event) => updateFilter('availableOnly', event.target.value)}><option value="">Any availability</option><option value="true">Available now</option></select>
       <select className="filter-select" aria-label="Sort services" value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)}><option value="recommended">{t('recommended')}</option><option value="highest-rated">{t('highestRated')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option><option value="alphabetical">{t('alphabetical')}</option></select>
       <button type="button" className="button secondary small" onClick={resetFilters}>{t('reset')}</button><button type="button" className="button small" onClick={applyFilters}>{t('applyFilters')}</button>
     </div></div>
@@ -2204,6 +2381,7 @@ function ServicesPage({ onNavigate, user }) {
       : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => loadServices(filters, pagination.page || 1)}>{t('retry')}</button></div>
         : services.length ? <>
           <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card">
+            {service.images?.[0] ? <img className="public-service-image" src={resolveApiAssetUrl(service.images[0].url)} alt={service.images[0].name || service.title} loading="lazy" /> : <div className="media-placeholder public-service-image" role="img" aria-label={`${service.title} image unavailable`} />}
             <p className="eyebrow">{service.category}</p><h3>{service.title}</h3><p>{service.description || ''}</p>
             <p>{service.vendorName} · {service.city}</p>
             <div className="pricing-row compact-row"><strong>{service.price ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>{service.reviewCount > 0 && <span>{Number(service.rating).toFixed(1)}★ ({service.reviewCount})</span>}</div>
@@ -2246,7 +2424,7 @@ function CategoriesPage({ onNavigate }) {
     return () => { active = false; };
   }, [search]);
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('categoriesEyebrow')}</p><h2>{t('categoriesHeading')}</h2></div></div>{error && <div className="alert error">{translateText(error, language)}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><div className="search-box"><Search size={16}/><input aria-label={t('searchCategories')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchCategories')} /></div><button type="button" className="button secondary small" onClick={() => setSearch('')}>{t('clear')}</button></div></div>{loading ? <div className="loading"><span className="spinner" />{t('loadingCategories')}</div> : categories.length ? <div className="card-grid soft-grid">{categories.map((category) => <article key={category.id} className="info-card"><img src={resolveApiAssetUrl(category.image || 'https://images.unsplash.com/photo-1519167758481-83f550bbeb3b?auto=format&fit=crop&w=900&q=80')} alt={category.name} loading="lazy" className="category-card-image" /><h3>{category.name}</h3><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} ${t('vendorsLabel')}` : t('noVendorsAvailable')}</span><span>{category.serviceCount ? `${category.serviceCount} ${t('availableServices')}` : t('noServicesListed')}</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/categories/${category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`)}>{t('openCategory')}</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></article>)}</div> : <EmptyState title={t('noCategoriesFound')} message={t('noCategoriesMatch')} />}</div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('categoriesEyebrow')}</p><h2>{t('categoriesHeading')}</h2></div></div>{error && <div className="alert error">{translateText(error, language)}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><div className="search-box"><Search size={16}/><input aria-label={t('searchCategories')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchCategories')} /></div><button type="button" className="button secondary small" onClick={() => setSearch('')}>{t('clear')}</button></div></div>{loading ? <div className="loading"><span className="spinner" />{t('loadingCategories')}</div> : categories.length ? <div className="card-grid soft-grid">{categories.map((category) =>   <article key={category.id} className="info-card">{category.image ? <img src={resolveApiAssetUrl(category.image)} alt={category.name} loading="lazy" className="category-card-image" /> : <div className="media-placeholder category-card-image" role="img" aria-label={`${category.name} image unavailable`} />}<h3>{category.name}</h3><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} ${t('vendorsLabel')}` : t('noVendorsAvailable')}</span><span>{category.serviceCount ? `${category.serviceCount} ${t('availableServices')}` : t('noServicesListed')}</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/categories/${category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`)}>{t('openCategory')}</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></article>)}</div> : <EmptyState title={t('noCategoriesFound')} message={t('noCategoriesMatch')} />}</div></main>;
 }
 
 function CategoryDetailPage({ slug, onNavigate }) {
@@ -2290,7 +2468,7 @@ function CategoryDetailPage({ slug, onNavigate }) {
 
   return <main className="page-shell"><div className="content-stack">
     <div className="section-header"><div><p className="eyebrow">CATEGORY</p><h2>{category.name}</h2></div><button className="button secondary small" type="button" onClick={() => onNavigate('/categories')}>Back to categories</button></div>
-    <div className="info-card wide"><img src={resolveApiAssetUrl(category.image)} alt="" className="category-detail-image" /><div className="category-detail-copy"><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.eventCount || 0} events</span><span>{category.vendorCount || 0} active vendors</span><span>{category.serviceCount || 0} available services</span></div><button className="button" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></div>
+    <div className="info-card wide">{category.image ? <img src={resolveApiAssetUrl(category.image)} alt="" className="category-detail-image" /> : <div className="media-placeholder category-detail-image" role="img" aria-label="Category image unavailable" />}<div className="category-detail-copy"><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.eventCount || 0} events</span><span>{category.vendorCount || 0} active vendors</span><span>{category.serviceCount || 0} available services</span></div><button className="button" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></div>
     <div className="panel"><label className="field"><span>Search related listings</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search events, vendors, and services"/></label></div>
     <section className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">EVENTS</p><h3>Related events</h3></div></div>{events.length ? <div className="card-grid">{events.map((event) => <article className="info-card" key={event.id}><h3>{event.title}</h3><p>{event.location || t('locationAvailable')}</p><p>{formatEventDate(event.startDate, language)}</p><button className="button secondary small" type="button" onClick={() => onNavigate(`/events/${event.id}`)}>View event</button></article>)}</div> : <EmptyState title="No related events" message="There are no public events in this category right now."/>}</section>
     <section className="content-stack"><div className="section-header compact-header"><div><p className="eyebrow">VENDORS</p><h3>Relevant vendors</h3></div></div>{vendors.length ? <div className="card-grid">{vendors.map((vendor) => <article key={vendor.id} className="vendor-card"><div className="card-image-wrap"><img src={vendor.image || 'https://images.unsplash.com/photo-1556761175-5973dc0f32e7?auto=format&fit=crop&w=900&q=80'} alt={vendor.business_name || vendor.name} loading="lazy" />{vendor.verified && <span className="verify-badge">Verified</span>}</div><div className="card-body"><div className="meta-row"><span>{vendor.category || 'Event services'}</span>{vendor.reviewCount > 0 && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div><h3>{vendor.business_name || vendor.name}</h3><p>{vendor.description || vendor.city || t('locationAvailable')}</p><div className="pricing-row"><strong>{vendor.priceFrom ? `ETB ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount || 0} reviews</span></div><button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button></div></article>)}</div> : <EmptyState title="No vendors currently available" message="This category has no eligible vendors right now." />}</section>
@@ -2646,25 +2824,62 @@ function AuthHomeLink() {
   return <a className="auth-home-link" href="/"><ArrowLeft size={16} aria-hidden="true" /><span>Back to Home</span></a>;
 }
 
-function ForgotPasswordLink({ className = '' }) {
-  const language = useLanguage();
-  return <button type="button" className={`text-link forgot-password-link ${className}`} onClick={() => navigateBrowserPath('/forgot-password')}>{translate('forgotPassword', language)}</button>;
-}
-
-function RoleForgotPasswordLink() {
-  return <div className="login-account-links single-link"><ForgotPasswordLink/></div>;
-}
-
-function LoginPage({ onLogin, demoMode = false }) {
+function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email, password); } catch (issue) { setError(translateText(issue.message, language)); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><h1>{t('signIn')}</h1><p className="muted">{t('accessWorkspace')}</p>{error && <div className="alert error" role="alert">{error}</div>}<form onSubmit={submit}><label className="field"><span>{demoMode ? 'Email address or username' : t('emailAddress')}</span><input type={demoMode ? 'text' : 'email'} name="email" placeholder={demoMode ? 'Email address or username' : undefined} autoComplete="username" autoCapitalize="none" required value={email} onChange={(e) => setEmail(e.target.value)} /></label><div className="field"><span id="login-password-label">{t('password')}</span><div className="password-input-wrap"><input aria-labelledby="login-password-label" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /><button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div><button className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button></form><div className="login-account-links"><button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button><ForgotPasswordLink/></div><div className="auth-home-footer"><AuthHomeLink /></div></div></main>;
+  const rememberMeLabel = translateText('Remember me', language);
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await onLogin(email, password, rememberMe);
+    } catch (issue) {
+      setError(translateText(issue.message, language));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="login-wrap"><div className="login-card">
+    <h1>{t('signIn')}</h1>
+    <p className="muted">{t('accessWorkspace')}</p>
+    {error && <div className="alert error" role="alert">{error}</div>}
+    <form className="login-form" onSubmit={submit}>
+      <label className="auth-field">
+        <span>{demoMode ? 'Email address or username' : t('emailAddress')}</span>
+        <input type={demoMode ? 'text' : 'email'} name="email" placeholder={demoMode ? 'Email address or username' : undefined} autoComplete="username" autoCapitalize="none" required value={email} onChange={(e) => setEmail(e.target.value)} />
+      </label>
+      <label className="auth-field" htmlFor="login-password">
+        <span id="login-password-label">{t('password')}</span>
+        <div className="password-input-wrap">
+          <input id="login-password" aria-labelledby="login-password-label" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
+        </div>
+      </label>
+      <div className="auth-form-options">
+        <label className="remember-option">
+          <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />
+          <span>{rememberMeLabel}</span>
+        </label>
+      </div>
+      {showForgotPassword && <div className="auth-forgot-row">
+        <button type="button" className="text-link auth-forgot-link" onClick={() => navigateBrowserPath('/forgot-password')}>{t('forgotPassword')}</button>
+      </div>}
+      <button type="submit" className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button>
+    </form>
+
+    <div className="login-account-links">
+      <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button>
+    </div>
+    <div className="auth-home-footer"><AuthHomeLink /></div>
+  </div></main>;
 }
 
 function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false, registrationEnabled = true, defaultRegistrationRole = 'customer' }) {
@@ -2714,8 +2929,6 @@ function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false
     }
   }
   return <main className="login-wrap"><div className="login-card registration-card">
-    <div className="brand-mark">EH</div>
-    <p className="eyebrow">{t('eventHubAccount')}</p>
     <h1>{t('createAccountHeading')}</h1>
     <p className="muted">{t('registerAsRole')}</p>
     {!registrationEnabled && <div className="alert warning" role="status">{t('publicRegistrationDisabled')}</div>}
@@ -2758,7 +2971,23 @@ function RegisterPage({ onRegister, onDemoRegistrationComplete, demoMode = false
           {confirmMismatch ? t('passwordMismatch') : t('passwordsMatch')}
         </p>}
       </div>
-      <label className="field"><span>{t('accountType')}</span><select name="role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}><option value="customer">{t('customerDashboard')}</option><option value="organizer">{t('organizerDashboard')}</option><option value="vendor">{t('vendorDashboard')}</option></select></label>
+      <fieldset className="account-type-group">
+        <legend>{t('accountType')}</legend>
+        <div className="account-type-options">
+          <label className="account-type-card" htmlFor="account-customer">
+            <input id="account-customer" type="radio" name="accountType" value="customer" checked={form.role === 'customer'} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))} />
+            <span>{t('customerDashboard')}</span>
+          </label>
+          <label className="account-type-card" htmlFor="account-organizer">
+            <input id="account-organizer" type="radio" name="accountType" value="organizer" checked={form.role === 'organizer'} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))} />
+            <span>{t('organizerDashboard')}</span>
+          </label>
+          <label className="account-type-card" htmlFor="account-vendor">
+            <input id="account-vendor" type="radio" name="accountType" value="vendor" checked={form.role === 'vendor'} onChange={(event) => setForm((current) => ({ ...current, role: event.target.value }))} />
+            <span>{t('vendorDashboard')}</span>
+          </label>
+        </div>
+      </fieldset>
       <button className="button login-button" disabled={busy || Boolean(success) || !registrationEnabled}>{busy ? t('creatingAccount') : t('registerNow')}</button>
     </form>
     <div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div>
@@ -2966,14 +3195,14 @@ function VendorLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('vendorPortal', language)}</p><h1>{translate('vendorSignIn', language)}</h1><p className="muted">{translate('manageYourBusiness', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openVendorDashboard', language)}</button></form><RoleForgotPasswordLink/><p className="login-note">{translateText('Vendor access remains restricted to the authenticated vendor’s own records and services.', language)}</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('vendorPortal', language)}</p><h1>{translate('vendorSignIn', language)}</h1><p className="muted">{translate('manageYourBusiness', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openVendorDashboard', language)}</button></form><p className="login-note">{translateText('Vendor access remains restricted to the authenticated vendor’s own records and services.', language)}</p></div></main>;
 }
 
 function VendorDashboard({ user, onLogout, onUserChange }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const vendorMenu = [
-    ['overview', 'Dashboard Overview'], ['profile', 'Business Profile'], ['verification', 'Vendor Verification'], ['services', 'My Services'], ['add-edit-services', 'Add and Edit Services'], ['categories', 'Service Categories'], ['pricing', 'Pricing and Packages'], ['availability', 'Availability Calendar'], ['requests', 'Booking Requests'], ['confirmed', 'Confirmed Bookings'], ['history', 'Booking History'], ['quotations', 'Quotations'], ['payments', 'Payments and Earnings'], ['messages', 'Customer Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['reports', 'Reports'], ['account', 'Profile']
+    ['overview', 'Dashboard Overview'], ['profile', 'Business Profile'], ['verification', 'Vendor Verification'], ['services', 'My Services'], ['add-edit-services', 'Add and Edit Services'], ['categories', 'Service Categories'], ['pricing', 'Pricing and Packages'], ['availability', 'Availability Calendar'], ['requests', 'Booking Requests'], ['confirmed', 'Confirmed Bookings'], ['history', 'Booking History'], ['coordination', 'Event Coordination'], ['quotations', 'Quotations'], ['payments', 'Payments and Earnings'], ['messages', 'Customer Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['reports', 'Reports'], ['settings', 'Business Settings'], ['account', 'Profile']
   ];
   const [slug, setSlug] = useState('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -2982,6 +3211,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [documentBusy, setDocumentBusy] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   async function uploadVendorVerificationDocuments(event) {
     const files = Array.from(event.target.files || []);
@@ -3016,7 +3246,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
     async function load() {
       try {
         setLoading(true);
-        const endpoints = ['overview', 'profile', 'verification', 'services', 'categories', 'pricing', 'availability', 'booking-requests', 'bookings', 'history', 'quotations', 'payments', 'messages', 'reviews', 'notifications', 'reports', 'account'];
+        const endpoints = ['overview', 'profile', 'verification', 'services', 'categories', 'pricing', 'availability', 'booking-requests', 'bookings', 'history', 'tasks', 'quotations', 'payments', 'messages', 'reviews', 'notifications', 'reports', 'account', 'packages', 'media'];
         const results = await Promise.all(endpoints.map((endpoint) => api(`/vendor/${endpoint}`)));
         const next = {};
         endpoints.forEach((endpoint, index) => { next[endpoint] = results[index].data; });
@@ -3028,11 +3258,12 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
       }
     }
     load();
-  }, []);
+  }, [refreshKey]);
 
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <div className="alert error">{error}</div>;
+    if (slug !== 'verification') return <VendorWorkspace view={slug} data={data} api={api} user={user} onUserChange={onUserChange} onRefresh={() => setRefreshKey((current) => current + 1)} />;
 
     switch (slug) {
       case 'overview':
@@ -3084,7 +3315,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
     else setSidebarCollapsed((current) => !current);
   }
 
-  return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('vendorDashboard').toUpperCase()} groups={[{ id: 'vendor', label: t('businessArea'), items: vendorMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target) => setSlug(target === 'profile' ? 'account' : target)} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{slug === 'settings' ? <DashboardSettings user={user}/> : renderSection()}</div><footer className="footer">{t('vendorPortal')} <span>•</span> {t('ownedRecordsOnly')}</footer></main></div>;
+  return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('vendorDashboard').toUpperCase()} groups={[{ id: 'vendor', label: t('businessArea'), items: vendorMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isVendor onNavigate={(target) => setSlug(target === 'profile' ? 'account' : target)} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{renderSection()}</div><footer className="footer">{t('vendorPortal')} <span>•</span> {t('ownedRecordsOnly')}</footer></main></div>;
 }
 
 function CustomerLogin({ onLogin }) {
@@ -3107,14 +3338,14 @@ function CustomerLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('customerPortal', language)}</p><h1>{translate('customerSignIn', language)}</h1><p className="muted">{translate('discoverManageEvents', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openCustomerDashboard', language)}</button></form><RoleForgotPasswordLink/></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('customerPortal', language)}</p><h1>{translate('customerSignIn', language)}</h1><p className="muted">{translate('discoverManageEvents', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openCustomerDashboard', language)}</button></form></div></main>;
 }
 
-function CustomerDashboard({ user, onLogout, onUserChange }) {
+function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const customerMenu = [
-    ['overview', 'Dashboard Overview'], ['vendors', 'Browse Vendors'], ['services', 'Search Services'], ['categories', 'Service Categories'], ['bookings', 'My Bookings'], ['history', 'Booking History'], ['events', 'My Events'], ['favorites', 'Saved Vendors'], ['quotations', 'Request Quotations'], ['payments', 'Payments and Transactions'], ['messages', 'Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['profile', 'Profile']
+    ['overview', 'Dashboard Overview'], ['vendors', 'Browse Vendors'], ['services', 'Search Services'], ['categories', 'Service Categories'], ['bookings', 'My Bookings'], ['history', 'Booking History'], ['events', 'My Events'], ['favorites', 'Wishlist'], ['quotations', 'Request Quotations'], ['payments', 'Payments and Transactions'], ['messages', 'Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['profile', 'Profile']
   ];
 
   const [slug, setSlug] = useState('overview');
@@ -3123,6 +3354,7 @@ function CustomerDashboard({ user, onLogout, onUserChange }) {
   const [data, setData] = useState({});
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [eventFormOpen, setEventFormOpen] = useState(false);
   const [eventFormError, setEventFormError] = useState('');
   const [eventSaving, setEventSaving] = useState(false);
@@ -3169,7 +3401,8 @@ function CustomerDashboard({ user, onLogout, onUserChange }) {
     async function load() {
       try {
         setLoading(true);
-        const endpoints = ['overview', 'vendors', 'services', 'categories', 'bookings', 'history', 'events', 'favorites', 'quotations', 'payments', 'messages', 'reviews', 'notifications', 'profile'];
+        setError('');
+        const endpoints = ['overview', 'vendors', 'services', 'categories', 'bookings', 'history', 'events', 'favorites', 'saved-services', 'quotations', 'payments', 'refunds', 'messages', 'reviews', 'notifications', 'profile'];
         const results = await Promise.all(endpoints.map((endpoint) => api(`/customer/${endpoint}`)));
         const next = {};
         endpoints.forEach((endpoint, index) => { next[endpoint] = results[index].data; });
@@ -3181,11 +3414,21 @@ function CustomerDashboard({ user, onLogout, onUserChange }) {
       }
     }
     load();
-  }, []);
+  }, [refreshKey]);
 
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <div className="alert error">{error}</div>;
+    return <CustomerWorkspace
+      view={slug}
+      data={data}
+      api={api}
+      user={user}
+      onNavigate={setSlug}
+      onNavigatePublic={onNavigatePublic}
+      onUserChange={onUserChange}
+      onRefresh={() => setRefreshKey((current) => current + 1)}
+    />;
 
     switch (slug) {
       case 'overview':
@@ -3229,7 +3472,7 @@ function CustomerDashboard({ user, onLogout, onUserChange }) {
     else setSidebarCollapsed((current) => !current);
   }
 
-  return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('customerDashboard').toUpperCase()} groups={[{ id: 'customer', label: t('bookings'), items: customerMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={setSlug} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{slug === 'settings' ? <DashboardSettings user={user}/> : renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
+  return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('customerDashboard').toUpperCase()} groups={[{ id: 'customer', label: t('bookings'), items: customerMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isCustomer onNavigate={setSlug} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
 }
 
 function OrganizerLogin({ onLogin }) {
@@ -3252,7 +3495,7 @@ function OrganizerLogin({ onLogin }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('organizerPortal', language)}</p><h1>{translate('organizerSignIn', language)}</h1><p className="muted">{translate('secureOrganizerAccess', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openOrganizerDashboard', language)}</button></form><RoleForgotPasswordLink/></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('organizerPortal', language)}</p><h1>{translate('organizerSignIn', language)}</h1><p className="muted">{translate('secureOrganizerAccess', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openOrganizerDashboard', language)}</button></form></div></main>;
 }
 
 function OrganizerDashboard({ user, onLogout, onUserChange }) {
@@ -3271,9 +3514,9 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
     async function load() {
       try {
         const [overviewResponse, eventsResponse, vendorsResponse, bookingsResponse] = await Promise.all([
-          api('/platform/overview'),
-          api('/platform/events'),
-          api('/platform/vendors'),
+          api('/platform/organizer/overview'),
+          api('/platform/events/mine'),
+          api('/platform/vendors?page=1&limit=4&sort=recommended'),
           api('/platform/bookings')
         ]);
         setOverview(overviewResponse.data);
@@ -3292,22 +3535,37 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
     else setSidebarCollapsed((current) => !current);
   }
   function renderDashboard(content) {
-    const organizerMenu = [['overview', 'Dashboard Overview'], ['events', 'My Events and Tickets'], ['profile', 'My Profile'], ['settings', 'Account Settings']];
-    return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle="ORGANIZER DASHBOARD" groups={[{ id: 'organizer', label: 'WORKSPACE', items: organizerMenu }]} activePage={dashboardView} onNavigate={setDashboardView} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={setDashboardView} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{content}</div></main></div>;
+    const organizerMenu = [
+      ['overview', 'Dashboard Overview'], ['events', 'My Events'], ['calendar', 'Event Calendar'],
+      ['vendors', 'Find Vendors'], ['services', 'Browse Services'], ['favorites', 'Saved Vendors'],
+      ['bookings', 'Booking Management'], ['quotations', 'Request Quotations'], ['budget', 'Budget and Expenses'],
+      ['coordination', 'Vendor Coordination'], ['messages', 'Messages'], ['notifications', 'Notifications'],
+      ['reports', 'Reports'], ['profile', 'Profile'], ['settings', 'Account Settings'],
+    ];
+    return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle="ORGANIZER DASHBOARD" groups={[{ id: 'organizer', label: 'WORKSPACE', items: organizerMenu }]} activePage={dashboardView} onNavigate={setDashboardView} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isOrganizer onNavigate={setDashboardView} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{content}</div></main></div>;
   }
 
   if (error) return renderDashboard(<div className="alert error">{translateText(error, language)}</div>);
   if (!overview) return renderDashboard(<div className="loading"><span className="spinner"/>{t('loading')}</div>);
 
-  const totalBudget = events.reduce((sum, event) => sum + Number(event.budget || 0), 0);
-  const upcomingEvents = events.filter((event) => new Date(event.date) >= new Date()).slice(0, 3);
+  const derivedSummary = summarizeOrganizerDashboard(events, bookings);
+  const summary = {
+    totalEvents: overview.totalEvents ?? derivedSummary.totalEvents,
+    upcomingCount: overview.upcomingEvents ?? derivedSummary.upcomingCount,
+    ongoingCount: overview.ongoingEvents ?? derivedSummary.ongoingCount,
+    totalBudget: overview.budget?.allocated ?? derivedSummary.totalBudget,
+  };
+  const upcomingEvents = derivedSummary.upcomingEvents.slice(0, 3);
   const activeBookings = bookings.filter((booking) => ['pending', 'confirmed', 'accepted', 'under_review'].includes(String(booking.status).toLowerCase()));
 
-  const profileContent = dashboardView === 'profile' ? <section className="dashboard-settings"><div className="page-heading"><div><p className="eyebrow">PROFILE</p><h2>My Profile</h2><p className="muted">Your organizer account information.</p></div></div><div className="panel profile-panel"><ProfilePhotoDisplay user={user}/><div><h3>{user.name || user.full_name || 'Organizer'}</h3><p className="muted">{user.email}</p><p>Organizer</p></div><span className="pill active">Organizer</span></div></section> : dashboardView === 'settings' ? <DashboardSettings user={user}/> : null;
+  const profileContent = dashboardView === 'settings' ? <DashboardSettings user={user}/> : null;
   const eventManagerContent = dashboardView === 'events' ? <OrganizerEventsManager api={api} /> : null;
-  return renderDashboard(profileContent || eventManagerContent || <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('organizerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || 'Organizer'}</h2><p className="muted">{t('secureOrganizerAccess')}</p></div></div>
+  const workspaceContent = dashboardView !== 'overview' && dashboardView !== 'events' && dashboardView !== 'settings'
+    ? <OrganizerWorkspace view={dashboardView} api={api} user={user} onNavigate={setDashboardView}/>
+    : null;
+  return renderDashboard(profileContent || eventManagerContent || workspaceContent || <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('organizerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || 'Organizer'}</h2><p className="muted">{t('secureOrganizerAccess')}</p></div></div>
     <div className="metric-grid">
-      <article className="metric-card"><p>{t('activeEvents')}</p><strong>{events.length}</strong><span>{upcomingEvents.length} {t('upcoming')}</span></article>
+      <article className="metric-card"><p>{t('activeEvents')}</p><strong>{summary.totalEvents}</strong><span>{summary.upcomingCount} {t('upcoming')} · {summary.ongoingCount} ongoing</span></article>
       <article className="metric-card"><p>{t('vendorMatches')}</p><strong>{vendors.length}</strong><span>{t('verifiedRanked')}</span></article>
       <article className="metric-card"><p>{t('budgetAllocated')}</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(totalBudget)}</strong><span>{t('currentPlans')}</span></article>
       <article className="metric-card"><p>{t('bookingsInMotion')}</p><strong>{activeBookings.length}</strong><span>{bookings.length} {t('totalTracked')}</span></article>
@@ -3316,11 +3574,11 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
       <article className="panel">
         <div className="panel-header"><h3>{t('eventPipeline')}</h3><button className="button secondary small" onClick={() => setDashboardView('events')}>{t('createEvent')}</button></div>
         <div className="list-stack">
-          {upcomingEvents.length ? upcomingEvents.map((event) => <div key={event.id} className="list-card"><div><strong>{event.title}</strong><small>{event.type} • {event.date}</small></div><span className="pill active">{t('eventPlanned')}</span></div>) : <div className="empty panel"><strong>{t('noUpcomingEvents')}</strong><span>{t('draftEventPrompt')}</span></div>}
+          {upcomingEvents.length ? upcomingEvents.map((event) => <div key={event.id} className="list-card"><div><strong>{event.title}</strong><small>{event.type} • {formatEventDate(event.startDate || event.date, language)}</small></div><span className="pill active">{t('eventPlanned')}</span></div>) : <div className="empty panel"><strong>{t('noUpcomingEvents')}</strong><span>{t('draftEventPrompt')}</span></div>}
         </div>
       </article>
       <article className="panel">
-        <div className="panel-header"><h3>{t('recommendedVendors')}</h3><button className="button secondary small">{t('browseAll')}</button></div>
+        <div className="panel-header"><h3>{t('recommendedVendors')}</h3><button className="button secondary small" type="button" onClick={() => setDashboardView('vendors')}>{t('browseAll')}</button></div>
         <div className="list-stack">
           {vendors.slice(0, 4).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.category} • {vendor.city}</small></div><span className="pill success">{vendor.rating?.toFixed ? `${vendor.rating.toFixed(1)}★` : 'Top rated'}</span></div>)}
         </div>
@@ -3336,9 +3594,10 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
       <article className="panel">
         <div className="panel-header"><h3>{t('budgetSnapshot')}</h3></div>
         <div className="budget-stack">
-          <div className="report-row"><span>{t('reserved')}</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(totalBudget)}</strong></div>
-          <div className="report-row"><span>{t('paymentsDue')}</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(bookings.reduce((sum, booking) => sum + Number(booking.quotedAmount || 0), 0))}</strong></div>
-          <div className="report-row"><span>{t('remaining')}</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(Math.max(totalBudget - bookings.reduce((sum, booking) => sum + Number(booking.quotedAmount || 0), 0), 0))}</strong></div>
+          <div className="report-row"><span>Allocated budget</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(summary.totalBudget)}</strong></div>
+          <div className="report-row"><span>Planned expenses</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(overview.budget?.plannedExpenses || 0)}</strong></div>
+          <div className="report-row"><span>Actual expenses</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(overview.budget?.actualExpenses || 0)}</strong></div>
+          <div className="report-row"><span>Remaining budget</span><strong>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits: 0 }).format(overview.budget?.remaining ?? summary.totalBudget)}</strong></div>
         </div>
       </article>
     </div>
@@ -3349,7 +3608,7 @@ function Login({onLogin}) {
   const language = useLanguage();
   const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
   async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email,password); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><RoleForgotPasswordLink/><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row"><LanguageSelector/></div><div className="brand-mark">EF</div><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
 }
 function Overview({ onNavigate }) {
   const language = useLanguage();
@@ -4441,7 +4700,7 @@ function Reports() {
   );
 }
 
-function SettingsPage() {
+function ApiSettingsPage() {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [settings, setSettings] = useState(null);
@@ -4774,6 +5033,10 @@ function MaintenancePage({ platformName, message, onAdminSignIn }) {
   );
 }
 
+function SettingsPage() {
+  return DEMO_AUTH_ENABLED ? <AdminSystemSettings /> : <ApiSettingsPage />;
+}
+
 export default function App(){
   const language = useLanguage();
   const authSessionState = useAuthSessionSnapshot();
@@ -4851,11 +5114,8 @@ export default function App(){
   const resolve = useCallback(() => {
     const nextPath = normalizePath(`${window.location.pathname}${window.location.search}`);
     setCurrentPath(nextPath);
-    const found = nextPath.match(/^\/admin(?:\/([^/]+))?\/?(?:\?.*)?$/);
-    if (found) {
-      const next = found[1] || 'overview';
-      setSlug(['overview','users','roles','vendors','categories','events','bookings','package-requests','payments','reviews','complaints','messages','reports','notifications','audit-logs','settings','profile','account-settings'].includes(next) ? next : 'overview');
-    }
+    const nextSlug = adminSlugFromPath(nextPath);
+    if (nextSlug !== null) setSlug(nextSlug);
   }, [normalizePath]);
 
   useEffect(()=>{
@@ -4994,7 +5254,7 @@ export default function App(){
   async function loginCustomer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'customer') throw new Error('Customer access is required.');authSessionLoader.setAuthenticated(r.data.user, 'customer');setUser(r.data.user);setPortal('customer');setGlobalError('');setShowLogin(false);navigatePublic('/customer/dashboard');}
   async function loginOrganizer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'organizer') throw new Error('Organizer access is required.');authSessionLoader.setAuthenticated(r.data.user, 'organizer');setUser(r.data.user);setPortal('organizer');setGlobalError('');setShowLogin(false);navigatePublic('/organizer/dashboard');}
   async function loginVendor(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'vendor') throw new Error('Vendor access is required.');authSessionLoader.setAuthenticated(r.data.user, 'vendor');setUser(r.data.user);setPortal('vendor');setGlobalError('');setShowLogin(false);navigatePublic('/vendor/dashboard');}
-  function navigate(next){history.pushState({},'',slugPath(next));setSlug(next);setSidebarOpen(false);setGlobalError('');}
+  function navigate(next){const destination=DEMO_AUTH_ENABLED&&next==='account-settings'?'settings':next;const path=adminPathForSlug(destination);history.pushState({},'',path);setSlug(adminSlugFromPath(path)||'overview');setSidebarOpen(false);setGlobalError('');}
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
     if (!window.confirm(translate('confirmLogout', language))) return;
@@ -5035,7 +5295,7 @@ export default function App(){
     '/categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/about': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/contact': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>,
-    '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />,
+    '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword />,
     '/register': <RegisterPage onRegister={registerPublic} onDemoRegistrationComplete={completeDemoRegistration} demoMode={DEMO_AUTH_ENABLED} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} defaultRegistrationRole={platformAvailability?.defaultRegistrationRole ?? 'customer'} />,
     '/forgot-password': <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />,
     '/verify-reset-otp': <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />,
@@ -5059,8 +5319,9 @@ export default function App(){
     return <MaintenancePage platformName={platformAvailability.platformName} message={platformAvailability.maintenanceMessage} onAdminSignIn={() => navigatePublic('/login')} />;
   }
   if (routePath === '/search') {
-    const query = new URLSearchParams(currentPath.split('?')[1] || '').get('q') || '';
-    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><SearchResultsPage initialQuery={query} onNavigate={navigatePublic}/></PublicPageLayout>;
+    const params = new URLSearchParams(currentPath.split('?')[1] || '');
+    const query = params.get('q') || '';
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><SearchResultsPage initialQuery={query} initialCategory={params.get('category') || ''} initialLocation={params.get('location') || ''} onNavigate={navigatePublic}/></PublicPageLayout>;
   }
   if (routePath === '/vendor-application') {
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorApplicationPage user={user} onNavigate={navigatePublic}/></PublicPageLayout>;
@@ -5087,7 +5348,7 @@ export default function App(){
   if(!user){
     if (currentPath.startsWith('/admin')) return DEMO_AUTH_ENABLED ? <LoginPage onLogin={login} demoMode /> : <Login onLogin={login}/>;
     if (roleDashboardRoute) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
-    if (routePath === '/login') return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
+    if (routePath === '/login') return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword/>;
     if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onDemoRegistrationComplete={completeDemoRegistration} demoMode={DEMO_AUTH_ENABLED} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} defaultRegistrationRole={platformAvailability?.defaultRegistrationRole ?? 'customer'}/>;
     if (DEMO_AUTH_ENABLED && /^\/(customer|organizer|vendor)\/dashboard$/.test(currentPath)) return <LoginPage onLogin={loginPublic} demoMode />;
     if (routePath === '/forgot-password') return <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />;
@@ -5101,8 +5362,9 @@ export default function App(){
     return <NotFoundPage onNavigate={navigatePublic}/>;
   }
 
-  if (portal === 'customer') return <><DemoModeBanner user={user}/><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  if (portal === 'organizer') return <><DemoModeBanner user={user}/><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  if (portal === 'vendor') return <><DemoModeBanner user={user}/><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  return <><DemoModeBanner user={user}/><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
+  if (portal === 'customer') return <><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser} onNavigatePublic={navigatePublic}/></>;
+  if (portal === 'organizer') return <><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
+  if (portal === 'vendor') return <><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={navigate} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={navigate} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translate('securePlatform',language)}</footer></main></div></>;
 }

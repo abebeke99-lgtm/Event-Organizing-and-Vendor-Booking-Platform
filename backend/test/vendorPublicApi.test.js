@@ -48,6 +48,7 @@ test('public vendor list and detail return correctly mapped optional data', asyn
   assert.ok(Array.isArray(vendor.services));
   assert.ok(Array.isArray(vendor.reviews));
   assert.ok(Array.isArray(vendor.availability));
+  assert.ok(vendor.ratingDistribution && typeof vendor.ratingDistribution === 'object');
 
   const [[reviewCount]] = await pool.query(
     `SELECT COUNT(*) AS total
@@ -63,6 +64,7 @@ test('public vendor list and detail return correctly mapped optional data', asyn
     [vendorId]
   );
   assert.equal(vendor.reviews.length, Math.min(Number(reviewCount.total), 20));
+  assert.equal(Object.values(vendor.ratingDistribution).reduce((sum, count) => sum + count, 0), Number(reviewCount.total));
   assert.equal(vendor.availability.length, Math.min(Number(availabilityCount.total), 30));
   for (const review of vendor.reviews) {
     assert.deepEqual(Object.keys(review).sort(), ['comment', 'createdAt', 'customerName', 'rating'].sort());
@@ -70,6 +72,53 @@ test('public vendor list and detail return correctly mapped optional data', asyn
   for (const entry of vendor.availability) {
     assert.deepEqual(Object.keys(entry).sort(), ['date', 'status'].sort());
   }
+});
+
+test('vendor discovery validates filters and accepts availability and recent sorting', async () => {
+  const invalid = await get('/api/platform/vendors?minPrice=20000&maxPrice=10000');
+  assert.equal(invalid.status, 400);
+  const filtered = await get('/api/platform/vendors?availableOnly=true&sort=recently-added&page=1&limit=5');
+  assert.equal(filtered.status, 200);
+  const body = await filtered.json();
+  assert.ok(Array.isArray(body.data));
+  assert.equal(body.pagination.page, 1);
+});
+
+test('public categories only expose images uploaded to the database', async () => {
+  const [rows] = await pool.query(
+    `SELECT id, image_mime
+     FROM service_categories
+     WHERE is_active = TRUE`,
+  );
+  const response = await get('/api/platform/categories');
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
+  assert.ok(Array.isArray(data));
+
+  for (const category of data) {
+    const record = rows.find((row) => Number(row.id) === category.id);
+    assert.ok(record);
+    assert.equal(category.image, record.image_mime ? `/api/platform/categories/${category.id}/image` : null);
+  }
+});
+
+test('public category images allow embedding from the frontend origin', async (context) => {
+  const [[category]] = await pool.query(
+    `SELECT id
+     FROM service_categories
+     WHERE is_active = TRUE AND image IS NOT NULL
+     ORDER BY id
+     LIMIT 1`,
+  );
+  if (!category) {
+    context.skip('No active category image exists in the local database.');
+    return;
+  }
+
+  const response = await get(`/api/platform/categories/${category.id}/image`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cross-origin-resource-policy'), 'cross-origin');
+  assert.match(response.headers.get('content-type') || '', /^image\//);
 });
 
 test('public service packages and detail return correctly mapped optional data', async (context) => {

@@ -147,8 +147,11 @@ function createDatabase() {
       return [vendors.filter((vendor) => vendor.id === Number(values[0]))
         .map(({ id, user_id, verification_status }) => ({ id, user_id, verification_status })), []];
     }
-    if (sql.startsWith('SELECT id, verification_status FROM vendor_profiles WHERE user_id = ?')) {
-      return [vendors.filter((vendor) => vendor.user_id === Number(values[0]))
+    if (sql.includes('SELECT id, verification_status FROM vendor_profiles') && sql.includes('WHERE user_id = ?')) {
+      return [vendors.filter((vendor) => vendor.user_id === Number(values[0])
+        && (!sql.includes('verification_status IN')
+          || ['pending', 'under_review', 'information_requested'].includes(vendor.verification_status)))
+        .slice(0, 1)
         .map(({ id, verification_status }) => ({ id, verification_status })), []];
     }
     if (sql.startsWith('SELECT id FROM vendor_profiles WHERE user_id = ?')) {

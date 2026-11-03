@@ -280,6 +280,35 @@ test('configured Netlify origin is allowed to make credentialed API requests', a
   }
 });
 
+test('local Vite origins on alternate ports are allowed in development', async () => {
+  const previousOrigin = process.env.WEB_ORIGIN;
+  const previousEnvironment = process.env.NODE_ENV;
+  process.env.WEB_ORIGIN = 'http://127.0.0.1:5173';
+  process.env.NODE_ENV = 'development';
+  const corsApp = createApp({ database: { async query() {} } });
+  if (previousOrigin === undefined) delete process.env.WEB_ORIGIN;
+  else process.env.WEB_ORIGIN = previousOrigin;
+  if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousEnvironment;
+  const corsServer = corsApp.listen(0, '127.0.0.1');
+  await once(corsServer, 'listening');
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${corsServer.address().port}/`, {
+      headers: { Origin: 'http://127.0.0.1:5174' },
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'http://127.0.0.1:5174');
+    assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+  } finally {
+    await new Promise((resolve, reject) => {
+      corsServer.close((error) => error ? reject(error) : resolve());
+      corsServer.closeAllConnections();
+    });
+  }
+});
+
 test('production CORS does not allow local development origins', async () => {
   const previousOrigin = process.env.WEB_ORIGIN;
   const previousEnvironment = process.env.NODE_ENV;
@@ -529,6 +558,12 @@ test('profile photo endpoints require the authenticated account for platform and
       assert.equal(response.status, 401, `${method} ${prefix}/profile/photo`);
       assert.deepEqual(await response.json(), { error: 'Authentication required.' });
     }
+  }
+
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    const response = await fetch(`${baseUrl}/api/users/me/avatar`, { method });
+    assert.equal(response.status, 401, `${method} /api/users/me/avatar`);
+    assert.deepEqual(await response.json(), { error: 'Authentication required.' });
   }
 });
 
