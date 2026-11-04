@@ -325,10 +325,10 @@ Apply `007_contact_inquiry_types.sql` and `036_public_contact_details.sql` with 
 The public top bar displays `abebeke99@gmail.com` as a mail link, `+251986481821` as a telephone link, and the configured Telegram, YouTube, Facebook, and LinkedIn profiles. Profile URLs must use HTTPS and the expected platform host. The same contact details appear on the Contact page after migration 036 is applied. These Vite values configure the top bar and do not change the footer's current output. Set the following Vite environment variables in `frontend/.env.development` for local work or in the frontend host's build environment before building for deployment; Vite reads env files only at startup:
 
 ```env
-VITE_TELEGRAM_URL=https://t.me/your-channel
-VITE_YOUTUBE_URL=https://youtube.com/@your-channel
-VITE_FACEBOOK_URL=https://facebook.com/your-page
-VITE_LINKEDIN_URL=https://linkedin.com/company/your-page
+VITE_TELEGRAM_URL=https://t.me/የአንተ_ቻናል
+VITE_YOUTUBE_URL=https://youtube.com/@የአንተ_ቻናል
+VITE_FACEBOOK_URL=https://facebook.com/የአንተ_ገጽ
+VITE_LINKEDIN_URL=https://linkedin.com/company/የአንተ_ገጽ
 VITE_CONTACT_PHONE=+251986481821
 ```
 

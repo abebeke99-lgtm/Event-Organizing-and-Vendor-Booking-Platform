@@ -249,19 +249,20 @@ test('top bar ignores invalid profile URLs without changing footer output', () =
   assert.equal(footerWithProfiles, footerWithoutProfiles);
 });
 
-test('example and development env files keep contact links empty until configured', async () => {
-  const keys = [
-    'VITE_TELEGRAM_URL',
-    'VITE_YOUTUBE_URL',
-    'VITE_FACEBOOK_URL',
-    'VITE_LINKEDIN_URL',
-    'VITE_CONTACT_PHONE',
-  ];
+test('example, development, and production env files expose configured public contact details', async () => {
+  const expectedValues = {
+    VITE_TELEGRAM_URL: 'https://t.me/የአንተ_ቻናል',
+    VITE_YOUTUBE_URL: 'https://youtube.com/@የአንተ_ቻናል',
+    VITE_FACEBOOK_URL: 'https://facebook.com/የአንተ_ገጽ',
+    VITE_LINKEDIN_URL: 'https://linkedin.com/company/የአንተ_ገጽ',
+    VITE_CONTACT_PHONE: '+251986481821',
+  };
 
-  for (const filename of ['../.env.example', '../.env.development']) {
+  for (const filename of ['../.env.example', '../.env.development', '../.env.production']) {
     const contents = await readFile(new URL(filename, import.meta.url), 'utf8');
-    for (const key of keys) {
-      assert.match(contents, new RegExp(`^${key}=$`, 'm'), `${filename} should leave ${key} empty`);
+    const lines = contents.split(/\r?\n/);
+    for (const [key, value] of Object.entries(expectedValues)) {
+      assert.ok(lines.includes(`${key}=${value}`), `${filename} should configure ${key}`);
     }
   }
 });
