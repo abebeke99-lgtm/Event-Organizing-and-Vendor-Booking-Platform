@@ -23,11 +23,12 @@ function matchesCategoryName(candidate = '', target = '') {
 export function normalizeServiceRecord(service = {}) {
   const record = { ...service };
   record.id = Number(record.id ?? record.service_id ?? 0) || 0;
-  record.title = sanitizeText(record.title || record.name || 'Untitled service', 'Untitled service');
+  record.title = sanitizeText(record.title || record.name);
   record.vendorId = Number(record.vendorId ?? record.vendor_id ?? 0) || 0;
-  record.vendorName = sanitizeText(record.vendorName || record.vendor_name || record.business_name || record.vendor || 'EventHub partner');
-  record.category = sanitizeText(record.category || record.service_category || 'General');
-  record.city = sanitizeText(record.city || record.location || 'Addis Ababa');
+  record.categoryId = Number(record.categoryId ?? record.category_id ?? 0) || null;
+  record.vendorName = sanitizeText(record.vendorName || record.vendor_name || record.business_name || record.vendor);
+  record.category = sanitizeText(record.category || record.service_category);
+  record.city = sanitizeText(record.city || record.location);
   record.description = sanitizeText(record.description || record.summary || '');
   const price = record.price ?? record.base_price;
   record.price = price === null || price === undefined || price === '' ? null : Number(price);
@@ -35,6 +36,7 @@ export function normalizeServiceRecord(service = {}) {
   record.currency = sanitizeText(record.currency || 'ETB', 'ETB').toUpperCase();
   record.rating = Number(record.rating ?? record.average_rating ?? 0) || 0;
   record.reviewCount = Number(record.reviewCount ?? record.reviews_count ?? 0) || 0;
+  record.bookingCount = Number(record.bookingCount ?? record.booking_count ?? 0) || 0;
   record.status = String(record.status || 'active').toLowerCase();
   record.visibility = String(record.visibility || 'public').toLowerCase();
   record.published = record.published !== false && record.isPublished !== false && record.visibility !== 'private';
@@ -44,7 +46,10 @@ export function normalizeServiceRecord(service = {}) {
 export function buildServiceFilters(raw = {}) {
   const search = sanitizeText(raw.search, '').toLowerCase().slice(0, 120);
   const category = sanitizeText(raw.category, '').toLowerCase();
+  const rawCategoryId = Number(raw.categoryId ?? raw.category_id ?? 0);
+  const categoryId = Number.isInteger(rawCategoryId) && rawCategoryId > 0 ? rawCategoryId : null;
   const location = sanitizeText(raw.location, '').toLowerCase();
+  const vendor = sanitizeText(raw.vendor, '').toLowerCase().slice(0, 120);
   const rawVendorId = Number(raw.vendorId ?? raw.vendor_id ?? 0);
   const vendorId = Number.isInteger(rawVendorId) && rawVendorId > 0 ? rawVendorId : null;
   const minPrice = Number.isFinite(Number(raw.minPrice)) ? Math.max(0, Number(raw.minPrice)) : 0;
@@ -58,13 +63,15 @@ export function buildServiceFilters(raw = {}) {
   return {
     search,
     category,
+    categoryId,
     location,
+    vendor,
     vendorId,
     minPrice,
     maxPrice,
     minRating,
     availableOnly,
-    sort: ['recommended', 'highest-rated', 'price-low', 'price-high', 'alphabetical'].includes(sort) ? sort : 'recommended',
+    sort: ['recommended', 'popular', 'newest', 'highest-rated', 'rating', 'price-low', 'price-high', 'alphabetical'].includes(sort) ? sort : 'recommended',
     page,
     limit,
   };
@@ -72,9 +79,9 @@ export function buildServiceFilters(raw = {}) {
 
 export function listPublicServices(services = [], filters = {}) {
   const normalized = (Array.isArray(services) ? services : []).map(normalizeServiceRecord).filter((service) => {
-    if (!service || !service.id) return false;
+    if (!service || !service.id || !service.title || !service.vendorId || !service.vendorName) return false;
     if (service.visibility === 'private' || service.visibility === 'hidden') return false;
-    if (service.status === 'draft' || service.status === 'rejected' || service.status === 'cancelled') return false;
+    if (service.status !== 'active') return false;
     if (service.published === false) return false;
     return true;
   });
@@ -84,8 +91,10 @@ export function listPublicServices(services = [], filters = {}) {
   const filtered = normalized.filter((service) => {
     const haystack = [service.title, service.category, service.description, service.vendorName, service.city].join(' ').toLowerCase();
     if (options.search && !haystack.includes(options.search)) return false;
+    if (options.categoryId && Number(service.categoryId) !== options.categoryId) return false;
     if (options.category && !matchesCategoryName(service.category, options.category)) return false;
     if (options.location && !service.city.toLowerCase().includes(options.location)) return false;
+    if (options.vendor && !service.vendorName.toLowerCase().includes(options.vendor)) return false;
     if (options.vendorId && Number(service.vendorId) !== Number(options.vendorId)) return false;
     if (options.minPrice && (service.price === null || service.price < options.minPrice)) return false;
     if (options.maxPrice && (service.price === null || service.price > options.maxPrice)) return false;
@@ -96,7 +105,16 @@ export function listPublicServices(services = [], filters = {}) {
 
   const sorted = [...filtered].sort((a, b) => {
     switch (options.sort) {
+      case 'popular':
+        return (b.bookingCount || 0) - (a.bookingCount || 0)
+          || (b.reviewCount || 0) - (a.reviewCount || 0)
+          || (b.rating || 0) - (a.rating || 0)
+          || a.title.localeCompare(b.title);
+      case 'newest':
+        return (Date.parse(b.createdAt || '') || 0) - (Date.parse(a.createdAt || '') || 0)
+          || a.title.localeCompare(b.title);
       case 'highest-rated':
+      case 'rating':
         return (b.rating || 0) - (a.rating || 0) || (b.reviewCount || 0) - (a.reviewCount || 0) || a.title.localeCompare(b.title);
       case 'price-low':
         return (a.price === null ? 1 : 0) - (b.price === null ? 1 : 0)
@@ -136,6 +154,6 @@ export function getPublicServiceById(services = [], serviceId) {
     .map(normalizeServiceRecord)
     .find((service) => Number(service.id) === parsedId);
   if (!record) return null;
-  if (record.visibility === 'private' || record.visibility === 'hidden' || record.status === 'draft' || record.published === false) return null;
+  if (record.visibility === 'private' || record.visibility === 'hidden' || record.status !== 'active' || record.published === false) return null;
   return record;
 }

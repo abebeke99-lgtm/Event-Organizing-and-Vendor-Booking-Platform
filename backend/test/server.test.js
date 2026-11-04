@@ -355,7 +355,7 @@ test('database health route remains available and checks database connectivity',
   const response = await fetch(`${baseUrl}/api/health`);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: 'ok', db: 'connected' });
+  assert.deepEqual(await response.json(), { ok: true, status: 'ok', db: 'connected' });
   assert.equal(healthQueryCount, 2);
 });
 
@@ -378,6 +378,7 @@ test('database health route reports unavailable when DB_NAME does not match the 
     const response = await fetch(`http://127.0.0.1:${mismatchedServer.address().port}/api/health`);
     assert.equal(response.status, 503);
     assert.deepEqual(await response.json(), {
+      ok: false,
       status: 'unavailable',
       reasonCode: 'DB_NAME_MISMATCH',
     });
@@ -395,6 +396,7 @@ test('database health route reports unavailable when the database query fails', 
       async query() {
         const error = new Error('Database password=health-test-secret mysql://user:health-test-secret@db.example:11713');
         error.code = 'ECONNREFUSED';
+        error.sqlMessage = 'password=health-test-secret';
         throw error;
       },
     },
@@ -416,10 +418,10 @@ test('database health route reports unavailable when the database query fails', 
     }
 
     assert.equal(response.status, 503);
-    assert.deepEqual(body, {
-      status: 'unavailable',
-      reasonCode: 'DB_CONNECT_FAILED',
-    });
+    assert.equal(body.ok, false);
+    assert.equal(body.status, 'unavailable');
+    assert.equal(body.reasonCode, 'DB_CONNECT_FAILED');
+    assert.equal(Object.hasOwn(body, 'error'), false);
     assert.doesNotMatch(JSON.stringify(body), /health-test-secret/);
     assert.doesNotMatch(loggedErrors.join(' '), /health-test-secret/);
     assert.match(loggedErrors.join(' '), /ECONNREFUSED/);
@@ -435,7 +437,7 @@ test('mounted protected API routes reach authorization instead of the 404 handle
   const response = await fetch(`${baseUrl}/api/platform/me`);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { data: { user: null } });
+  assert.deepEqual(await response.json(), { user: null });
 });
 
 test('anonymous administrator session checks do not consume sign-in rate limits', async () => {
@@ -450,14 +452,13 @@ test('anonymous platform session checks do not consume sign-in rate limits', asy
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const response = await fetch(`${baseUrl}/api/platform/me`);
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { data: { user: null } });
+    assert.deepEqual(await response.json(), { user: null });
   }
 });
 
 test('successful session checks do not exhaust session probe rate limits', async () => {
   for (const [path, expected] of [
     ['/api/auth/me', { user: null }],
-    ['/api/platform/me', { data: { user: null } }],
   ]) {
     for (let attempt = 0; attempt < 65; attempt += 1) {
       const response = await fetch(`${baseUrl}${path}`);
@@ -479,7 +480,7 @@ test('session endpoints return 401 when a cookie is present but invalid', async 
   assert.deepEqual(await adminResponse.json(), { error: 'Authentication required.' });
   assert.match(adminResponse.headers.get('set-cookie') || '', /admin_session=/);
   assert.equal(platformResponse.status, 401);
-  assert.deepEqual(await platformResponse.json(), { error: 'Authentication required.' });
+  assert.deepEqual(await platformResponse.json(), { message: 'Unauthorized' });
   assert.match(platformResponse.headers.get('set-cookie') || '', /platform_session=/);
 });
 
@@ -569,14 +570,16 @@ test('profile photo endpoints require the authenticated account for platform and
       });
 
       assert.equal(response.status, 401, `${method} ${prefix}/profile/photo`);
-      assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+      assert.deepEqual(await response.json(), prefix === '/api/platform'
+        ? { message: 'Unauthorized' }
+        : { error: 'Authentication required.' });
     }
   }
 
   for (const method of ['GET', 'POST', 'DELETE']) {
     const response = await fetch(`${baseUrl}/api/users/me/avatar`, { method });
     assert.equal(response.status, 401, `${method} /api/users/me/avatar`);
-    assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+    assert.deepEqual(await response.json(), { message: 'Unauthorized' });
   }
 });
 

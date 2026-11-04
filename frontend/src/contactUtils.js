@@ -54,7 +54,8 @@ export function buildContactInfo(settings = {}) {
     ? settings.socials.filter((entry) => {
       if (!entry || typeof entry !== 'object' || !entry.label || !entry.url) return false;
       try {
-        return ['http:', 'https:'].includes(new URL(entry.url).protocol);
+        const url = new URL(entry.url);
+        return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password;
       } catch {
         return false;
       }

@@ -12,7 +12,7 @@ function matchesCategoryName(candidate = '', target = '') {
   const first = normalizeCategoryKey(candidate);
   const second = normalizeCategoryKey(target);
   if (!first || !second) return false;
-  return first === second || first.includes(second) || second.includes(first);
+  return first === second;
 }
 
 export function normalizeVendorRecord(vendor = {}) {
@@ -24,6 +24,8 @@ export function normalizeVendorRecord(vendor = {}) {
   record.verified = Boolean(record.verified || record.verification_status === 'verified');
   record.rating = Number(record.rating ?? 0) || 0;
   record.reviewCount = Number(record.reviewCount ?? record.reviews_count ?? 0) || 0;
+  record.bookingCount = Number(record.bookingCount ?? record.booking_count ?? 0) || 0;
+  record.isFeatured = Boolean(record.isFeatured ?? record.is_featured ?? false);
   const startingPrice = record.priceFrom ?? record.starting_price ?? record.min_price;
   record.priceFrom = startingPrice === null || startingPrice === undefined || startingPrice === ''
     ? null
@@ -61,7 +63,8 @@ export function buildVendorFilters(raw = {}) {
     minPrice: Number.isFinite(minPrice) ? Math.max(0, minPrice) : 0,
     maxPrice: Number.isFinite(maxPrice) && maxPrice > 0 ? Math.max(minPrice || 0, maxPrice) : 0,
     availableOnly,
-    sort: ['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added'].includes(sort) ? sort : 'recommended',
+    featured: raw.filter === 'featured',
+    sort: ['recommended', 'popular', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added'].includes(sort) ? sort : 'recommended',
     page,
     limit,
   };
@@ -84,6 +87,7 @@ export function listPublicVendors(vendors = [], filters = {}) {
     if (options.category && !matchesCategoryName(vendor.category, options.category)) return false;
     if (options.location && !vendor.city.toLowerCase().includes(options.location)) return false;
     if (options.verified && !vendor.verified) return false;
+    if (options.featured && !vendor.isFeatured) return false;
     if (options.minRating && vendor.rating < options.minRating) return false;
     if (options.minPrice && (vendor.priceFrom === null || vendor.priceFrom < options.minPrice)) return false;
     if (options.maxPrice && (vendor.priceFrom === null || vendor.priceFrom > options.maxPrice)) return false;
@@ -100,6 +104,11 @@ export function listPublicVendors(vendors = [], filters = {}) {
         return (b.rating || 0) - (a.rating || 0) || (b.reviewCount || 0) - (a.reviewCount || 0) || (a.business_name || '').localeCompare(b.business_name || '');
       case 'most-reviewed':
         return (b.reviewCount || 0) - (a.reviewCount || 0) || (b.rating || 0) - (a.rating || 0) || a.business_name.localeCompare(b.business_name);
+      case 'popular':
+        return (b.bookingCount || 0) - (a.bookingCount || 0)
+          || (b.reviewCount || 0) - (a.reviewCount || 0)
+          || (b.rating || 0) - (a.rating || 0)
+          || a.business_name.localeCompare(b.business_name);
       case 'price-low':
         return (a.priceFrom === null ? 1 : 0) - (b.priceFrom === null ? 1 : 0)
           || (a.priceFrom ?? 0) - (b.priceFrom ?? 0)

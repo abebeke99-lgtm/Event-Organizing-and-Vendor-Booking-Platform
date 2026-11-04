@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Heart, Trash2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Building2, Heart, MapPin, Trash2 } from 'lucide-react';
 import { translate, useLanguage } from './language.js';
 import {
   clearComparedVendors,
@@ -17,7 +17,9 @@ function usePageText() {
 
 function PageStatus({ loading, error, onRetry }) {
   const t = usePageText();
-  if (loading) return <p className="loading" role="status">{t('navigationFeatureLoading')}</p>;
+  if (loading) return <div className="navigation-feature-skeleton-grid" role="status" aria-label={t('navigationFeatureLoading')}>
+    {Array.from({ length: 3 }, (_, index) => <div className="navigation-feature-skeleton" aria-hidden="true" key={index} />)}
+  </div>;
   if (error) return <div className="info-card wide danger-card" role="alert">
     <p>{error}</p><button className="button secondary" type="button" onClick={onRetry}>{t('publicNavRetry')}</button>
   </div>;
@@ -29,13 +31,17 @@ function eventDate(event) {
 }
 
 function eventCard(event, onNavigate) {
+  const detailsPath = `/events/${event.id}`;
   return <article className="info-card navigation-event-card" key={event.id}>
     <p className="eyebrow">{eventDate(event)}</p>
     <h3>{event.title}</h3>
-    <p>{event.city || event.venue || event.eventType || event.event_type || ''}</p>
-    <button className="button secondary small" type="button" onClick={() => onNavigate(`/events/${event.id}`)}>
+    <p>{event.location || event.city || event.venue || event.eventType || event.event_type || ''}</p>
+    <a className="button secondary small" href={detailsPath} onClick={(clickEvent) => {
+      clickEvent.preventDefault();
+      onNavigate(detailsPath);
+    }}>
       {translate('navigationViewEvent')}
-    </button>
+    </a>
   </article>;
 }
 
@@ -43,7 +49,9 @@ export function EventCalendarPage({ api, onNavigate }) {
   const language = useLanguage();
   const t = usePageText();
   const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   const [month, setMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(todayKey);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -56,11 +64,28 @@ export function EventCalendarPage({ api, onNavigate }) {
       setLoading(true);
       setError('');
       try {
-        const response = await api(`/platform/events?startDate=${startDate}&endDate=${endDate}&limit=50`, { signal: controller.signal });
-        if (!Array.isArray(response?.data)) throw new Error(t('navigationFeatureInvalidResponse'));
-        setEvents(response.data);
+        const requestPage = (page) => api(
+          `/platform/events?startDate=${startDate}&endDate=${endDate}&limit=50&page=${page}`,
+          { signal: controller.signal },
+        );
+        const firstPage = await requestPage(1);
+        if (!Array.isArray(firstPage?.data)) throw new Error(t('navigationFeatureInvalidResponse'));
+        const totalPages = Number.isInteger(Number(firstPage.pagination?.totalPages))
+          ? Math.max(1, Number(firstPage.pagination.totalPages))
+          : 1;
+        const pages = [firstPage.data];
+        for (let firstPageNumber = 2; firstPageNumber <= totalPages; firstPageNumber += 5) {
+          const pageNumbers = Array.from(
+            { length: Math.min(5, totalPages - firstPageNumber + 1) },
+            (_, index) => firstPageNumber + index,
+          );
+          const responses = await Promise.all(pageNumbers.map(requestPage));
+          if (responses.some((page) => !Array.isArray(page?.data))) throw new Error(t('navigationFeatureInvalidResponse'));
+          pages.push(...responses.map((page) => page.data));
+        }
+        setEvents(pages.flat());
       } catch (issue) {
-        if (issue.name !== 'AbortError') setError(issue.message || t('navigationCalendarLoadFailed'));
+        if (!controller.signal.aborted) setError(issue.message || t('navigationCalendarLoadFailed'));
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
@@ -78,6 +103,14 @@ export function EventCalendarPage({ api, onNavigate }) {
     });
     return grouped;
   }, [events]);
+  const selectedDateEvents = monthEvents.get(selectedDate) || [];
+  useEffect(() => {
+    setSelectedDate((current) => {
+      const currentDate = new Date(`${current}T00:00:00`);
+      if (currentDate.getFullYear() === month.getFullYear() && currentDate.getMonth() === month.getMonth()) return current;
+      return getEventDateKey(new Date(month.getFullYear(), month.getMonth(), 1));
+    });
+  }, [month]);
   const firstDay = new Date(month.getFullYear(), month.getMonth(), 1);
   const gridStart = new Date(firstDay.getFullYear(), firstDay.getMonth(), 1 - firstDay.getDay());
   const days = Array.from({ length: 42 }, (_, index) => {
@@ -99,15 +132,76 @@ export function EventCalendarPage({ api, onNavigate }) {
         {Array.from({ length: 7 }, (_, index) => <div className="event-calendar-weekday" role="group" key={`weekday-${index}`}>
           {new Date(2024, 0, 7 + index).toLocaleDateString(locale, { weekday: 'short' })}
         </div>)}
-        {days.map(({ date, key }) => <div className={`event-calendar-day ${date.getMonth() === month.getMonth() ? '' : 'outside-month'}`} role="group" aria-label={date.toLocaleDateString(locale, { dateStyle: 'full' })} key={key}>
-          <strong>{date.toLocaleDateString(locale, { day: 'numeric' })}</strong>
+        {days.map(({ date, key }) => <div className={`event-calendar-day ${date.getMonth() === month.getMonth() ? '' : 'outside-month'} ${monthEvents.has(key) ? 'has-events' : ''}`} role="group" aria-label={date.toLocaleDateString(locale, { dateStyle: 'full' })} key={key}>
+          <button type="button" className="event-calendar-date" aria-pressed={selectedDate === key} onClick={() => {
+            setSelectedDate(key);
+            if (date.getMonth() !== month.getMonth()) setMonth(new Date(date.getFullYear(), date.getMonth(), 1));
+          }}>
+            {date.toLocaleDateString(locale, { day: 'numeric' })}
+          </button>
           {(monthEvents.get(key) || []).slice(0, 2).map((event) => <button key={event.id} type="button" title={event.title} onClick={() => onNavigate(`/events/${event.id}`)}>{event.title}</button>)}
           {(monthEvents.get(key) || []).length > 2 && <span>+{monthEvents.get(key).length - 2} {t('navigationMoreEvents')}</span>}
         </div>)}
       </div>
       {events.length === 0 && <p className="info-card" role="status">{t('navigationCalendarEmpty')}</p>}
-      {events.length > 0 && <section className="card-grid navigation-calendar-events">{events.slice(0, 6).map((event) => eventCard(event, onNavigate))}</section>}
+      {events.length > 0 && <section className="card-grid navigation-calendar-events" aria-live="polite">
+        <div className="navigation-calendar-selection">
+          <h2>Events on {new Date(`${selectedDate}T00:00:00`).toLocaleDateString(locale, { dateStyle: 'full' })}</h2>
+          {selectedDateEvents.length
+            ? <div className="card-grid">{selectedDateEvents.map((event) => eventCard(event, onNavigate))}</div>
+            : <p className="info-card" role="status">No published events on this date.</p>}
+        </div>
+      </section>}
     </>}
+  </div></main>;
+}
+
+export function PopularVenuesPage({ api, onNavigate }) {
+  const [venues, setVenues] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const response = await api('/platform/events/popular-venues?limit=24', { signal: controller.signal });
+        if (!Array.isArray(response?.data)) throw new Error('The server returned invalid venue listing data.');
+        setVenues(response.data);
+      } catch (issue) {
+        if (issue.name !== 'AbortError') setError(issue.message || 'Popular venues could not be loaded.');
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    load();
+    return () => controller.abort();
+  }, [api, reload]);
+
+  return <main className="page-shell navigation-feature-page"><div className="content-stack">
+    <div className="section-header"><div><p className="eyebrow">DISCOVER</p><h1>Popular Venues</h1>
+      <p className="muted">Venues ranked by confirmed ticket bookings and published events.</p>
+    </div></div>
+    <PageStatus loading={loading} error={error} onRetry={() => setReload((value) => value + 1)} />
+    {!loading && !error && (venues.length ? <section className="card-grid">
+      {venues.map((venue) => <article className="info-card" key={`${venue.name}-${venue.city || ''}`}>
+        <Building2 size={24} aria-hidden="true" />
+        <h2>{venue.name}</h2>
+        {venue.city && <p><MapPin size={15} aria-hidden="true" /> {venue.city}</p>}
+        <p>{venue.eventCount} published {venue.eventCount === 1 ? 'event' : 'events'}</p>
+        <p>{venue.attendeeCount} confirmed {venue.attendeeCount === 1 ? 'ticket booking' : 'ticket bookings'}</p>
+        <button className="button secondary small" type="button"
+          onClick={() => onNavigate(`/events?location=${encodeURIComponent(venue.name)}`)}>
+          View events at this venue
+        </button>
+      </article>)}
+    </section> : <div className="info-card wide" role="status">
+      No venues are listed on published events yet.
+      <button className="button secondary small" type="button" onClick={() => onNavigate('/events')}>Browse Events</button>
+    </div>)}
   </div></main>;
 }
 
@@ -275,7 +369,7 @@ export function RecentlyViewedPage({ api, onNavigate }) {
   </div></main>;
 }
 
-export function RecommendationsPage({ api, onNavigate }) {
+export function RecommendationsPage({ api, onNavigate, user }) {
   const t = usePageText();
   const [events, setEvents] = useState([]);
   const [personalized, setPersonalized] = useState(false);
@@ -288,23 +382,25 @@ export function RecommendationsPage({ api, onNavigate }) {
       setLoading(true);
       setError('');
       try {
-        const bookings = await api('/platform/ticket-bookings/mine', { signal: controller.signal });
-        if (!Array.isArray(bookings?.data)) throw new Error(t('navigationFeatureInvalidResponse'));
-        const eventIds = [...new Set((bookings.data || []).map((booking) => Number(booking.eventId)).filter(Number.isSafeInteger))].slice(0, 3);
-        const related = eventIds.length
-          ? await Promise.allSettled(eventIds.map((id) => api(`/platform/events/${id}/related`, { signal: controller.signal })))
-          : [];
-        if (related.some((result) => result.status === 'fulfilled' && !Array.isArray(result.value?.data))) {
-          throw new Error(t('navigationFeatureInvalidResponse'));
-        }
-        const personalizedEvents = [...new Map(related
-          .filter((result) => result.status === 'fulfilled')
-          .flatMap((result) => result.value.data || [])
-          .map((event) => [event.id, event])).values()];
-        if (personalizedEvents.length) {
-          setEvents(personalizedEvents);
-          setPersonalized(true);
-          return;
+        if (user?.role === 'customer') {
+          const bookings = await api('/platform/ticket-bookings/mine', { signal: controller.signal });
+          if (!Array.isArray(bookings?.data)) throw new Error(t('navigationFeatureInvalidResponse'));
+          const eventIds = [...new Set((bookings.data || []).map((booking) => Number(booking.eventId)).filter(Number.isSafeInteger))].slice(0, 3);
+          const related = eventIds.length
+            ? await Promise.allSettled(eventIds.map((id) => api(`/platform/events/${id}/related`, { signal: controller.signal })))
+            : [];
+          if (related.some((result) => result.status === 'fulfilled' && !Array.isArray(result.value?.data))) {
+            throw new Error(t('navigationFeatureInvalidResponse'));
+          }
+          const personalizedEvents = [...new Map(related
+            .filter((result) => result.status === 'fulfilled')
+            .flatMap((result) => result.value.data || [])
+            .map((event) => [event.id, event])).values()];
+          if (personalizedEvents.length) {
+            setEvents(personalizedEvents);
+            setPersonalized(true);
+            return;
+          }
         }
         const discovery = await api('/platform/events?limit=6&sort=upcoming', { signal: controller.signal });
         if (!Array.isArray(discovery?.data)) throw new Error(t('navigationFeatureInvalidResponse'));
@@ -318,7 +414,7 @@ export function RecommendationsPage({ api, onNavigate }) {
     }
     load();
     return () => controller.abort();
-  }, [api, reload]);
+  }, [api, reload, user?.role]);
   return <main className="page-shell navigation-feature-page"><div className="content-stack">
     <div className="section-header"><div><p className="eyebrow">{t('myEventHub')}</p><h1>{t('navigationRecommendations')}</h1></div></div>
     <PageStatus loading={loading} error={error} onRetry={() => setReload((value) => value + 1)} />

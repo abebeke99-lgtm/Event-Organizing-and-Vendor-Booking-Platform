@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { hashToken } from '../src/lib/security.js';
-import { isEventOpenForBookings } from '../src/lib/adminEvents.js';
+import { isEventOpenForBookings, parseAdminEventInput } from '../src/lib/adminEvents.js';
 
 const adminToken = 'admin-events-test-session';
 const adminId = 1;
@@ -347,6 +347,39 @@ test('only published events accept bookings', () => {
   for (const status of ['draft', 'pending_approval', 'rejected', 'cancelled', 'completed', 'unpublished']) {
     assert.equal(isEventOpenForBookings(status), false);
   }
+});
+
+test('admin event updates accept a boolean featured flag only', () => {
+  assert.deepEqual(parseAdminEventInput({ is_featured: true }, { partial: true }), {
+    success: true,
+    data: { is_featured: true },
+  });
+  assert.equal(parseAdminEventInput({ is_featured: 'true' }, { partial: true }).success, false);
+});
+
+test('featuring an event changes only its featured flag', async () => {
+  const original = eventRecord({
+    id: 11,
+    status: 'active',
+    start_date: '2030-10-10 10:00:00',
+    end_date: '2030-10-10 12:00:00',
+  });
+  database.events.set(11, original);
+  const response = await adminRequest('/api/admin/events/11', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_featured: true }),
+  });
+
+  assert.equal(response.status, 200);
+  const updated = database.events.get(11);
+  assert.equal(updated.is_featured, true);
+  assert.equal(updated.title, original.title);
+  assert.equal(updated.description, original.description);
+  assert.equal(updated.city, original.city);
+  const update = database.statements.findLast(({ sql }) => sql.startsWith('UPDATE events SET'));
+  assert.equal(update.sql, 'UPDATE events SET `is_featured` = ? WHERE id = ?');
+  assert.deepEqual(update.values, [true, 11]);
 });
 
 test('event search covers organizer, customer, ID, vendor category, and location fields', async () => {

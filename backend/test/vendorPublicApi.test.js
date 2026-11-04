@@ -84,6 +84,47 @@ test('vendor discovery validates filters and accepts availability and recent sor
   assert.equal(body.pagination.page, 1);
 });
 
+test('vendor discovery serves featured and popular views from real records', async () => {
+  const [featuredRows] = await pool.query(`
+    SELECT vp.id
+    FROM vendor_profiles vp
+    JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+    WHERE vp.verification_status = 'verified' AND vp.is_featured = TRUE
+    ORDER BY vp.id
+    LIMIT 50
+  `);
+  const response = await get('/api/platform/vendors?filter=featured&sort=popular&page=1&limit=50');
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.pagination.total, featuredRows.length);
+  assert.deepEqual(new Set(body.data.map((vendor) => Number(vendor.id))), new Set(featuredRows.map((vendor) => Number(vendor.id))));
+  assert.ok(body.data.every((vendor) => vendor.isFeatured === true));
+});
+
+test('vendor discovery accepts category slugs from public category links', async (context) => {
+  const [rows] = await pool.query(`
+    SELECT sc.name
+    FROM service_categories sc
+    JOIN vendor_profiles vp ON vp.category_id = sc.id AND vp.verification_status = 'verified'
+    JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+    WHERE sc.is_active = TRUE
+    GROUP BY sc.id, sc.name
+    ORDER BY sc.name
+    LIMIT 1
+  `);
+  if (!rows.length) {
+    context.skip('No active category has a verified public vendor in the local database.');
+    return;
+  }
+  const slug = rows[0].name.toLowerCase().normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const response = await get(`/api/platform/vendors?category=${encodeURIComponent(slug)}&page=1&limit=12`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.ok(body.pagination.total > 0);
+  assert.ok(body.data.every((vendor) => vendor.category === rows[0].name));
+});
+
 test('public categories only expose images uploaded to the database', async () => {
   const [rows] = await pool.query(
     `SELECT id, image_mime
@@ -92,13 +133,90 @@ test('public categories only expose images uploaded to the database', async () =
   );
   const response = await get('/api/platform/categories');
   assert.equal(response.status, 200);
-  const { data } = await response.json();
+  const body = await response.json();
+  const { data, categories } = body;
   assert.ok(Array.isArray(data));
+  assert.deepEqual(categories, data);
+  assert.deepEqual(data.map((category) => category.name), [...data.map((category) => category.name)].sort((a, b) => a.localeCompare(b)));
 
   for (const category of data) {
     const record = rows.find((row) => Number(row.id) === category.id);
     assert.ok(record);
     assert.equal(category.image, record.image_mime ? `/api/platform/categories/${category.id}/image` : null);
+    assert.equal(category.icon, category.image);
+    assert.equal(category.vendor_count, category.vendorCount);
+    assert.ok(Number.isInteger(category.vendor_count));
+  }
+});
+
+test('service navigation exposes the ordered categories and filters public services by stable category slug', async () => {
+  const expectedNames = [
+    'Catering Services',
+    'Photography & Videography',
+    'Decoration & Florists',
+    'Wedding Planning',
+    'Venue & Event Spaces',
+    'Music & Entertainment',
+    'Sound & Lighting',
+    'Transportation',
+    'Makeup & Beauty',
+    'Rental Equipment',
+    'Cakes & Bakery',
+    'Printing & Invitations',
+    'Security Services',
+    'Other Services',
+  ];
+  const response = await get('/api/platform/categories?scope=services');
+  assert.equal(response.status, 200);
+  const { categories } = await response.json();
+  assert.deepEqual(categories.map((category) => category.name), expectedNames);
+
+  for (const category of categories) {
+    const servicesResponse = await get(`/api/platform/services?category=${encodeURIComponent(category.slug)}&page=1&limit=50`);
+    assert.equal(servicesResponse.status, 200, category.name);
+    const result = await servicesResponse.json();
+    assert.ok(result.data.every((service) => service.categoryId === category.id), category.name);
+    assert.equal(category.serviceCount, result.pagination.total, category.name);
+  }
+});
+
+test('service listings validate filters and support search, vendor, newest sort, and pagination', async () => {
+  const invalidCases = [
+    '?sort=unknown',
+    '?page=0',
+    '?limit=51',
+    '?minPrice=200&maxPrice=100',
+    '?vendorId=not-a-number',
+    '?unexpected=true',
+  ];
+  for (const query of invalidCases) {
+    const response = await get(`/api/platform/services${query}`);
+    assert.equal(response.status, 400, query);
+  }
+
+  const response = await get('/api/platform/services?search=service&vendor=event&location=addis&sort=newest&page=1&limit=5');
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.ok(Array.isArray(result.data));
+  assert.ok(result.data.every((service) => service.status === 'active' && service.published === true));
+  assert.equal(result.pagination.page, 1);
+  assert.equal(result.pagination.limit, 5);
+});
+
+test('public categories return an empty array when the active category table is empty', async () => {
+  app.locals.database = {
+    async query(sql, values) {
+      assert.match(sql, /FROM service_categories sc/);
+      assert.deepEqual(values, []);
+      return [[], []];
+    },
+  };
+  try {
+    const response = await get('/api/platform/categories');
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { categories: [], data: [] });
+  } finally {
+    delete app.locals.database;
   }
 });
 
@@ -137,6 +255,8 @@ test('public service packages and detail return correctly mapped optional data',
   assert.equal(detailResponse.status, 200);
   const { data: service } = await detailResponse.json();
   assert.equal(service.id, serviceId);
+  assert.ok(service.vendorId > 0);
+  assert.ok(service.vendorName);
   assert.ok(Array.isArray(service.packages));
   assert.ok(Array.isArray(service.reviews));
   assert.ok(Array.isArray(service.availability));

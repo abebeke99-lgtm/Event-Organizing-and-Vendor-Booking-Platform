@@ -174,6 +174,7 @@ test('customer marketplace filters and sorts services with pagination metadata',
   assert.equal(result.data.length, 1);
   assert.equal(result.data[0].title, 'Wedding Buffet');
   assert.deepEqual(result.pagination, { page: 1, limit: 1, total: 2, totalPages: 2 });
+  assert.ok(database.statements.some(({ sql }) => sql.includes("COALESCE(NULLIF(TRIM(s.currency), ''), 'ETB') AS currency")));
 });
 
 test('customer marketplace filters services to vendors with future availability', async () => {

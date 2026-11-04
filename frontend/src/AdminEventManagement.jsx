@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Eye, MapPin, Pencil, Plus, Search, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock3, Eye, MapPin, Pencil, Plus, Search, Star, X } from 'lucide-react';
 import apiClient from './api/axios.js';
 import './adminEventManagement.css';
 
@@ -279,6 +279,21 @@ export default function AdminEventManagement() {
     }
   }
 
+  async function toggleFeatured(event) {
+    if (saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await apiClient.patch(`/admin/events/${event.id}`, { is_featured: !event.is_featured });
+      setNotice(event.is_featured ? 'Event removed from featured listings.' : 'Event added to featured listings.');
+      await loadEvents(pagination.page);
+    } catch (issue) {
+      setError(errorText(issue));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function openDetails(event) {
     setSaving(true);
     setError('');
@@ -392,6 +407,9 @@ export default function AdminEventManagement() {
               <div className="admin-event-actions">
                 <button className="text-action" type="button" disabled={saving} onClick={() => openDetails(event)}><Eye size={14} /> Details & history</button>
                 <button className="text-action" type="button" disabled={saving} onClick={() => openEdit(event)}><Pencil size={14} /> Edit</button>
+                <button className="text-action" type="button" disabled={saving} aria-pressed={Boolean(event.is_featured)} onClick={() => toggleFeatured(event)}>
+                  <Star size={14} fill={event.is_featured ? 'currentColor' : 'none'} />{event.is_featured ? 'Unfeature' : 'Feature'}
+                </button>
                 {availableActions(event).map(([action, label]) => (
                   <button
                     key={action}

@@ -4,7 +4,7 @@ import { hashToken } from '../lib/security.js';
 
 export async function requirePlatformUser(req, res, next) {
   const token = req.cookies?.platform_session;
-  if (!token) return res.status(401).json({ error: 'Authentication required.' });
+  if (!token) return res.status(401).json({ message: 'Unauthorized' });
 
   try {
     const database = req.app?.locals?.database || pool;
@@ -31,7 +31,7 @@ export async function requirePlatformUser(req, res, next) {
         sameSite: process.env.COOKIE_SAME_SITE || 'strict',
         path: '/',
       });
-      return res.status(401).json({ error: 'Authentication required.' });
+      return res.status(401).json({ message: 'Unauthorized' });
     }
     const allowedPermissions = new Set(getRolePermissionPolicy(rows[0].role));
     const permissions = (rows[0].permission_keys || '')

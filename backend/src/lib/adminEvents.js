@@ -49,29 +49,35 @@ const createAdminEventSchema = z.object({
   ...Object.fromEntries(eventFields.map((field) => [field, z.unknown().optional()])),
 }).strict();
 const editAdminEventSchema = z.object(
-  Object.fromEntries(eventFields.map((field) => [field, z.unknown().optional()])),
+  {
+    ...Object.fromEntries(eventFields.map((field) => [field, z.unknown().optional()])),
+    is_featured: z.boolean().optional(),
+  },
 ).strict();
 
 export function parseAdminEventInput(input, { partial = false } = {}) {
   const parsedInput = (partial ? editAdminEventSchema : createAdminEventSchema).safeParse(input ?? {});
   if (!parsedInput.success) return parsedInput;
 
-  const { organizer_id: organizerId, ...eventInput } = parsedInput.data;
+  const { organizer_id: organizerId, is_featured: isFeatured, ...eventInput } = parsedInput.data;
   const camelInput = Object.fromEntries(
     Object.entries(eventInput)
-      .filter(([, value]) => value !== undefined)
+      .filter(([field, value]) => fieldMap[field] && value !== undefined)
       .map(([field, value]) => [fieldMap[field], value]),
   );
   const parsedEvent = (partial ? partialEventSchema : createEventSchema).safeParse(camelInput);
   if (!parsedEvent.success) return parsedEvent;
 
   const data = Object.fromEntries(
-    Object.entries(parsedEvent.data).map(([field, value]) => [
-      Object.keys(fieldMap).find((key) => fieldMap[key] === field),
-      field === 'startDate' || field === 'endDate' ? toMysqlDateTime(value) : field === 'galleryImages' ? JSON.stringify(value) : value,
-    ]),
+    Object.entries(parsedEvent.data)
+      .filter(([field, value]) => (!partial || Object.hasOwn(camelInput, field)) && value !== undefined)
+      .map(([field, value]) => [
+        Object.keys(fieldMap).find((key) => fieldMap[key] === field),
+        field === 'startDate' || field === 'endDate' ? toMysqlDateTime(value) : field === 'galleryImages' ? JSON.stringify(value) : value,
+      ]),
   );
   if (organizerId !== undefined) data.organizer_id = organizerId;
+  if (isFeatured !== undefined) data.is_featured = isFeatured;
   return { success: true, data };
 }
 

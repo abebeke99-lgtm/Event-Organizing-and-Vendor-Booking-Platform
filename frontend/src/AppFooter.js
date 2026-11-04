@@ -1,5 +1,4 @@
 import React, { createElement as h } from 'react';
-import { Mail } from 'lucide-react';
 import { translate, useLanguage } from './language.js';
 import { getFooterSocialLinks } from './socialLinks.js';
 import SocialMediaLink from './SocialMediaLink.js';
@@ -13,7 +12,6 @@ export default function AppFooter({ socialEnvironment }) {
   const platformDescription = branding.platformDescription || '';
   const platformLogo = branding.brandingLogoUrl || '';
   const supportPhone = branding.supportPhone || '';
-  const supportEmail = 'abebeke99@gmail.com';
   const configuredSocialLinks = SHOW_FOOTER_CONTACT
     ? getFooterSocialLinks(socialEnvironment).filter((social) => social.url)
     : [];
@@ -49,11 +47,11 @@ export default function AppFooter({ socialEnvironment }) {
   if (SHOW_FOOTER_CONTACT) {
     columns.push(h('div', { className: 'footer-column footer-contact-column', key: 'contact' },
       h('h4', null, translate('contactUsNav', language)),
-      h('a', {
+      branding.supportEmail && h('a', {
         className: 'footer-contact-email',
-        href: `mailto:${supportEmail}`,
-        'aria-label': `${translate('emailAddress', language)}: ${supportEmail}`,
-      }, h(Mail, { size: 16, 'aria-hidden': 'true' }), h('span', null, supportEmail)),
+        href: `mailto:${branding.supportEmail}`,
+        'aria-label': `${translate('emailAddress', language)}: ${branding.supportEmail}`,
+      }, h('span', null, branding.supportEmail)),
       configuredSocialLinks.length > 0
         ? h('div', { className: 'footer-social-links footer-contact-social-links' },
           configuredSocialLinks.map((social) => h(SocialMediaLink, {

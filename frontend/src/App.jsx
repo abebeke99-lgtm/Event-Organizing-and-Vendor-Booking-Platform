@@ -1,17 +1,22 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import apiClient from './api/axios.js';
-import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Image, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, PanelLeftClose, PanelLeftOpen, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
+import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, Building2, Cake, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, Church, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, GraduationCap, Heart, History, Handshake, Image, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Music2, Palette, PanelLeftClose, PanelLeftOpen, PartyPopper, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, Trophy, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
-import { formatEventBudget, formatEventDate } from './eventUtils.js';
+import { formatEventBudget, formatEventDate, formatEventDateOnly, formatEventTime } from './eventUtils.js';
 import { formatNotificationBadgeCount, getLanguage, setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
 import { setTheme, useTheme } from './theme.js';
 import { getDashboardDateRange } from './dashboardUtils.js';
 import { summarizeOrganizerDashboard } from './organizerDashboardUtils.js';
-import { createAuthSessionLoader } from './authSession.js';
+import {
+  clearPlatformSessionHint,
+  createAuthSessionLoader,
+  hasPlatformSessionHint,
+  setPlatformSessionHint,
+} from './authSession.js';
 import { adminPathForSlug, adminSlugFromPath } from './adminNavigation.js';
 import { withStableKeys } from './listKeys.js';
-import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageStatistics } from './homepageUtils.js';
+import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageStatistics, getHomepageTestimonials } from './homepageUtils.js';
 import HomepageSearch from './HomepageSearch.jsx';
 import HomepageEventsSection from './HomepageEventsSection.jsx';
 import HomepageImage from './HomepageImage.jsx';
@@ -20,16 +25,18 @@ import ContactTopBar from './ContactTopBar.js';
 import AppFooter from './AppFooter.js';
 import PublicNavigation from './PublicNavigation.jsx';
 import { getListingFiltersFromPath, validateCategoryName } from './publicNavigationUtils.js';
-import { CompareVendorsPage, EventCalendarPage, MyFavoritesPage, RecentlyViewedPage, RecommendationsPage } from './NavigationFeatures.jsx';
+import { CompareVendorsPage, EventCalendarPage, MyFavoritesPage, PopularVenuesPage, RecentlyViewedPage, RecommendationsPage } from './NavigationFeatures.jsx';
 import { getComparedVendorIds, toggleComparedVendor } from './navigationFeatureUtils.js';
 import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { createDemoDataService } from './demoData.js';
-import { EventDetailsPage, MyEventBookingsPage, OrganizerEventsManager } from './EventsExperience.jsx';
+import { EventCountdown, EventDetailsPage, MyEventBookingsPage, OrganizerEventsManager } from './EventsExperience.jsx';
 import OrganizerWorkspace from './OrganizerWorkspace.jsx';
 import VendorWorkspace from './VendorWorkspace.jsx';
 import CustomerWorkspace from './CustomerWorkspace.jsx';
+import ErrorBoundary from './ErrorBoundary.jsx';
+import { formatCustomerMoney } from './customerMoney.js';
 import AdminUserManagement from './AdminUserManagement.jsx';
 import AdminRoleManagement from './AdminRoleManagement.jsx';
 import AdminVendorVerification from './AdminVendorVerification.jsx';
@@ -71,7 +78,7 @@ const modules = {
   'package-requests':{title:'Event Package Requests', endpoint:'event-package-requests', columns:['id','event_id','event_title','event_type','requested_date','requested_location','requester_name','requester_email','service_category','guest_count','budget','notes','status','created_at'], actions:['package-status'], statuses:['new','reviewed','replied','closed']},
   reviews:{title:'Reviews and Complaints', endpoint:'reviews', columns:['id','booking_id','rating','comment','status','created_at'], actions:['review']},
   complaints:{title:'Reviews and Complaints', endpoint:'complaints', columns:['id','user_id','booking_id','subject','details','status','resolution','created_at'], actions:['complaint']},
-  messages:{title:'Contact Messages', endpoint:'contact', columns:['id','full_name','email','phone','subject','inquiry_type','message','status','created_at'], actions:['view','status','delete'], statuses:['new','reviewed','in_progress','replied','resolved','closed'], inquiryTypes:INQUIRY_TYPES},
+  messages:{title:'Contact Messages', endpoint:'contact', columns:['reference_id','full_name','email','phone','subject','inquiry_type','message','read_status','status','created_at','archived_at'], actions:['view','read','status','archive','delete'], statuses:['new','reviewed','in_progress','replied','resolved','closed'], inquiryTypes:INQUIRY_TYPES},
   notifications:{title:'Notifications', endpoint:'notifications', columns:['id','user_id','title','message','status','created_at'], readonly:true},
   'audit-logs':{title:'Audit Logs', endpoint:'audit-logs', columns:['id','actor_id','action','entity_type','entity_id','details','ip_address','created_at'], readonly:true},
 };
@@ -188,7 +195,7 @@ function navigateBrowserPath(path) {
 }
 
 async function api(path, options={}) {
-  if (DEMO_AUTH_ENABLED) {
+  if (DEMO_AUTH_ENABLED && !path.startsWith('/contact')) {
     if (options.signal?.aborted) throw Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
     const route = path.split('?')[0];
     const method = options.method || 'GET';
@@ -267,6 +274,8 @@ async function api(path, options={}) {
       responseType: options.responseType,
       headers: { ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) },
     });
+    if (['/platform/login', '/platform/register'].includes(path)) setPlatformSessionHint();
+    if (path === '/platform/logout') clearPlatformSessionHint();
     if (response.status === 204) return null;
     return response.data === '' || response.data === undefined ? {} : response.data;
   } catch (error) {
@@ -280,6 +289,8 @@ async function api(path, options={}) {
 const authSessionLoader = createAuthSessionLoader({
   getAdminSession: () => api('/auth/me'),
   getPlatformSession: () => api('/platform/me'),
+  hasPlatformSession: hasPlatformSessionHint,
+  clearPlatformSession: clearPlatformSessionHint,
 });
 
 function useAuthSessionSnapshot() {
@@ -1303,6 +1314,7 @@ function VendorApplicationPage({ user, onNavigate }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [categoryError, setCategoryError] = useState('');
+  const [categoryRetry, setCategoryRetry] = useState(0);
   const [notice, setNotice] = useState('');
 
   useEffect(() => {
@@ -1447,9 +1459,10 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   const [vendors, setVendors] = useState([]);
   const [services, setServices] = useState([]);
   const [events, setEvents] = useState([]);
-  const [latestEvents, setLatestEvents] = useState([]);
   const [featuredEvents, setFeaturedEvents] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [eventCategories, setEventCategories] = useState([]);
+  const [testimonials, setTestimonials] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadErrors, setLoadErrors] = useState({});
@@ -1480,35 +1493,59 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
         api('/platform/categories', { signal: controller.signal }),
         api('/platform/vendors?page=1&limit=4&sort=recommended', { signal: controller.signal }),
         api('/platform/services?page=1&limit=4&sort=recommended', { signal: controller.signal }),
-        api('/platform/events?page=1&limit=6&sort=upcoming', { signal: controller.signal }),
-        api('/platform/events?page=1&limit=3&sort=recent', { signal: controller.signal }),
-        api('/platform/events/featured', { signal: controller.signal }),
+        api('/platform/events?filter=upcoming&page=1&limit=6&sort=upcoming', { signal: controller.signal }),
+        api('/platform/events?filter=featured&status=upcoming&page=1&limit=6&sort=upcoming', { signal: controller.signal }),
+        api('/platform/events/categories', { signal: controller.signal }),
       ]);
       if (controller.signal.aborted) return;
 
-      const [statisticsResult, categoriesResult, vendorsResult, servicesResult, eventsResult, latestResult, featuredResult] = results;
+      const [statisticsResult, categoriesResult, vendorsResult, servicesResult, eventsResult, featuredResult, eventCategoriesResult] = results;
       const nextErrors = {};
-      const getData = (result, key) => {
+      const getData = (result, key, expected = 'array') => {
         if (result.status === 'rejected') {
           nextErrors[key] = true;
           return null;
         }
-        return result.value?.data;
+        const data = result.value?.data;
+        const valid = expected === 'object'
+          ? data && typeof data === 'object' && !Array.isArray(data)
+          : Array.isArray(data);
+        if (!valid) nextErrors[key] = true;
+        return valid ? data : null;
       };
-      const statistics = getData(statisticsResult, 'statistics');
+      const statistics = getData(statisticsResult, 'statistics', 'object');
       const categoryData = getData(categoriesResult, 'categories');
       const vendorData = getData(vendorsResult, 'vendors');
       const serviceData = getData(servicesResult, 'services');
       const eventData = getData(eventsResult, 'events');
-      const latestData = getData(latestResult, 'latestEvents');
       const featuredData = getData(featuredResult, 'featuredEvents');
+      const eventCategoryData = getData(eventCategoriesResult, 'eventCategories');
+      const reviewVendors = Array.isArray(vendorData)
+        ? vendorData.filter((vendor) => vendor?.id && (
+          vendor.verified === true
+          || vendor.verificationStatus === 'verified'
+          || vendor.verification_status === 'verified'
+        )).slice(0, 4)
+        : [];
+      const reviewResults = await Promise.allSettled(reviewVendors.map((vendor) =>
+        api(`/platform/vendors/${encodeURIComponent(vendor.id)}`, { signal: controller.signal })));
+      if (controller.signal.aborted) return;
+      const validReviewResults = reviewResults.filter((result) =>
+        result.status === 'fulfilled' && Array.isArray(result.value?.data?.reviews));
+      if (reviewVendors.length > 0 && validReviewResults.length === 0) nextErrors.testimonials = true;
+      const reviewGroups = reviewResults.flatMap((result, index) => (
+        result.status === 'fulfilled' && Array.isArray(result.value?.data?.reviews)
+          ? [{ vendor: reviewVendors[index], reviews: result.value.data.reviews }]
+          : []
+      ));
       setSummary(statistics && typeof statistics === 'object' ? statistics : null);
       setCategories(Array.isArray(categoryData) ? categoryData : []);
       setVendors(Array.isArray(vendorData) ? vendorData : []);
       setServices(Array.isArray(serviceData) ? serviceData : []);
       setEvents(Array.isArray(eventData) ? eventData : []);
-      setLatestEvents(Array.isArray(latestData) ? latestData : []);
       setFeaturedEvents(Array.isArray(featuredData) ? featuredData : featuredData && typeof featuredData === 'object' ? [featuredData] : []);
+      setEventCategories(Array.isArray(eventCategoryData) ? eventCategoryData : []);
+      setTestimonials(getHomepageTestimonials(reviewGroups));
       setLoadErrors(nextErrors);
       setLoading(false);
     }
@@ -1606,8 +1643,9 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
           <h1>{t('publicHomeHeroTitle')} <span>{t('publicHomeHeroAccent')}</span></h1>
           <p>{t('publicHomeHeroDescription')}</p>
           <div className="cta-row">
-            <button className="button" type="button" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button>
+            <button className="button" type="button" onClick={() => onNavigate('/events')}>{t('publicNavBrowseEvents')}</button>
             <button className="button homepage-hero-outline" type="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
+            <button className="button homepage-hero-outline" type="button" onClick={() => onNavigate('/services')}>{t('browseServices')}</button>
           </div>
         </div>
       </section>
@@ -1662,6 +1700,32 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
 
       <Reveal className="section-block" direction="up">
         <HomepageEventsSection title={t('publicHomeFeaturedEvents')} events={featuredEvents} loading={loading} error={loadErrors.featuredEvents} onRetry={() => setRetryKey((value) => value + 1)} onNavigate={onNavigate}/>
+      </Reveal>
+
+      <Reveal className="section-block" direction="up">
+        <div className="section-header compact-header">
+          <div>
+            <p className="eyebrow">{t('publicEventDiscovery')}</p>
+            <h2>{t('publicHomeEventCategories')}</h2>
+          </div>
+          <button className="button secondary small" type="button" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button>
+        </div>
+        {loadErrors.eventCategories && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
+        <div className="card-grid">
+          {loading ? <div className="home-card-skeletons" role="status" aria-label={t('publicHomeCategoriesLoading')}><span/><span/><span/><span/></div>
+            : loadErrors.eventCategories ? null
+              : eventCategories.length ? eventCategories.slice(0, 8).map((category) => (
+                <button key={category.id} type="button" className="category-card" onClick={() => onNavigate(`/events?category=${encodeURIComponent(category.id)}`)}>
+                  <HomepageImage className="category-card-image" src={category.image} alt={translateCategoryName(category.name)} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', translateCategoryName(category.name))}/>
+                  <span className="category-card-copy">
+                    <span className="category-card-name">{translateCategoryName(category.name)}</span>
+                    <span className="category-card-description">{category.description ? translateText(category.description, language) : t('exploreEvents')}</span>
+                    <span className="category-card-counts">{Number(category.total || 0).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')} {t('publicHomeEventCount')}</span>
+                  </span>
+                </button>
+              ))
+              : <div className="empty-card">{t('publicNoCategories')} <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button></div>}
+        </div>
       </Reveal>
 
       {user && recommendedVendors.length > 0 && <Reveal className="section-block" direction="up">
@@ -1732,7 +1796,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
         <div className="section-header compact-header">
           <div>
             <p className="eyebrow">{t('publicHomeEventServices')}</p>
-            <h2>{t('popularServices')}</h2>
+            <h2>{t('publicHomeAvailableServices')}</h2>
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/services')}>{t('browseServices')}</button>
         </div>
@@ -1787,10 +1851,33 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
       </Reveal>}
 
       <Reveal className="section-block" direction="up">
-        <HomepageEventsSection title={t('publicHomeLatestEvents')} events={latestEvents} loading={loading} error={loadErrors.latestEvents} onRetry={() => setRetryKey((value) => value + 1)} onNavigate={onNavigate}/>
+        <HomepageEventsSection title={t('publicHomeUpcomingEvents')} events={events} loading={loading} error={loadErrors.events} onRetry={() => setRetryKey((value) => value + 1)} onNavigate={onNavigate}/>
       </Reveal>
 
+      {(testimonials.length > 0 || loadErrors.testimonials) && <Reveal className="section-block" direction="up">
+        <div className="section-header compact-header">
+          <div>
+            <p className="eyebrow">{t('publicHomeTrustHeading')}</p>
+            <h2>{t('publicHomeTestimonials')}</h2>
+          </div>
+        </div>
+        {loadErrors.testimonials && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
+        {testimonials.length > 0 && <div className="card-grid">
+          {testimonials.map((testimonial) => <article className="info-card homepage-testimonial" key={testimonial.id}>
+            <p className="meta-row" aria-label={`${testimonial.rating}/5`}><span aria-hidden="true">{'★'.repeat(testimonial.rating)}</span></p>
+            <blockquote>{testimonial.quote}</blockquote>
+            <p className="muted">{testimonial.customerName}{testimonial.vendorName ? ` · ${testimonial.vendorName}` : ''}</p>
+          </article>)}
+        </div>}
+      </Reveal>}
+
       <Reveal className="section-block" direction="up">
+        <div className="section-header compact-header">
+          <div>
+            <p className="eyebrow">{t('publicHomeTrustHeading')}</p>
+            <h2>{t('publicHomeHowItWorks')}</h2>
+          </div>
+        </div>
         <div className="process-grid">
           {[
             ['1', t('discover'), t('discoverCopy')],
@@ -1830,10 +1917,26 @@ function PublicPageLayout({ currentPath, user, onNavigate, onLogout, children })
   return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />{children}<AppFooter /></>;
 }
 
+function getBrowseEventStatus(event) {
+  const now = Date.now();
+  const start = event?.startDate ? new Date(event.startDate).getTime() : NaN;
+  const end = event?.endDate ? new Date(event.endDate).getTime() : NaN;
+  if (String(event?.status || '').toLowerCase() === 'completed') return 'Past';
+  if (Number.isFinite(start) && start > now) return 'Upcoming';
+  if (Number.isFinite(start) && Number.isFinite(end) && start <= now && end >= now) return 'Ongoing';
+  if (Number.isFinite(start) && start < now && (!Number.isFinite(end) || end < now)) return 'Past';
+  return event?.status || 'Upcoming';
+}
+
 function EventsPage({ onNavigate, user, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const initialQuery = getListingFiltersFromPath(currentPath);
+  const routePath = String(currentPath).split('?')[0];
+  const routeFilter = new URLSearchParams(String(currentPath).split('?')[1] || '').get('filter');
+  const isUpcomingView = routePath === '/events/upcoming' || routeFilter === 'upcoming';
+  const isFreeView = routeFilter === 'free';
+  const isFeaturedView = routeFilter === 'featured';
   const [events, setEvents] = useState([]);
   const [categories, setCategories] = useState([]);
   const [featured, setFeatured] = useState(null);
@@ -1847,12 +1950,12 @@ function EventsPage({ onNavigate, user, currentPath }) {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState('');
   const [search, setSearch] = useState(initialQuery.search);
-  const [searchFocused, setSearchFocused] = useState(false);
-  const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const [location, setLocation] = useState(initialQuery.location);
   const [category, setCategory] = useState(initialQuery.category);
   const [startDate, setStartDate] = useState(initialQuery.startDate);
   const [endDate, setEndDate] = useState(initialQuery.endDate);
+  const [datePreset, setDatePreset] = useState(initialQuery.datePreset);
+  const [priceFilter, setPriceFilter] = useState(initialQuery.priceFilter);
   const [minPrice, setMinPrice] = useState(initialQuery.minPrice);
   const [maxPrice, setMaxPrice] = useState(initialQuery.maxPrice);
   const [eventStatus, setEventStatus] = useState(initialQuery.status);
@@ -1861,7 +1964,10 @@ function EventsPage({ onNavigate, user, currentPath }) {
   const [pageSize, setPageSize] = useState(initialQuery.limit);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [pagination, setPagination] = useState({ total: 0, page: 1, totalPages: 1, limit: 6 });
+  const [upcomingTotal, setUpcomingTotal] = useState(null);
+  const [upcomingTotalError, setUpcomingTotalError] = useState('');
   const [eventCategoryTotal, setEventCategoryTotal] = useState(0);
+  const [eventCategoryError, setEventCategoryError] = useState('');
   const [requestEvent, setRequestEvent] = useState(null);
   const [requestForm, setRequestForm] = useState({ event_title: '', event_type: '', requested_date: '', requested_location: '', requester_name: '', requester_email: '', service_category: '', guest_count: '', budget: '', notes: '' });
   const [requestBusy, setRequestBusy] = useState(false);
@@ -1869,6 +1975,55 @@ function EventsPage({ onNavigate, user, currentPath }) {
   const [requestSuccess, setRequestSuccess] = useState('');
   const [eventShareMessage, setEventShareMessage] = useState('');
   const lastRoutePath = useRef(currentPath);
+  const listingPageSize = isUpcomingView ? 6 : pageSize;
+  const eventListingQuery = useMemo(() => {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(listingPageSize),
+      sort: isUpcomingView || isFreeView ? 'upcoming' : sort,
+    });
+    if (isUpcomingView) {
+      params.set('filter', 'upcoming');
+    } else if (isFreeView || isFeaturedView) {
+      params.set('filter', isFreeView ? 'free' : 'featured');
+    } else if (eventStatus) {
+      params.set('status', eventStatus);
+    }
+    if (search.trim()) params.set('search', search.trim());
+    if (category) params.set('category', category);
+    if (location) params.set('location', location);
+    if (startDate) params.set('startDate', startDate);
+    if (endDate) params.set('endDate', endDate);
+    if (datePreset) params.set('datePreset', datePreset);
+    if (priceFilter) params.set('priceFilter', priceFilter);
+    if (!isFreeView && minPrice !== '') params.set('minPrice', minPrice);
+    if (!isFreeView && maxPrice !== '') params.set('maxPrice', maxPrice);
+    return params.toString();
+  }, [
+    isUpcomingView, isFreeView, isFeaturedView, page, listingPageSize, sort, eventStatus,
+    datePreset, search, category, location, startDate, endDate, minPrice,
+    maxPrice, priceFilter,
+  ]);
+  const eventListingUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (isFreeView || isFeaturedView) params.set('filter', isFreeView ? 'free' : 'featured');
+    for (const [key, value] of Object.entries({
+      search: search.trim(), location, category, startDate, endDate, datePreset, priceFilter,
+      minPrice: isFreeView ? '' : minPrice, maxPrice: isFreeView ? '' : maxPrice,
+      filter: isFreeView || isFeaturedView ? '' : ['upcoming', 'free'].includes(eventStatus) ? eventStatus : '',
+      status: isFreeView || isFeaturedView ? '' : ['upcoming', 'free'].includes(eventStatus) ? '' : eventStatus,
+    })) {
+      if (value) params.set(key, value);
+    }
+    if (sort !== 'upcoming') params.set('sort', sort);
+    if (page > 1) params.set('page', String(page));
+    if (pageSize !== 6) params.set('limit', String(pageSize));
+    const query = params.toString();
+    return `${routePath}${query ? `?${query}` : ''}`;
+  }, [
+    routePath, isFreeView, isFeaturedView, search, location, category, startDate, endDate, datePreset,
+    priceFilter, minPrice, maxPrice, eventStatus, sort, page, pageSize,
+  ]);
 
   useEffect(() => {
     if (lastRoutePath.current === currentPath) return;
@@ -1879,6 +2034,8 @@ function EventsPage({ onNavigate, user, currentPath }) {
     setCategory(filters.category);
     setStartDate(filters.startDate);
     setEndDate(filters.endDate);
+    setDatePreset(filters.datePreset);
+    setPriceFilter(filters.priceFilter);
     setMinPrice(filters.minPrice);
     setMaxPrice(filters.maxPrice);
     setEventStatus(filters.status);
@@ -1893,19 +2050,12 @@ function EventsPage({ onNavigate, user, currentPath }) {
       setLoading(true);
       setError('');
       try {
-        const params = new URLSearchParams({ page: String(page), limit: String(pageSize), sort });
-        if (search.trim()) params.set('search', search.trim());
-        if (category) params.set('category', category);
-        if (location) params.set('location', location);
-        if (startDate) params.set('startDate', startDate);
-        if (endDate) params.set('endDate', endDate);
-        if (minPrice) params.set('minPrice', minPrice);
-        if (maxPrice) params.set('maxPrice', maxPrice);
-        if (eventStatus) params.set('status', eventStatus);
-        const response = await api(`/platform/events?${params.toString()}`);
+        const response = await api(`/platform/events?${eventListingQuery}`);
         if (!active) return;
         setEvents(Array.isArray(response?.data) ? response.data : []);
-        setPagination(response?.pagination || { total: 0, page: 1, totalPages: 1, limit: 6 });
+        const nextPagination = response?.pagination || { total: 0, page: 1, totalPages: 1, limit: 6 };
+        setPagination(nextPagination);
+        if (nextPagination.page !== page) setPage(nextPagination.page);
       } catch (issue) {
         if (!active) return;
         setEvents([]);
@@ -1916,33 +2066,46 @@ function EventsPage({ onNavigate, user, currentPath }) {
       }
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page, pageSize, reloadKey]);
+  }, [eventListingQuery, reloadKey]);
 
   useEffect(() => {
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries({
-      search: search.trim(), location, category, startDate, endDate, minPrice, maxPrice, status: eventStatus,
-    })) {
-      if (value) params.set(key, value);
-    }
-    if (sort !== 'upcoming') params.set('sort', sort);
-    if (page > 1) params.set('page', String(page));
-    if (pageSize !== 6) params.set('limit', String(pageSize));
-    const query = params.toString();
-    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
-  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page, pageSize]);
+    if (isUpcomingView) return undefined;
+    window.history.replaceState({}, '', eventListingUrl);
+  }, [eventListingUrl, isUpcomingView]);
+
+  useEffect(() => {
+    if (!isUpcomingView && !isFreeView) return undefined;
+    let active = true;
+    setUpcomingTotalError('');
+    api(`/platform/events?filter=${isFreeView ? 'free' : 'upcoming'}&limit=1`).then((response) => {
+      if (active) setUpcomingTotal(Number(response?.pagination?.total || 0));
+    }).catch((issue) => {
+      if (active) {
+        setUpcomingTotal(null);
+        setUpcomingTotalError(issue.status ? `${t('loadEventsError')} (${issue.status})` : t('loadEventsError'));
+      }
+    });
+    return () => { active = false; };
+  }, [isUpcomingView, isFreeView, reloadKey]);
 
   useEffect(() => {
     let active = true;
-    api('/platform/events/categories').then((response) => {
-      if (active) {
-        const availableCategories = Array.isArray(response?.data) ? response.data : [];
-        setCategories(availableCategories);
-        setEventCategoryTotal(availableCategories.reduce((total, item) => total + Number(item.total || 0), 0));
-      }
-    }).catch(() => {
-      if (active) setCategories([]);
-    });
+    if (!isUpcomingView) {
+      setEventCategoryError('');
+      api('/platform/events/categories').then((response) => {
+        if (active) {
+          const availableCategories = Array.isArray(response?.data) ? response.data : [];
+          setCategories(availableCategories);
+          setEventCategoryTotal(availableCategories.reduce((total, item) => total + Number(item.total || 0), 0));
+        }
+      }).catch((issue) => {
+        if (active) {
+          setCategories([]);
+          setEventCategoryTotal(0);
+          setEventCategoryError(issue.status ? `${t('loadEventsError')} (${issue.status})` : t('loadEventsError'));
+        }
+      });
+    }
     api('/platform/events/featured').then((response) => {
       if (active) {
         const featuredEvents = Array.isArray(response?.data) ? response.data : [];
@@ -1960,7 +2123,7 @@ function EventsPage({ onNavigate, user, currentPath }) {
       if (active) setFeaturedLoading(false);
     });
     return () => { active = false; };
-  }, []);
+  }, [isUpcomingView, reloadKey]);
 
   async function viewDetails(eventId) {
     onNavigate(`/events/${encodeURIComponent(eventId)}`);
@@ -2026,31 +2189,22 @@ function EventsPage({ onNavigate, user, currentPath }) {
   }
 
   const categoryOptions = [...new Set(categories.map((value) => String(value?.name || '').trim()).filter(Boolean))];
+  const selectedCategory = categories.find((value) => String(value?.id) === category
+    || String(value?.slug || '').toLowerCase() === category.toLowerCase()
+    || String(value?.name || '').toLowerCase() === category.toLowerCase());
   const locationOptions = [...new Set([...getHomepageLocationOptions(events), location].filter(Boolean))].sort((left, right) => left.localeCompare(right));
-  const suggestions = search.trim()
-    ? [
-      ...events.map((event) => ({ key: `event-${event.id}`, label: event.title, hint: event.type || 'Event', value: event.title })),
-      ...categoryOptions.filter((value) => value.toLowerCase().includes(search.trim().toLowerCase()))
-        .map((value) => ({ key: `category-${value}`, label: value, hint: 'Category', value })),
-    ].slice(0, 6)
-    : [];
-  function chooseSuggestion(suggestion) {
-    setSearch(suggestion.value);
-    setSearchFocused(false);
-    setSuggestionIndex(-1);
-    setPage(1);
-  }
-
   function resetFilters() {
     setSearch('');
     setLocation('');
     setCategory('');
     setStartDate('');
     setEndDate('');
+    setDatePreset('');
+    setPriceFilter('');
     setMinPrice('');
     setMaxPrice('');
-    setEventStatus('');
-    setSort('upcoming');
+    setEventStatus(isUpcomingView ? 'upcoming' : '');
+    setSort(isUpcomingView || isFreeView ? 'upcoming' : 'date_earliest');
     setPage(1);
     setPageSize(6);
   }
@@ -2061,73 +2215,104 @@ function EventsPage({ onNavigate, user, currentPath }) {
     category && `Category: ${category}`,
     startDate && `From: ${startDate}`,
     endDate && `To: ${endDate}`,
+    datePreset && `When: ${datePreset.replaceAll('_', ' ')}`,
+    priceFilter && `Price: ${priceFilter}`,
     minPrice && `Min ETB ${minPrice}`,
     maxPrice && `Max ETB ${maxPrice}`,
-    eventStatus && `Status: ${eventStatus}`,
+    !isUpcomingView && !isFreeView && eventStatus && `Status: ${eventStatus}`,
   ].filter(Boolean);
+  const totalPages = Math.max(1, pagination.totalPages || 1);
+  const pageWindowStart = Math.max(1, Math.min(page - 2, totalPages - 4));
+  const pageNumbers = Array.from({ length: Math.min(5, totalPages) }, (_, index) => pageWindowStart + index);
 
-  return <main className="page-shell"><div className="content-stack"><nav className="event-breadcrumb" aria-label="Breadcrumb"><button type="button" onClick={() => onNavigate('/')}>{t('homeNav')}</button><span>/</span><strong>Events</strong></nav><section className="events-discovery-hero"><div className="section-header"><div><p className="eyebrow">EVENTHUB · EVENTS</p><h1>{t('upcomingExperiences')}</h1><p className="muted">{t('pageDescription')}</p></div><div className="events-hero-actions">{user?.role === 'organizer' && <button className="button" type="button" onClick={() => onNavigate('/organizer/dashboard?view=events')}>{t('createEvent')}</button>}<button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button></div></div><div className="events-discovery-stats"><div><strong>{eventCategoryTotal.toLocaleString()}</strong><span>{t('eventsListedCount')}</span></div><div><strong>{categoryOptions.length.toLocaleString()}</strong><span>{t('eventCategoriesCount')}</span></div><div><strong>{featuredEventCount.toLocaleString()}</strong><span>{t('featuredEventsCount')}</span></div></div></section>
-    <div className="panel event-filter-panel">
-      <button className="button secondary event-filter-toggle" type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>Filters {filtersOpen ? '−' : '+'}</button>
-      <div className={`toolbar stacked-toolbar ${filtersOpen ? 'is-open' : ''}`}>
-        <div className="event-search-control">
-          <div className="event-search-input-row"><input className="field-input" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={searchFocused && suggestions.length > 0} aria-controls="event-search-suggestions" aria-activedescendant={suggestionIndex >= 0 ? `event-search-option-${suggestions[suggestionIndex]?.key}` : undefined} aria-label={t('searchEvents')} maxLength={120} value={search} onFocus={() => setSearchFocused(true)} onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)} onChange={(event) => { setPage(1); setSuggestionIndex(-1); setSearch(event.target.value); }} onKeyDown={(event) => {
-            if (event.key === 'ArrowDown' && suggestions.length) { event.preventDefault(); setSearchFocused(true); setSuggestionIndex((index) => (index + 1) % suggestions.length); }
-            if (event.key === 'ArrowUp' && suggestions.length) { event.preventDefault(); setSuggestionIndex((index) => (index - 1 + suggestions.length) % suggestions.length); }
-            if (event.key === 'Enter' && suggestionIndex >= 0) { event.preventDefault(); chooseSuggestion(suggestions[suggestionIndex]); }
-            if (event.key === 'Escape') { setSearchFocused(false); setSuggestionIndex(-1); }
-          }} placeholder={t('searchEvents')} /><button type="button" className="button small" onClick={() => { setPage(1); setSearchFocused(false); }}>{t('search')}</button>{search && <button type="button" className="button secondary small" aria-label={t('clearSearch')} onClick={() => { setSearch(''); setPage(1); setSearchFocused(false); }}>{t('clearSearch')}</button>}</div>
-          {searchFocused && suggestions.length > 0 && <ul className="event-search-suggestions" id="event-search-suggestions" role="listbox" aria-label={t('eventSearchSuggestions')}>{suggestions.map((suggestion, index) => <li key={suggestion.key}><button id={`event-search-option-${suggestion.key}`} type="button" role="option" aria-selected={index === suggestionIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseSuggestion(suggestion)}><strong>{suggestion.label}</strong><small>{suggestion.hint}</small></button></li>)}</ul>}
-        </div>
-        <input className="filter-select" aria-label={t('allLocations')} list="event-locations" maxLength={120} value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }} placeholder={t('allLocations')} />
-        <datalist id="event-locations">{locationOptions.map((item) => <option key={item} value={item} />)}</datalist>
-        <select className="filter-select" aria-label={t('allCategories')} value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
-          <option value="">{t('allCategories')}</option>
-          {categoryOptions.map((value) => <option key={value} value={value.toLowerCase()}>{t(value.toLowerCase()) === value.toLowerCase() ? value : t(value.toLowerCase())}</option>)}
-        </select>
-        <select className="filter-select" aria-label={t('upcoming')} value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
-          <option value="upcoming">{t('upcomingFirst')}</option><option value="earliest">{t('oldestFirst')}</option><option value="latest">{t('latestDateFirst')}</option><option value="recent">{t('newestFirst')}</option><option value="price_asc">{t('priceLowToHigh')}</option><option value="price_desc">{t('priceHighToLow')}</option><option value="alphabetical">{t('alphabetical')}</option>
-        </select>
-        <input className="filter-select" aria-label="Start date" type="date" value={startDate} onChange={(event) => { setPage(1); setStartDate(event.target.value); }} />
-        <input className="filter-select" aria-label="End date" type="date" value={endDate} onChange={(event) => { setPage(1); setEndDate(event.target.value); }} />
-        <input className="filter-select" aria-label="Minimum ticket price" type="number" min="0" placeholder="Min price" value={minPrice} onChange={(event) => { setPage(1); setMinPrice(event.target.value); }} />
-        <input className="filter-select" aria-label="Maximum ticket price" type="number" min="0" placeholder="Max price" value={maxPrice} onChange={(event) => { setPage(1); setMaxPrice(event.target.value); }} />
-        <select className="filter-select" aria-label={t('eventAvailability')} value={eventStatus} onChange={(event) => { setPage(1); setEventStatus(event.target.value); }}>
-          <option value="">{t('allAvailability')}</option><option value="upcoming">{t('upcoming')}</option><option value="available">{t('available')}</option><option value="free">{t('eventsFree')}</option><option value="paid">{t('eventsPaid')}</option>
-        </select>
-        <select className="filter-select" aria-label={t('pageSize')} value={pageSize} onChange={(event) => { setPage(1); setPageSize(Number(event.target.value)); }}>
-          {[6, 12, 24].map((size) => <option key={size} value={size}>{size} {t('perPage')}</option>)}
-        </select>
-        <button type="button" className="button secondary small" onClick={resetFilters}>Clear Filters</button>
-      </div>
-      {activeFilters.length > 0 && <div className="event-active-filters" aria-label="Active filters">
-        <span>Active filters:</span>{activeFilters.map((filter) => <span className="event-filter-chip" key={filter}>{filter}</span>)}
-      </div>}
+  const categoryTitle = selectedCategory?.name || category;
+  const routeSort = new URLSearchParams(String(currentPath).split('?')[1] || '').get('sort') || '';
+  const pageTitle = category ? categoryTitle
+    : isFreeView ? t('freePageTitle')
+      : isUpcomingView ? t('upcomingPageTitle')
+        : isFeaturedView ? 'Featured Events'
+          : routeSort === 'popular' ? 'Popular Events'
+            : ['newest', 'recent'].includes(routeSort) ? 'Recently Added Events'
+              : t('browseEventsTitle');
+  const pageDescription = category
+    ? selectedCategory?.description || `${t('pageDescription')} ${categoryTitle}.`
+    : isFreeView ? t('freePageDescription')
+      : isUpcomingView ? t('upcomingPageDescription')
+        : isFeaturedView ? 'Events selected by EventHub administrators.'
+          : routeSort === 'popular' ? 'Events ranked by confirmed ticket bookings.'
+            : ['newest', 'recent'].includes(routeSort) ? 'Published events ordered by creation date, newest first.'
+              : t('pageDescription');
+  return <main className={`page-shell${isUpcomingView ? ' upcoming-events-page' : ''}${isFreeView ? ' free-events-page' : ''}`}><div className="content-stack"><section className="events-discovery-hero"><div className="section-header"><div><p className="eyebrow">EVENTHUB · EVENTS</p><h1>{pageTitle}</h1><p className="muted">{pageDescription}</p></div><div className="events-hero-actions">{user?.role === 'organizer' && <button className="button" type="button" onClick={() => onNavigate('/organizer/dashboard?view=events')}>{t('createEvent')}</button>}{!isUpcomingView && !isFreeView && <button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button>}</div></div><div className="events-discovery-stats">{category ? <div><strong>{selectedCategory?.total?.toLocaleString() || (loading ? '—' : '0')}</strong><span>published {categoryTitle} events</span></div> : isUpcomingView || isFreeView ? <div><strong>{upcomingTotal === null ? '—' : upcomingTotal.toLocaleString()}</strong><span>{isFreeView ? t('totalFreeEvents') : t('totalUpcomingEvents')}</span></div> : <><div><strong>{eventCategoryTotal.toLocaleString()}</strong><span>{t('eventsListedCount')}</span></div><div><strong>{categoryOptions.length.toLocaleString()}</strong><span>{t('eventCategoriesCount')}</span></div><div><strong>{featuredEventCount.toLocaleString()}</strong><span>{t('featuredEventsCount')}</span></div></>}</div>{!isUpcomingView && eventCategoryError && <p className="event-count-error" role="alert">{eventCategoryError}<button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></p>}{(isUpcomingView || isFreeView) && upcomingTotalError && <p className="event-count-error" role="alert">{upcomingTotalError}<button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></p>}</section>
+
+    <button className="button secondary small event-filter-toggle" type="button" aria-expanded={filtersOpen} aria-controls="event-listing-filters" onClick={() => setFiltersOpen((open) => !open)}>
+      {filtersOpen ? t('hideEventFilters') : t('showEventFilters')}
+    </button>
+    <div id="event-listing-filters" className={`toolbar stacked-toolbar${filtersOpen ? ' is-open' : ''}`} role="search" aria-label={t('filterEvents')}>
+      <label className="field"><span>{t('search')}</span><input className="field-input" type="search" maxLength="120" value={search} placeholder={t('search')} onChange={(event) => { setSearch(event.target.value); setPage(1); }} /></label>
+      <label className="field"><span>{t('eventCategoryLabel')}</span><select className="filter-select" value={category} onChange={(event) => { setCategory(event.target.value); setPage(1); }}>
+        <option value="">{t('allEventCategories')}</option>
+        {categories.map((item) => <option key={item.id || item.slug || item.name} value={item.slug || item.id || item.name}>{item.name}</option>)}
+      </select></label>
+      <label className="field"><span>{t('eventLocationLabel')}</span><input className="field-input" type="search" maxLength="120" value={location} list="event-location-options" placeholder={t('eventLocationLabel')} onChange={(event) => { setLocation(event.target.value); setPage(1); }} />
+        <datalist id="event-location-options">{locationOptions.map((item) => <option key={item} value={item} />)}</datalist>
+      </label>
+      <label className="field"><span>{t('upcomingDateFilter')}</span><select className="filter-select" value={datePreset} onChange={(event) => { setDatePreset(event.target.value); setPage(1); }}>
+        <option value="">{t('anyEventDate')}</option><option value="today">{t('today')}</option><option value="tomorrow">{t('tomorrow')}</option><option value="this_week">{t('thisWeek')}</option><option value="this_weekend">{t('thisWeekend')}</option><option value="this_month">{t('thisMonth')}</option><option value="next_month">{t('nextMonth')}</option>
+      </select></label>
+      <label className="field"><span>{t('fromDate')}</span><input className="field-input" type="date" max={endDate || undefined} value={startDate} onChange={(event) => { setStartDate(event.target.value); setPage(1); }} /></label>
+      <label className="field"><span>{t('toDate')}</span><input className="field-input" type="date" min={startDate || undefined} value={endDate} onChange={(event) => { setEndDate(event.target.value); setPage(1); }} /></label>
+      <label className="field"><span>{t('eventPrice')}</span><select className="filter-select" value={isFreeView ? 'free' : priceFilter} disabled={isFreeView} onChange={(event) => { const nextPriceFilter = event.target.value; setPriceFilter(nextPriceFilter); if (nextPriceFilter === 'free') { setMinPrice(''); setMaxPrice(''); } setPage(1); }}>
+        <option value="">{t('anyTicketPrice')}</option><option value="free">{t('eventsFree')}</option><option value="paid">{t('eventsPaid')}</option>
+      </select></label>
+      <label className="field"><span>{t('minimumPrice')}</span><input className="field-input" type="number" min="0" step="0.01" value={isFreeView ? '' : minPrice} disabled={isFreeView || priceFilter === 'free'} onChange={(event) => { setMinPrice(event.target.value); setPage(1); }} /></label>
+      <label className="field"><span>{t('maximumPrice')}</span><input className="field-input" type="number" min="0" step="0.01" value={isFreeView ? '' : maxPrice} disabled={isFreeView || priceFilter === 'free'} onChange={(event) => { setMaxPrice(event.target.value); setPage(1); }} /></label>
+      <label className="field"><span>{t('sortEvents')}</span><select className="filter-select" value={isUpcomingView || isFreeView ? 'upcoming' : sort} disabled={isUpcomingView || isFreeView} onChange={(event) => { setSort(event.target.value); setPage(1); }}>
+        <option value="newest">{t('sortNewest')}</option><option value="oldest">{t('sortOldest')}</option><option value="upcoming">{t('upcomingFirst')}</option><option value="price_asc">{t('priceLowToHigh')}</option><option value="price_desc">{t('priceHighToLow')}</option><option value="popular">{t('mostBooked')}</option>
+      </select></label>
+      <label className="field"><span>{t('resultsPerPage')}</span><select className="filter-select" value={pageSize} disabled={isUpcomingView} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }}>
+        {[6, 12, 24, 48, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+      </select></label>
+      <button className="button secondary small" type="button" onClick={resetFilters}>{t('reset')}</button>
     </div>
-
-    {!loading && !error && <p className="event-results-count" role="status">{pagination.total} events found</p>}
-    {loading ? <div className="loading" role="status"><span className="spinner" />{t('loadingEvents')}</div> : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></div> : <>
+    {!loading && !error && <p className="event-results-count" role="status">{Number(pagination?.total || 0).toLocaleString()} {isFreeView ? t('freeEventsResult') : isUpcomingView ? t('upcomingEventsResult') : 'events found'}</p>}
+    {loading ? <div className="card-grid event-list-grid event-skeleton-grid" role="status" aria-label={t('loadingEvents')}>{Array.from({ length: 6 }, (_, index) => <div className="event-skeleton-card" key={index} aria-hidden="true"><span /><div><i /><i /><i /></div></div>)}</div> : error ? <div className="alert error" role="alert"><span>{error}</span><button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></div> : <>
       {events.length ? <>
         <div className="card-grid event-list-grid">
-          {events.map((event) => <article key={event.id} className="info-card event-tile">
-            <div className="event-thumb">{event.coverImage && <img src={event.coverImage} alt={event.title} width="960" height="540" loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />}<span>{event.type || 'Event'}</span></div>
-            <div className="event-tile-body">
-              <span className="event-tag">{event.type || 'Event'}</span><h3>{event.title}</h3>
-              <p className="event-card-description">{event.description || t('eventDescriptionUnavailable')}</p>
-              <p>{[event.venue, event.location].filter(Boolean).join(', ') || t('locationTbd')}</p>
-              <small>{formatEventDate(event.startDate, language) || t('dateTbd')}{event.organizerName ? ` · ${t('eventsOrganizedBy')}: ${event.organizerName}` : ''}</small>
-              <div className="event-card-status"><span>{event.status || t('upcoming')}</span><span>{Number(event.availableQuantity || 0) > 0 ? `${Number(event.availableQuantity).toLocaleString()} ${t('ticketsAvailable')}` : t('ticketsUnavailable')}</span></div>
-              <div className="pricing-row compact-row"><strong>{event.startingPrice === null || event.startingPrice === undefined ? t('ticketsUnavailable') : Number(event.startingPrice) === 0 ? t('eventsFree') : formatEventBudget(event.startingPrice, language)}</strong><button type="button" className="button secondary small" onClick={() => shareEvent(event)}>{t('eventsShare')}</button><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button>{Number(event.availableQuantity || 0) > 0 && <button type="button" className="button small" onClick={() => viewDetails(event.id)}>{t('publicHomeBookNow')}</button>}</div>
-            </div>
-          </article>)}
+          {events.map((event) => {
+            const timingStatus = getBrowseEventStatus(event);
+            const availableQuantity = Number(event.availableQuantity || 0);
+            const freeAvailableQuantity = Number(event.freeAvailableQuantity ?? availableQuantity);
+            const displayedAvailability = isFreeView ? freeAvailableQuantity : availableQuantity;
+            const price = event.startingPrice === null || event.startingPrice === undefined ? null : Number(event.startingPrice);
+            return <article key={event.id} className="info-card event-tile">
+              <div className="event-thumb">{event.coverImage && <img src={event.coverImage} alt={event.title} width="960" height="540" loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />}<span>{event.type || 'Event'}</span></div>
+              <div className="event-tile-body">
+                <span className="event-tag">{event.type || 'Event'}</span><h3>{event.title}</h3>
+                <p className="event-card-description">{event.description || t('eventDescriptionUnavailable')}</p>
+                <div className="event-card-details">
+                  <p><CalendarDays size={15} aria-hidden="true" /><span>{formatEventDateOnly(event.startDate, language) || t('dateTbd')}</span></p>
+                  <p><Clock3 size={15} aria-hidden="true" /><span>{t('eventsStartsAt')} {formatEventTime(event.startDate, language) || t('timeTbd')}{event.endDate ? ` · ${t('eventsEndsAt')} ${formatEventTime(event.endDate, language) || t('timeTbd')}` : ''} EAT</span></p>
+                  <p><MapPin size={15} aria-hidden="true" /><span>{[event.venue, event.location].filter(Boolean).join(', ') || t('locationTbd')}</span></p>
+                  {event.organizerName && <p><Users size={15} aria-hidden="true" /><span>{t('eventsOrganizedBy')}: {event.organizerName}</span></p>}
+                </div>
+                {(isUpcomingView || isFreeView) && <EventCountdown startDate={event.startDate} />}
+                <div className="event-card-status"><span className={`event-listing-status status-${timingStatus.toLowerCase()}`}>{timingStatus}</span><span className="event-ticket-availability">{displayedAvailability > 0 ? `${displayedAvailability.toLocaleString()} ${t('ticketsAvailable')}` : t('ticketsUnavailable')}</span></div>
+                <div className="event-card-price"><strong>{isFreeView ? `${t('eventsFree')} · ETB 0` : price === null ? t('ticketsUnavailable') : price === 0 ? `${t('eventsFree')} · ETB 0` : formatEventBudget(price, language)}</strong><span className={isFreeView || price === 0 ? 'event-price-label free' : 'event-price-label'}>{isFreeView || price === 0 ? t('eventsFree') : price === null ? '' : t('eventsPaid')}</span></div>
+                <div className="pricing-row compact-row event-card-actions"><button type="button" className="button secondary small" onClick={() => shareEvent(event)}>{t('eventsShare')}</button><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button>{displayedAvailability > 0 && price !== null && <button type="button" className="button small" onClick={() => viewDetails(event.id)}>{price === 0 ? t('registerFreeTicket') : t('eventsBookNow')}</button>}</div>
+              </div>
+            </article>;
+          })}
         </div>
         {eventShareMessage && <p className="event-inline-message" role="status">{eventShareMessage}</p>}
-      </> : <div className="empty panel"><strong>{t('emptyTitle')}</strong><span>{t('emptyMessage')}</span><button className="button secondary small" type="button" onClick={resetFilters}>{t('reset')}</button></div>}
-      <div className="pagination-row" aria-label="Event pages">
-        <button className="button secondary small" type="button" disabled={pagination.page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>{t('previous')}</button>
-        <span>{t('page')} {pagination.page || page} {t('of')} {pagination.totalPages || 1}</span>
-        <button className="button secondary small" type="button" disabled={page >= (pagination.totalPages || 1)} onClick={() => setPage((current) => Math.min(pagination.totalPages || 1, current + 1))}>{t('next')}</button>
-      </div>
+      </> : <div className="empty panel event-empty-state"><strong>{isUpcomingView ? 'No upcoming events at the moment' : t('emptyTitle')}</strong><span>{isUpcomingView ? 'Please check back soon or contact us to plan a new event.' : t('emptyMessage')}</span>{!isUpcomingView && <><p>Try a different search or clear some filters to discover more events.</p><button className="button secondary small" type="button" onClick={resetFilters}>{t('reset')}</button></>}</div>}
+      {pagination.total > 0 && <div className="pagination-row" aria-label="Event pages">
+        <span className="event-page-count">Showing {Math.min(pagination.total, (pagination.page - 1) * pagination.limit + 1)}–{Math.min(pagination.total, pagination.page * pagination.limit)} of {pagination.total} events</span>
+        <div className="event-page-controls">
+          <button className="button secondary small" type="button" disabled={pagination.page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>{t('previous')}</button>
+          {pageNumbers.map((pageNumber) => <button key={pageNumber} className={`button small event-page-number ${pageNumber === pagination.page ? 'active' : 'secondary'}`} type="button" aria-current={pageNumber === pagination.page ? 'page' : undefined} onClick={() => setPage(pageNumber)}>{pageNumber}</button>)}
+          <button className="button secondary small" type="button" disabled={pagination.page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))}>{t('next')}</button>
+        </div>
+      </div>}
 
       {detailsLoading && <div className="loading" role="status"><span className="spinner" />{t('detailLoading')}</div>}
       {detailsError && <div className="alert error" role="alert">{detailsError}</div>}
@@ -2169,7 +2354,7 @@ function EventsPage({ onNavigate, user, currentPath }) {
   </main>;
 }
 
-function QuoteRequestModal({ service, services = [service], vendorId = service?.vendorId, user, onNavigate, onClose }) {
+function QuoteRequestModal({ service, services = [service], vendorId = service?.vendorId, user, onNavigate, onClose, title = 'Request a quote' }) {
   const activeServices = (Array.isArray(services) ? services : [service])
     .filter((item) => item && item.published !== false && item.visibility !== 'private');
   const [serviceId, setServiceId] = useState(String(service?.id || ''));
@@ -2260,7 +2445,7 @@ function QuoteRequestModal({ service, services = [service], vendorId = service?.
 
   return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
     <form className="modal quote-request-modal" role="dialog" aria-modal="true" aria-labelledby="quote-request-title" onSubmit={submit}>
-      <div className="modal-head"><h2 id="quote-request-title">Request a quote</h2><button className="icon-button" type="button" onClick={onClose} aria-label="Close" disabled={busy}><X size={18}/></button></div>
+      <div className="modal-head"><h2 id="quote-request-title">{title}</h2><button className="icon-button" type="button" onClick={onClose} aria-label="Close" disabled={busy}><X size={18}/></button></div>
       <div className="modal-body">
         <p><strong>{selectedService?.vendorName || service?.vendorName}</strong></p>
         {activeServices.length > 1
@@ -2330,6 +2515,8 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [requestOpen, setRequestOpen] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [requestTitle, setRequestTitle] = useState('publicBookService');
 
   useEffect(() => {
     let active = true;
@@ -2350,10 +2537,10 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
     }
     loadService();
     return () => { active = false; };
-  }, [serviceId]);
+  }, [serviceId, reloadToken]);
 
   if (loading) return <main className="page-shell"><div className="loading" role="status"><span className="spinner"/>{t('loadingServices')}</div></main>;
-  if (error || !service) return <main className="page-shell"><div className="empty panel"><strong>Service unavailable</strong><span>{error || 'This service is no longer available.'}</span><button className="button secondary" type="button" onClick={() => onNavigate('/services')}>Back to Services</button></div></main>;
+  if (error || !service) return <main className="page-shell"><div className="empty panel"><strong>Service unavailable</strong><span>{error || 'This service is no longer available.'}</span>{error && <button className="button secondary" type="button" onClick={() => setReloadToken((value) => value + 1)}>{t('retry')}</button>}<button className="button secondary" type="button" onClick={() => onNavigate('/services')}>Back to Services</button></div></main>;
 
   const availabilityItems = withStableKeys(
     (Array.isArray(service.availability) ? service.availability : []).filter((entry) => entry?.date != null),
@@ -2368,13 +2555,16 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
 
   return <main className="page-shell"><div className="content-stack">
     <button className="text-action" type="button" onClick={() => onNavigate('/services')}>← Back to Services</button>
-    {service.images?.length > 0 && <div className="public-vendor-gallery">{service.images.map((image) => <img key={image.id} src={resolveApiAssetUrl(image.url)} alt={image.name || service.title} loading="lazy" />)}</div>}
+    <div className="public-vendor-gallery">{service.images?.length
+      ? service.images.map((image) => <VendorMedia key={image.id} src={image.url} alt={image.name || service.title} loading="lazy" />)
+      : <VendorMedia className="public-service-image" src={null} alt={service.title || t('publicServiceImageUnavailable')} />}</div>
     <section className="info-card wide"><p className="eyebrow">{service.category}</p><h1>{service.title}</h1><p>{service.description}</p><div className="detail-meta-grid">
-      <div><span>Provider</span><strong>{service.vendorName}</strong></div>
-      <div><span>Location</span><strong>{service.city || t('locationAvailable')}</strong></div>
+      <div><span>Provider</span><strong>{service.vendorId ? <button className="text-action" type="button" onClick={() => onNavigate(`/vendors/${service.vendorId}`)}>{service.vendorName}</button> : service.vendorName}</strong></div>
+      <div><span>Location</span><strong>{service.city || t('serviceAreaRequest')}</strong></div>
       <div><span>Starting price</span><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('priceOnRequest')}</strong></div>
       {service.reviewCount > 0 && <div><span>Customer rating</span><strong>{Number(service.rating).toFixed(1)} / 5 ({service.reviewCount})</strong></div>}
-    </div><button className="button" type="button" onClick={() => setRequestOpen(true)}>Request Service</button></section>
+      {service.available && <div><span>Availability</span><strong>{t('publicAvailableNow')}</strong></div>}
+    </div><div className="card-actions"><button className="button" type="button" onClick={() => { setRequestTitle('publicBookService'); setRequestOpen(true); }}>{t('publicBookService')}</button><button className="button secondary" type="button" onClick={() => { setRequestTitle('publicContactVendor'); setRequestOpen(true); }}>{t('publicContactVendor')}</button></div></section>
     <section className="panel"><div className="panel-header"><h2>Service packages</h2></div>
       {service.packages?.length ? <div className="card-grid">{service.packages.map((item) => <article className="info-card" key={item.id}><h3>{item.name}</h3><p>{item.description || t('customServicePackage')}</p><strong>{item.currency} {Number(item.price).toLocaleString()}</strong><small>Minimum booking: {item.minimumBooking}</small>{item.includedFeatures?.length > 0 && <ul>{item.includedFeatures.map((feature) => <li key={feature}>{feature}</li>)}</ul>}{item.extras?.length > 0 && <div className="public-package-extras"><strong>Optional extras</strong>{item.extras.map((extra) => <p key={extra.name}>{extra.name} · {item.currency} {Number(extra.price).toLocaleString()} {extra.description && `· ${extra.description}`}</p>)}</div>}</article>)}</div> : <p>No packages are published for this service yet.</p>}
     </section>
@@ -2382,7 +2572,7 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
     <section className="panel"><div className="panel-header"><h2>Customer reviews</h2></div>
       {reviewItems.length ? <div className="list-stack">{reviewItems.map(({ item: review, key }) => <article className="list-card" key={key}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div> : <p>No published reviews are available for this service yet.</p>}
     </section>
-  </div>{requestOpen && <QuoteRequestModal service={service} user={user} onNavigate={onNavigate} onClose={() => setRequestOpen(false)}/>}</main>;
+  </div>{requestOpen && <QuoteRequestModal service={service} user={user} onNavigate={onNavigate} onClose={() => setRequestOpen(false)} title={t(requestTitle)}/>}</main>;
 }
 
 function VendorMedia({ src, alt, className = '', loading = 'lazy' }) {
@@ -2465,7 +2655,10 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
           <p className="muted">{vendor.category || 'Event services'} • {vendor.city || t('locationAvailable')}</p>
           <p>{vendor.verified && <span className="verify-badge-inline">{t('verified')}</span>} {vendor.reviewCount > 0 ? `${vendor.reviewCount} ${t('vendorReviews')} • ★ ${Number(vendor.rating).toFixed(1)}` : 'No published reviews yet'}</p>
         </div>
-        {vendor.services?.some((service) => service.published !== false && service.visibility !== 'private') && <button className="button" type="button" onClick={() => setRequestService(vendor.services.find((service) => service.published !== false && service.visibility !== 'private'))}>Request Quote</button>}
+        <div className="vendor-compare-actions">
+          <button className="button secondary small" type="button" onClick={() => onNavigate(`/contact?vendor=${encodeURIComponent(vendor.business_name || vendor.name || 'vendor')}`)}>Contact Vendor</button>
+          {vendor.services?.some((service) => service.published !== false && service.visibility !== 'private') && <button className="button" type="button" onClick={() => setRequestService(vendor.services.find((service) => service.published !== false && service.visibility !== 'private'))}>Request Quote</button>}
+        </div>
       </div>
       <div className="report-grid" style={{ marginTop: '18px' }}>
         <div className="info-card"><h3>{t('about')}</h3><p className="vendor-description">{vendor.description || 'No business description has been provided.'}</p></div>
@@ -2495,6 +2688,7 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
 function VendorsPage({ onNavigate, user, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
+  const initialParams = new URLSearchParams(String(currentPath).split('?')[1] || '');
   const [vendors, setVendors] = useState([]);
   const [categoryOptions, setCategoryOptions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2503,16 +2697,18 @@ function VendorsPage({ onNavigate, user, currentPath }) {
   const [search, setSearch] = useState(initialFilters.search);
   const [category, setCategory] = useState(initialFilters.category || 'all');
   const [location, setLocation] = useState(initialFilters.location);
-  const [minPrice, setMinPrice] = useState('');
-  const [maxPrice, setMaxPrice] = useState('');
-  const [minRating, setMinRating] = useState('');
-  const [verifiedOnly, setVerifiedOnly] = useState(false);
-  const [availableOnly, setAvailableOnly] = useState(false);
-  const [sort, setSort] = useState('recommended');
-  const [page, setPage] = useState(1);
+  const [minPrice, setMinPrice] = useState(initialParams.get('minPrice') || '');
+  const [maxPrice, setMaxPrice] = useState(initialParams.get('maxPrice') || '');
+  const [minRating, setMinRating] = useState(initialParams.get('minRating') || '');
+  const [availableOnly, setAvailableOnly] = useState(initialParams.get('availableOnly') === 'true');
+  const [sort, setSort] = useState(initialParams.get('sort') || 'recommended');
+  const [featuredOnly, setFeaturedOnly] = useState(initialParams.get('filter') === 'featured');
+  const [verifiedOnly, setVerifiedOnly] = useState(initialParams.get('verified') === 'true');
+  const [page, setPage] = useState(initialFilters.page);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0, limit: 12 });
   const [notice, setNotice] = useState('');
   const [categoryError, setCategoryError] = useState('');
+  const [categoryRetry, setCategoryRetry] = useState(0);
   const [filterError, setFilterError] = useState('');
   const [requestVendor, setRequestVendor] = useState(null);
   const [reloadToken, setReloadToken] = useState(0);
@@ -2533,6 +2729,14 @@ function VendorsPage({ onNavigate, user, currentPath }) {
     setCategory(filters.category || 'all');
     setLocation(filters.location);
     setPage(filters.page);
+    const params = new URLSearchParams(String(currentPath).split('?')[1] || '');
+    setMinPrice(params.get('minPrice') || '');
+    setMaxPrice(params.get('maxPrice') || '');
+    setMinRating(params.get('minRating') || '');
+    setAvailableOnly(params.get('availableOnly') === 'true');
+    setSort(params.get('sort') || 'recommended');
+    setFeaturedOnly(params.get('filter') === 'featured');
+    setVerifiedOnly(params.get('verified') === 'true');
   }, [currentPath]);
 
   const fetchVendors = useCallback(async (nextPage, nextFilters, signal) => {
@@ -2547,6 +2751,7 @@ function VendorsPage({ onNavigate, user, currentPath }) {
       if (nextFilters.maxPrice) params.set('maxPrice', nextFilters.maxPrice);
       if (nextFilters.minRating) params.set('minRating', nextFilters.minRating);
       if (nextFilters.verifiedOnly) params.set('verified', 'true');
+      if (nextFilters.featuredOnly) params.set('filter', 'featured');
       if (nextFilters.availableOnly) params.set('availableOnly', 'true');
       const response = await api(`/platform/vendors?${params.toString()}`, { signal });
       setVendors(response.data || []);
@@ -2570,6 +2775,7 @@ function VendorsPage({ onNavigate, user, currentPath }) {
   useEffect(() => {
     const controller = new AbortController();
     async function loadCategories() {
+      setCategoryError('');
       try {
         const response = await api('/platform/categories', { signal: controller.signal });
         setCategoryOptions(Array.isArray(response.data) ? response.data : []);
@@ -2582,7 +2788,7 @@ function VendorsPage({ onNavigate, user, currentPath }) {
     }
     loadCategories();
     return () => controller.abort();
-  }, []);
+  }, [categoryRetry]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2592,9 +2798,9 @@ function VendorsPage({ onNavigate, user, currentPath }) {
       return () => controller.abort();
     }
     setFilterError('');
-    fetchVendors(page, { search, category, location, minPrice, maxPrice, minRating, verifiedOnly, availableOnly, sort }, controller.signal);
+    fetchVendors(page, { search, category, location, minPrice, maxPrice, minRating, verifiedOnly, featuredOnly, availableOnly, sort }, controller.signal);
     return () => controller.abort();
-  }, [fetchVendors, page, search, category, location, minPrice, maxPrice, minRating, verifiedOnly, availableOnly, sort, reloadToken]);
+  }, [fetchVendors, page, search, category, location, minPrice, maxPrice, minRating, verifiedOnly, featuredOnly, availableOnly, sort, reloadToken]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -2603,6 +2809,23 @@ function VendorsPage({ onNavigate, user, currentPath }) {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [searchInput]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (search) params.set('search', search);
+    if (category && category !== 'all') params.set('category', category);
+    if (location) params.set('location', location);
+    if (minPrice) params.set('minPrice', minPrice);
+    if (maxPrice) params.set('maxPrice', maxPrice);
+    if (minRating) params.set('minRating', minRating);
+    if (verifiedOnly) params.set('verified', 'true');
+    if (featuredOnly) params.set('filter', 'featured');
+    if (availableOnly) params.set('availableOnly', 'true');
+    if (sort !== 'recommended') params.set('sort', sort);
+    if (page > 1) params.set('page', String(page));
+    const query = params.toString();
+    window.history.replaceState({}, '', `/vendors${query ? `?${query}` : ''}`);
+  }, [search, category, location, minPrice, maxPrice, minRating, verifiedOnly, featuredOnly, availableOnly, sort, page]);
 
   const handleQuoteRequest = (vendorRecord) => {
     const services = Array.isArray(vendorRecord?.services) ? vendorRecord.services.filter((service) => service && service.published !== false && service.visibility !== 'private') : [];
@@ -2614,6 +2837,12 @@ function VendorsPage({ onNavigate, user, currentPath }) {
     onNavigate(`/contact?vendor=${encodeURIComponent(vendorName)}`);
   };
 
+  const listingTitle = featuredOnly ? 'Featured Vendors'
+    : verifiedOnly ? 'Verified Vendors'
+      : sort === 'popular' ? 'Popular Vendors'
+        : sort === 'recently-added' ? 'Newly Registered Vendors'
+          : t('browseVendorsHeading');
+
   const toggleComparison = (vendorId) => {
     try {
       const result = toggleComparedVendor(vendorId);
@@ -2624,19 +2853,19 @@ function VendorsPage({ onNavigate, user, currentPath }) {
     }
   };
 
-  return <main className="page-shell vendor-directory-page"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div>
+  return <main className="page-shell vendor-directory-page"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{listingTitle}</h2></div>
     <div className="vendor-compare-actions">{comparedVendorIds.length > 0 && <span>{t('navigationCompareSelected').replace('{count}', String(comparedVendorIds.length))}</span>}
       <button className="button secondary small" type="button" disabled={comparedVendorIds.length < 2} onClick={() => onNavigate('/compare')}>{t('navigationCompareSelectedAction')}</button>
     </div></div>
     {compareNotice && <p className="alert" role="status">{compareNotice}</p>}
-    {categoryError && <div className="alert error" role="alert">{categoryError}</div>}
+    {categoryError && <div className="alert error" role="alert"><span>{categoryError}</span><button className="button secondary small" type="button" onClick={() => setCategoryRetry((value) => value + 1)}>Retry</button></div>}
     {filterError && <div className="alert error" role="alert">{filterError}</div>}
     <div className="panel" style={{ padding: '18px 20px' }}>
       <div className="toolbar vendor-directory-toolbar">
         <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={searchInput} onChange={(event) => { setPage(1); setSearchInput(event.target.value); }} placeholder={t('searchVendors')} /></div>
         <select className="filter-select" aria-label={t('allCategories')} value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
           <option value="all">{t('allCategories')}</option>
-          {categoryOptions.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+          {categoryOptions.map((item) => <option key={item.id} value={item.slug || item.name}>{item.name}</option>)}
         </select>
         <input className="filter-select" aria-label="Vendor city or location" value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }} placeholder={t('allLocations')} />
         <input className="filter-select" aria-label="Minimum vendor price" type="number" min="0" value={minPrice} onChange={(event) => { setPage(1); setMinPrice(event.target.value); }} placeholder="Min price" />
@@ -2646,13 +2875,14 @@ function VendorsPage({ onNavigate, user, currentPath }) {
         <label className="vendor-verified-filter"><input type="checkbox" checked={availableOnly} onChange={(event) => { setPage(1); setAvailableOnly(event.target.checked); }} /> Available</label>
         <select className="filter-select" aria-label="Sort vendors" value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
           <option value="recommended">{t('recommended')}</option>
+          <option value="popular">Most popular</option>
           <option value="highest-rated">{t('highestRated')}</option>
           <option value="most-reviewed">{t('mostReviewed')}</option>
           <option value="price-low">{t('priceLowHigh')}</option>
           <option value="price-high">{t('priceHighLow')}</option>
-          <option value="recently-added">Recently added</option>
+          <option value="recently-added">Newly registered</option>
         </select>
-        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearchInput(''); setSearch(''); setCategory('all'); setLocation(''); setMinPrice(''); setMaxPrice(''); setMinRating(''); setVerifiedOnly(false); setAvailableOnly(false); setSort('recommended'); }}>{t('reset')}</button>
+        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearchInput(''); setSearch(''); setCategory('all'); setLocation(''); setMinPrice(''); setMaxPrice(''); setMinRating(''); setVerifiedOnly(false); setFeaturedOnly(false); setAvailableOnly(false); setSort('recommended'); }}>{t('reset')}</button>
       </div>
     </div>
 
@@ -2669,11 +2899,13 @@ function VendorsPage({ onNavigate, user, currentPath }) {
             <p>{vendor.city || t('locationAvailable')}</p>{vendor.description && <p className="vendor-card-description">{vendor.description}</p>}
             {vendor.services?.[0] && <p className="vendor-card-service"><strong>{vendor.services[0].title}</strong>{vendor.services[0].description ? ` · ${vendor.services[0].description}` : ''}</p>}
             <div className="pricing-row"><strong>{vendor.priceFrom !== null && vendor.priceFrom !== undefined ? `${vendor.currency || 'ETB'} ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount > 0 ? `★ ${Number(vendor.rating).toFixed(1)} · ` : ''}{vendor.reviewCount} {t('vendorReviews')}</span></div>
+            {vendor.available && <p className="vendor-availability-status">Available for new bookings</p>}
             <div className="card-actions">
               <button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button>
               <button className="button secondary small" type="button" aria-pressed={comparedVendorIds.includes(Number(vendor.id))} onClick={() => toggleComparison(vendor.id)}>
                 {t(comparedVendorIds.includes(Number(vendor.id)) ? 'navigationRemoveFromCompare' : 'navigationAddToCompare')}
               </button>
+              <button className="button secondary small" type="button" onClick={() => handleContactVendor(vendor)}>Contact Vendor</button>
               <button className="button small" type="button" disabled={!vendor.services?.some((service) => service && service.published !== false && service.visibility !== 'private')} onClick={() => handleQuoteRequest(vendor)}>Request Quote</button>
             </div>
           </div>
@@ -2693,6 +2925,37 @@ function VendorsPage({ onNavigate, user, currentPath }) {
   </div>{requestVendor && <QuoteRequestModal service={requestVendor.services?.find((service) => service && service.published !== false && service.visibility !== 'private')} services={requestVendor.services} vendorId={requestVendor.id} user={user} onNavigate={onNavigate} onClose={() => setRequestVendor(null)}/>}</main>;
 }
 
+function readServiceFilters(path = '') {
+  const params = new URLSearchParams(String(path).split('?')[1] || '');
+  return {
+    filters: {
+      search: params.get('search') || '',
+      category: params.get('category') || 'all',
+      location: params.get('location') || '',
+      vendor: params.get('vendor') || '',
+      vendorId: params.get('vendorId') || '',
+      minPrice: params.get('minPrice') || '',
+      maxPrice: params.get('maxPrice') || '',
+      minRating: params.get('minRating') || '',
+      availableOnly: params.get('availableOnly') === 'true' ? 'true' : '',
+      sort: params.get('sort') || 'recommended',
+    },
+    page: Math.max(1, Number(params.get('page')) || 1),
+  };
+}
+
+function serviceListingPath(filters, page = 1) {
+  const params = new URLSearchParams();
+  for (const key of ['search', 'category', 'location', 'vendor', 'vendorId', 'minPrice', 'maxPrice', 'minRating', 'availableOnly']) {
+    const value = filters[key];
+    if (value && !(key === 'category' && value === 'all')) params.set(key, value);
+  }
+  if (filters.sort && filters.sort !== 'recommended') params.set('sort', filters.sort);
+  if (page > 1) params.set('page', String(page));
+  const query = params.toString();
+  return `/services${query ? `?${query}` : ''}`;
+}
+
 function ServicesPage({ onNavigate, user, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
@@ -2700,24 +2963,23 @@ function ServicesPage({ onNavigate, user, currentPath }) {
   const [categories, setCategories] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const serviceRequestController = useRef(null);
-  const initialFilters = getListingFiltersFromPath(currentPath);
-  const [filters, setFilters] = useState({
-    search: initialFilters.search, category: initialFilters.category || 'all', location: initialFilters.location,
-    minPrice: initialFilters.minPrice, maxPrice: initialFilters.maxPrice, minRating: '', availableOnly: '', sort: 'recommended',
-  });
+  const initialState = readServiceFilters(currentPath);
+  const [filters, setFilters] = useState(initialState.filters);
+  const [page, setPage] = useState(initialState.page);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [categoryError, setCategoryError] = useState('');
+  const [categoryRetry, setCategoryRetry] = useState(0);
   const [requestService, setRequestService] = useState(null);
   const lastRoutePath = useRef(currentPath);
 
   useEffect(() => {
     if (lastRoutePath.current === currentPath) return;
     lastRoutePath.current = currentPath;
-    const query = getListingFiltersFromPath(currentPath);
-    const nextFilters = { ...filters, search: query.search, category: query.category || 'all', location: query.location, minPrice: query.minPrice, maxPrice: query.maxPrice };
-    setFilters(nextFilters);
-    void loadServices(nextFilters, query.page);
+    const routeState = readServiceFilters(currentPath);
+    setFilters(routeState.filters);
+    setPage(routeState.page);
+    void loadServices(routeState.filters, routeState.page);
   }, [currentPath]);
 
   async function loadServices(nextFilters = filters, page = 1) {
@@ -2736,6 +2998,8 @@ function ServicesPage({ onNavigate, user, currentPath }) {
       if (nextFilters.search) params.set('search', nextFilters.search);
       if (nextFilters.category && nextFilters.category !== 'all') params.set('category', nextFilters.category);
       if (nextFilters.location && nextFilters.location !== 'all') params.set('location', nextFilters.location);
+      if (nextFilters.vendor) params.set('vendor', nextFilters.vendor);
+      if (nextFilters.vendorId) params.set('vendorId', nextFilters.vendorId);
       if (nextFilters.minPrice) params.set('minPrice', nextFilters.minPrice);
       if (nextFilters.maxPrice) params.set('maxPrice', nextFilters.maxPrice);
       if (nextFilters.minRating) params.set('minRating', nextFilters.minRating);
@@ -2755,72 +3019,91 @@ function ServicesPage({ onNavigate, user, currentPath }) {
   }
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
     async function loadCategories() {
+      setCategoryError('');
       try {
-        const response = await api('/platform/categories');
-        if (active) setCategories(Array.isArray(response.data) ? response.data : []);
+        const response = await api('/platform/categories?scope=services', { signal: controller.signal });
+        const values = Array.isArray(response.categories) ? response.categories
+          : Array.isArray(response.data) ? response.data : [];
+        if (!controller.signal.aborted) setCategories(values);
       } catch (issue) {
-        if (active) {
+        if (!controller.signal.aborted) {
           setCategories([]);
-          setEventCategoryTotal(0);
           setCategoryError(issue.message || 'Unable to load service category filters.');
         }
       }
     }
     loadCategories();
-    loadServices(filters, 1);
-    return () => {
-      active = false;
-      serviceRequestController.current?.abort();
-    };
+    return () => controller.abort();
+  }, [categoryRetry]);
+
+  useEffect(() => {
+    void loadServices(filters, page);
+    return () => serviceRequestController.current?.abort();
   }, []);
 
   const updateFilter = (key, value) => setFilters((current) => ({ ...current, [key]: value }));
-  const applyFilters = () => loadServices(filters, 1);
+  const navigateWithFilters = (nextFilters, nextPage = 1) => {
+    const path = serviceListingPath(nextFilters, nextPage);
+    setFilters(nextFilters);
+    setPage(nextPage);
+    if (path === currentPath) void loadServices(nextFilters, nextPage);
+    else onNavigate(path);
+  };
+  const applyFilters = () => navigateWithFilters(filters);
+  const selectCategory = (category) => {
+    const selected = categories.find((item) => item.slug === category || String(item.id) === category);
+    const nextFilters = { ...filters, category: category === 'all' ? 'all' : selected?.slug || category };
+    navigateWithFilters(nextFilters);
+  };
   const resetFilters = () => {
-    const emptyFilters = { search: '', category: 'all', location: '', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
-    setFilters(emptyFilters);
-    loadServices(emptyFilters, 1);
+    navigateWithFilters(readServiceFilters('/services').filters);
   };
 
+  const selectedCategory = categories.find((category) => String(category.id) === String(filters.category)
+    || category.slug === filters.category);
+  const categoryValue = selectedCategory?.slug || filters.category;
   return <main className="page-shell"><div className="content-stack">
-    <div className="section-header"><div><p className="eyebrow">{t('servicesEyebrow')}</p><h2>{t('servicesHeading')}</h2></div></div>
-    {categoryError && <div className="alert error" role="alert">{categoryError}</div>}
+    <div className="section-header"><div><p className="eyebrow">{t('servicesEyebrow')}</p><h2>{selectedCategory?.name || t('servicesHeading')}</h2></div></div>
+    {categoryError && <div className="alert error" role="alert">{categoryError}<button type="button" className="button secondary small" onClick={() => setCategoryRetry((value) => value + 1)}>{t('retry')}</button></div>}
     <div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar">
       <input className="field-input" aria-label={t('searchServices')} value={filters.search} onChange={(event) => updateFilter('search', event.target.value)} placeholder={t('searchServices')} />
-      <select className="filter-select" aria-label={t('allCategories')} value={filters.category} onChange={(event) => updateFilter('category', event.target.value)}><option value="all">{t('allCategories')}</option>{categories.map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select>
+      <select className="filter-select" aria-label={t('allCategories')} value={categoryValue} onChange={(event) => selectCategory(event.target.value)}><option value="all">{t('allCategories')}</option>{filters.category !== 'all' && !selectedCategory && <option value={filters.category}>{filters.category}</option>}{categories.map((category) => <option key={category.id} value={category.slug}>{category.name}</option>)}</select>
       <input className="filter-select" aria-label={t('publicServiceLocation')} value={filters.location} onChange={(event) => updateFilter('location', event.target.value)} placeholder={t('publicServiceLocation')} />
+      <input className="filter-select" aria-label={t('publicServiceVendor')} value={filters.vendor} onChange={(event) => updateFilter('vendor', event.target.value)} placeholder={t('publicServiceVendor')} />
       <input className="filter-select" aria-label={t('publicMinPrice')} type="number" min="0" value={filters.minPrice} onChange={(event) => updateFilter('minPrice', event.target.value)} placeholder={t('publicMinPrice')} />
       <input className="filter-select" aria-label={t('publicMaxPrice')} type="number" min="0" value={filters.maxPrice} onChange={(event) => updateFilter('maxPrice', event.target.value)} placeholder={t('publicMaxPrice')} />
       <select className="filter-select" aria-label={t('publicMinimumServiceRating')} value={filters.minRating} onChange={(event) => updateFilter('minRating', event.target.value)}><option value="">{t('publicAnyServiceRating')}</option><option value="3">{t('publicThreeStars')}</option><option value="4">{t('publicFourStars')}</option><option value="4.5">{t('publicFourHalfStars')}</option></select>
       <select className="filter-select" aria-label={t('publicServiceAvailability')} value={filters.availableOnly} onChange={(event) => updateFilter('availableOnly', event.target.value)}><option value="">{t('publicAnyAvailability')}</option><option value="true">{t('publicAvailableNow')}</option></select>
-      <select className="filter-select" aria-label={t('publicSortServices')} value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)}><option value="recommended">{t('recommended')}</option><option value="highest-rated">{t('highestRated')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option><option value="alphabetical">{t('alphabetical')}</option></select>
+      <select className="filter-select" aria-label={t('publicSortServices')} value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value)}><option value="recommended">{t('recommended')}</option><option value="popular">{t('publicPopularServices')}</option><option value="newest">{t('publicNewestServices')}</option><option value="price-low">{t('priceLowHigh')}</option><option value="price-high">{t('priceHighLow')}</option><option value="highest-rated">{t('highestRated')}</option></select>
       <button type="button" className="button secondary small" onClick={resetFilters}>{t('reset')}</button><button type="button" className="button small" onClick={applyFilters}>{t('applyFilters')}</button>
     </div></div>
     {!loading && !error && <p role="status">{pagination.total ?? services.length} {t('publicServicesFound')}</p>}
-    {loading ? <div className="loading" role="status"><span className="spinner"/>{t('loadingServices')}</div>
+    {loading ? <div className="content-stack" role="status" aria-label={t('loadingServices')}><div className="loading"><span className="spinner"/>{t('loadingServices')}</div><div className="card-grid">{Array.from({ length: 6 }, (_, index) => <article className="info-card service-card-skeleton" key={index} aria-hidden="true"><div className="public-service-image vendor-skeleton-shimmer" /><div className="vendor-skeleton-line short vendor-skeleton-shimmer" /><div className="vendor-skeleton-line vendor-skeleton-shimmer" /><div className="vendor-skeleton-line long vendor-skeleton-shimmer" /></article>)}</div></div>
       : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => loadServices(filters, pagination.page || 1)}>{t('retry')}</button></div>
         : services.length ? <>
           <div className="card-grid">{services.map((service) => <article key={service.id} className="info-card">
-            {service.images?.[0] ? <img className="public-service-image" src={resolveApiAssetUrl(service.images[0].url)} alt={service.images[0].name || service.title} loading="lazy" /> : <div className="media-placeholder public-service-image" role="img" aria-label={t('publicServiceImageUnavailable')} />}
-            <p className="eyebrow">{service.category}</p><h3>{service.title}</h3><p>{service.description || ''}</p>
-            <p>{service.vendorName} · {service.city}</p>
+            <VendorMedia className="public-service-image" src={service.images?.[0]?.url} alt={service.images?.[0]?.name || service.title || t('publicServiceImageUnavailable')} />
+            {service.category && <p className="eyebrow">{service.category}</p>}<h3>{service.title}</h3><p>{service.description || ''}</p>
+            <p>{[service.vendorName, service.city].filter(Boolean).join(' · ')}</p>
             <div className="pricing-row compact-row"><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('requestQuote')}</strong>{service.reviewCount > 0 && <span>{Number(service.rating).toFixed(1)}★ ({service.reviewCount})</span>}</div>
-            <div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${service.id}`)}>{t('publicViewServiceDetails')}</button><button className="button small" type="button" onClick={() => setRequestService(service)}>{t('publicRequestService')}</button></div>
+            {service.available && <p className="vendor-availability-status">{t('publicAvailableNow')}</p>}
+            <div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${service.id}`)}>{t('publicViewServiceDetails')}</button><button className="button small" type="button" onClick={() => setRequestService(service)}>{t('publicBookService')}</button></div>
           </article>)}</div>
-          <div className="pagination-row" aria-label={t('publicServicePages')}><button className="button secondary small" type="button" disabled={(pagination.page || 1) <= 1 || loading} onClick={() => loadServices(filters, (pagination.page || 1) - 1)}>{t('previous')}</button><span>{t('page')} {pagination.page || 1} {t('of')} {pagination.totalPages || 1}</span><button className="button secondary small" type="button" disabled={(pagination.page || 1) >= (pagination.totalPages || 1) || loading} onClick={() => loadServices(filters, (pagination.page || 1) + 1)}>{t('next')}</button></div>
+          <div className="pagination-row" aria-label={t('publicServicePages')}><button className="button secondary small" type="button" disabled={(pagination.page || 1) <= 1 || loading} onClick={() => navigateWithFilters(filters, (pagination.page || 1) - 1)}>{t('previous')}</button><span>{t('page')} {pagination.page || 1} {t('of')} {pagination.totalPages || 1}</span><button className="button secondary small" type="button" disabled={(pagination.page || 1) >= (pagination.totalPages || 1) || loading} onClick={() => navigateWithFilters(filters, (pagination.page || 1) + 1)}>{t('next')}</button></div>
         </> : <EmptyState title={t('noServicesMatch')} message={t('emptyMessage')} />}
-  </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}</main>;
+  </div>{requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)} title={t('publicBookService')}/>}</main>;
 }
 
 function CategoriesPage({ onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [categories, setCategories] = useState([]);
-  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
+  const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -2828,14 +3111,12 @@ function CategoriesPage({ onNavigate }) {
       setLoading(true);
       setError('');
       try {
-        const params = new URLSearchParams();
-        if (search) params.set('search', search);
-        const response = await api(`/platform/categories${params.size ? `?${params.toString()}` : ''}`);
+        const response = await api('/platform/events/categories');
         if (active) setCategories(Array.isArray(response.data) ? response.data : []);
       } catch (issue) {
         if (active) {
           setCategories([]);
-          setError(issue.message || 'Unable to load categories.');
+          setError(issue.message || t('categoriesLoadError'));
         }
       } finally {
         if (active) setLoading(false);
@@ -2844,9 +3125,56 @@ function CategoriesPage({ onNavigate }) {
 
     loadCategories();
     return () => { active = false; };
-  }, [search]);
+  }, [reloadKey]);
 
-  return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('categoriesEyebrow')}</p><h2>{t('categoriesHeading')}</h2></div></div>{error && <div className="alert error">{translateText(error, language)}</div>}<div className="panel" style={{ padding: '18px 20px' }}><div className="toolbar stacked-toolbar"><div className="search-box"><Search size={16}/><input aria-label={t('searchCategories')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchCategories')} /></div><button type="button" className="button secondary small" onClick={() => setSearch('')}>{t('clear')}</button></div></div>{loading ? <div className="loading"><span className="spinner" />{t('loadingCategories')}</div> : categories.length ? <div className="card-grid soft-grid">{categories.map((category) =>   <article key={category.id} className="info-card">{category.image ? <img src={resolveApiAssetUrl(category.image)} alt={category.name} loading="lazy" className="category-card-image" /> : <div className="media-placeholder category-card-image" role="img" aria-label={`${category.name} image unavailable`} />}<h3>{category.name}</h3><p>{category.description || t('availableServiceCategory')}</p><div className="meta-row compact-row"><span>{category.vendorCount ? `${category.vendorCount} ${t('vendorsLabel')}` : t('noVendorsAvailable')}</span><span>{category.serviceCount ? `${category.serviceCount} ${t('availableServices')}` : t('noServicesListed')}</span></div><div className="card-actions"><button className="button secondary small" type="button" onClick={() => onNavigate(`/categories/${category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`)}>{t('openCategory')}</button><button className="button small" type="button" onClick={() => onNavigate(`/vendors?category=${encodeURIComponent(category.slug || category.name)}`)}>{t('viewVendors')}</button></div></article>)}</div> : <EmptyState title={t('noCategoriesFound')} message={t('noCategoriesMatch')} />}</div></main>;
+  const visibleCategories = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    return categories
+      .filter((category) => `${category.name || ''} ${category.description || ''}`.toLocaleLowerCase().includes(query))
+      .sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')));
+  }, [categories, search]);
+  const categoryIcons = {
+    wedding: Heart,
+    birthday: Cake,
+    graduation: GraduationCap,
+    conference: CalendarDays,
+    'corporate events': Building2,
+    'concerts & music': Music2,
+    festivals: PartyPopper,
+    'religious events': Church,
+    'cultural events': Palette,
+    'workshops & training': BookOpen,
+    'sports events': Trophy,
+    exhibitions: Image,
+  };
+
+  return <main className="page-shell"><div className="content-stack">
+    <div className="section-header"><div><p className="eyebrow">{t('categoriesEyebrow')}</p><h2>{t('eventCategoriesHeading')}</h2></div></div>
+    <div className="panel" style={{ padding: '18px 20px' }}><div className="category-search-toolbar">
+      <div className="search-box"><Search size={16}/><input aria-label={t('searchCategories')} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t('searchCategories')} /></div>
+      <button type="button" className="button secondary small" onClick={() => setSearch('')}>{t('clear')}</button>
+    </div></div>
+    {error && <div className="alert error" role="alert">{translateText(error, language)}<button type="button" className="button secondary small" onClick={() => setReloadKey((value) => value + 1)}>{t('retry')}</button></div>}
+    {loading ? <div className="card-grid soft-grid" role="status" aria-label={t('loadingCategories')}>
+      {Array.from({ length: 6 }, (_, index) => <article key={index} className="info-card category-discovery-skeleton" aria-hidden="true"><div className="vendor-skeleton-line short vendor-skeleton-shimmer"/><div className="vendor-skeleton-line vendor-skeleton-shimmer"/><div className="vendor-skeleton-line long vendor-skeleton-shimmer"/></article>)}
+    </div> : error ? null : visibleCategories.length ? <div className="card-grid soft-grid">
+      {visibleCategories.map((category) => {
+        const CategoryIcon = categoryIcons[String(category.name || '').toLocaleLowerCase()] || Tags;
+        const categoryPath = `/events?category=${encodeURIComponent(category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''))}`;
+        const eventCount = Number(category.total || 0);
+        return <article key={category.id} className="info-card event-category-card">
+          {category.image
+            ? <img src={resolveApiAssetUrl(category.image)} alt="" loading="lazy" className="category-card-image" />
+            : <div className="event-category-icon" aria-hidden="true"><CategoryIcon size={28}/></div>}
+          <h3>{category.name}</h3>
+          <p>{category.description || t('exploreEvents')}</p>
+          <p className="event-category-count">{eventCount.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')} {t('eventsLabel')}</p>
+          {eventCount === 0 && <p className="muted">{t('noPublishedEventsForCategory')}</p>}
+          <button className="button" type="button" onClick={() => onNavigate(categoryPath)}>{t('browseEvents')}</button>
+        </article>;
+      })}
+    </div> : <EmptyState title={t('noCategoriesFound')} message={t('noCategoriesMatch')} />}
+  </div></main>;
 }
 
 function CategoryDetailPage({ slug, onNavigate }) {
@@ -2898,40 +3226,99 @@ function CategoryDetailPage({ slug, onNavigate }) {
   </div></main>;
 }
 
-function AboutPage({ onNavigate }) {
+function AboutPage({ onNavigate, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [statistics, setStatistics] = useState(null);
+  const [aboutData, setAboutData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+  const [activeSection, setActiveSection] = useState('about-eventhub');
+  const [openFaq, setOpenFaq] = useState(null);
+  const sections = [
+    { id: 'about-eventhub', label: t('aboutSectionIntroduction') },
+    { id: 'mission-vision', label: t('aboutSectionMission') },
+    { id: 'how-it-works', label: t('aboutSectionWorkflow') },
+    { id: 'why-choose-eventhub', label: t('aboutSectionBenefits') },
+    { id: 'our-team', label: t('aboutSectionTeam') },
+    { id: 'our-partners', label: t('aboutSectionPartners') },
+    { id: 'success-stories', label: t('aboutSectionStories') },
+    { id: 'faqs', label: t('aboutSectionFaqs') },
+  ];
+  const faqs = [
+    ['aboutFaqQuestionEventHub', 'aboutFaqAnswerEventHub'],
+    ['aboutFaqQuestionBook', 'aboutFaqAnswerBook'],
+    ['aboutFaqQuestionVendors', 'aboutFaqAnswerVendors'],
+    ['aboutFaqQuestionRegisterVendor', 'aboutFaqAnswerRegisterVendor'],
+    ['aboutFaqQuestionPublishService', 'aboutFaqAnswerPublishService'],
+    ['aboutFaqQuestionManageBookings', 'aboutFaqAnswerManageBookings'],
+    ['aboutFaqQuestionSupport', 'aboutFaqAnswerSupport'],
+    ['aboutFaqQuestionPassword', 'aboutFaqAnswerPassword'],
+  ];
 
   useEffect(() => {
     let active = true;
 
-    async function loadAboutStatistics() {
+    async function loadAboutPage() {
       try {
         setLoading(true);
         const response = await api('/about');
         if (active) {
-          setStatistics(response?.data?.statistics || null);
+          setAboutData(response?.data || null);
           setError('');
         }
-      } catch {
+      } catch (issue) {
         if (active) {
-          setError(t('aboutLoadError'));
+          setError(issue.message || t('aboutLoadError'));
         }
       } finally {
         if (active) setLoading(false);
       }
     }
 
-    loadAboutStatistics();
+    loadAboutPage();
     return () => { active = false; };
   }, [language, reloadKey]);
 
+  useEffect(() => {
+    const section = new URLSearchParams(String(currentPath || '').split('?')[1] || '').get('section');
+    const target = sections.some((item) => item.id === section) ? section : 'about-eventhub';
+    setActiveSection(target);
+    if (loading) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      scrollToSection(target);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [currentPath, loading]);
+
+  useEffect(() => {
+    const nodes = sections.map((item) => document.getElementById(item.id)).filter(Boolean);
+    if (!nodes.length || typeof IntersectionObserver === 'undefined') return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      const visible = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
+      if (visible) setActiveSection(visible.target.id);
+    }, { rootMargin: '-18% 0px -62% 0px', threshold: [0, 0.15, 0.4, 0.7] });
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [loading]);
+
+  function scrollToSection(section) {
+    const behavior = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+    document.getElementById(section)?.scrollIntoView({ behavior, block: 'start' });
+  }
+
+  function navigateToSection(section) {
+    setActiveSection(section);
+    onNavigate(`/about?section=${encodeURIComponent(section)}`);
+    scrollToSection(section);
+  }
+
   if (loading) {
-    return <main className="page-shell"><div className="content-stack"><div className="loading"><span className="spinner" />{t('loadingAbout')}</div></div></main>;
+    return <main className="page-shell about-shell"><div className="content-stack about-page" role="status" aria-label={t('loadingAbout')}>
+      <div className="about-loading-skeleton"/><div className="about-loading-skeleton"/><div className="about-loading-skeleton"/>
+    </div></main>;
   }
 
   const missionObjectives = ['aboutMissionObjective1', 'aboutMissionObjective2', 'aboutMissionObjective3', 'aboutMissionObjective4', 'aboutMissionObjective5', 'aboutMissionObjective6'];
@@ -2961,24 +3348,49 @@ function AboutPage({ onNavigate }) {
     { title: 'aboutFeatureLanguagesTitle', description: 'aboutFeatureLanguagesCopy', icon: Languages },
   ];
   const audiences = [
-    { title: 'aboutAudienceCustomersTitle', description: 'aboutAudienceCustomersCopy', action: 'aboutAudienceCustomersAction', destination: '/services', icon: UserRound },
-    { title: 'aboutAudienceVendorsTitle', description: 'aboutAudienceVendorsCopy', action: 'aboutAudienceVendorsAction', destination: '/vendor-application', icon: BriefcaseBusiness },
-    { title: 'aboutAudienceOrganizersTitle', description: 'aboutAudienceOrganizersCopy', action: 'aboutAudienceOrganizersAction', destination: '/events', icon: CalendarDays },
-    { title: 'aboutAudienceAdminsTitle', description: 'aboutAudienceAdminsCopy', action: 'aboutAudienceAdminsAction', destination: '/login', icon: Shield },
+    { title: 'aboutAudienceCustomersTitle', description: 'aboutWorkflowCustomersCopy', action: 'aboutAudienceCustomersAction', destination: '/events', icon: UserRound },
+    { title: 'aboutAudienceOrganizersTitle', description: 'aboutWorkflowOrganizersCopy', action: 'aboutAudienceOrganizersAction', destination: '/login', icon: CalendarDays },
+    { title: 'aboutAudienceVendorsTitle', description: 'aboutWorkflowVendorsCopy', action: 'aboutAudienceVendorsAction', destination: '/vendor-application', icon: BriefcaseBusiness },
+    { title: 'aboutAudienceAdminsTitle', description: 'aboutWorkflowAdminsCopy', action: 'aboutAudienceAdminsAction', destination: '/login', icon: Shield },
   ];
+  const partners = Array.isArray(aboutData?.partners) ? aboutData.partners : [];
+  const team = Array.isArray(aboutData?.team) ? aboutData.team : [];
+  const testimonials = Array.isArray(aboutData?.testimonials) ? aboutData.testimonials : [];
+  const configuredContent = aboutData?.language === language ? aboutData : null;
+  const displayValues = configuredContent?.values?.length
+    ? configuredContent.values.map((value, index) => ({
+      title: value.title,
+      description: value.description,
+      icon: coreValues[index % coreValues.length].icon,
+    }))
+    : coreValues.map((value) => ({ ...value, title: t(value.title), description: t(value.description) }));
   const marketplaceStats = [
     ['categoryCount', 'aboutStatCategories'],
     ['vendorCount', 'aboutStatVendors'],
     ['serviceCount', 'aboutStatServices'],
     ['completedBookingCount', 'aboutStatBookings'],
-  ].filter(([key]) => statistics?.[key] !== null && statistics?.[key] !== undefined && Number.isFinite(Number(statistics[key])));
+  ].filter(([key]) => aboutData?.statistics?.[key] !== null && aboutData?.statistics?.[key] !== undefined && Number.isFinite(Number(aboutData.statistics[key])));
 
   return <main className="page-shell about-shell"><div className="content-stack about-page">
-    <section className="about-hero">
+    <nav className="about-section-nav" aria-label={t('aboutSectionNavigation')}>
+      {sections.map((section) => <a
+        key={section.id}
+        href={`/about?section=${section.id}`}
+        aria-current={activeSection === section.id ? 'location' : undefined}
+        className={activeSection === section.id ? 'active' : ''}
+        onClick={(event) => {
+          event.preventDefault();
+          navigateToSection(section.id);
+        }}
+      >{section.label}</a>)}
+    </nav>
+    {error && <div className="about-load-error" role="alert"><span>{error}</span><button type="button" className="button secondary small" onClick={() => setReloadKey((key) => key + 1)}>{t('retry')}</button></div>}
+
+    <section className="about-hero about-anchor-section" id="about-eventhub" tabIndex="-1">
       <div className="about-hero-copy">
         <p className="about-eyebrow">{t('aboutHeroEyebrow')}</p>
-        <h1>{t('aboutHeroTitle')}</h1>
-        <p className="about-hero-description">{t('aboutHeroCopy')}</p>
+        <h1>{configuredContent?.hero?.heading || t('aboutHeroTitle')}</h1>
+        <p className="about-hero-description">{configuredContent?.introduction || t('aboutHeroCopy')}</p>
         <div className="about-button-row">
           <button type="button" className="button" onClick={() => onNavigate('/services')}>{t('aboutExploreServices')}<ArrowRight size={16} aria-hidden="true"/></button>
           <button type="button" className="button secondary" onClick={() => onNavigate('/vendors')}>{t('aboutFindVendors')}</button>
@@ -2992,61 +3404,93 @@ function AboutPage({ onNavigate }) {
     </section>
 
     {marketplaceStats.length > 0 && <section className="about-stats" aria-label={t('aboutMarketplaceStats')}>
-      {marketplaceStats.map(([key, label]) => <article className="about-stat-card" key={key}><strong>{Number(statistics[key]).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}</strong><span>{t(label)}</span></article>)}
+      {marketplaceStats.map(([key, label]) => <article className="about-stat-card" key={key}><strong>{Number(aboutData.statistics[key]).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}</strong><span>{t(label)}</span></article>)}
     </section>}
 
-    {error && <div className="about-load-error" role="alert"><span>{error}</span><button type="button" className="button secondary small" onClick={() => setReloadKey((key) => key + 1)}>{t('retry')}</button></div>}
-
-    <section className="about-purpose-section">
+    <section className="about-purpose-section about-anchor-section" id="mission-vision" tabIndex="-1">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutPurposeEyebrow')}</p><h2>{t('aboutPurposeHeading')}</h2></div>
       <div className="about-purpose-grid">
         <article className="about-purpose-card">
           <div className="about-purpose-icon"><Target size={23} aria-hidden="true"/></div>
           <h3>{t('aboutMissionTitle')}</h3>
-          <p>{t('aboutMissionCopy')}</p>
+          <p>{configuredContent?.mission || t('aboutMissionCopy')}</p>
           <h4>{t('aboutMissionObjectives')}</h4>
           <ul>{missionObjectives.map((key) => <li key={key}><Check size={15} aria-hidden="true"/><span>{t(key)}</span></li>)}</ul>
         </article>
         <article className="about-purpose-card">
           <div className="about-purpose-icon"><Compass size={23} aria-hidden="true"/></div>
           <h3>{t('aboutVisionTitle')}</h3>
-          <p>{t('aboutVisionCopy')}</p>
+          <p>{configuredContent?.vision || t('aboutVisionCopy')}</p>
           <h4>{t('aboutVisionPriorities')}</h4>
           <ul>{visionPriorities.map((key) => <li key={key}><Check size={15} aria-hidden="true"/><span>{t(key)}</span></li>)}</ul>
         </article>
       </div>
     </section>
 
-    <section className="about-story">
+    <section className="about-story about-anchor-section" id="about-story" tabIndex="-1">
       <div className="about-story-mark" aria-hidden="true"><BookOpen size={29}/></div>
       <div><p className="about-eyebrow">{t('aboutStoryEyebrow')}</p><h2>{t('aboutStoryTitle')}</h2><p>{t('aboutStoryCopy')}</p></div>
     </section>
 
-    <section className="about-content-section">
+    <section className="about-content-section about-anchor-section" id="our-values" tabIndex="-1">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutValuesEyebrow')}</p><h2>{t('aboutValuesTitle')}</h2><p>{t('aboutValuesIntro')}</p></div>
-      <div className="about-value-grid">{coreValues.map(({ title, description, icon: Icon }) => <article className="about-value-card" key={title}>
-        <div className="about-card-icon"><Icon size={21} aria-hidden="true"/></div><h3>{t(title)}</h3><p>{t(description)}</p>
+      <div className="about-value-grid">{displayValues.map(({ title, description, icon: Icon }, index) => <article className="about-value-card" key={`${title}-${index}`}>
+        <div className="about-card-icon"><Icon size={21} aria-hidden="true"/></div><h3>{title}</h3><p>{description}</p>
       </article>)}</div>
     </section>
 
-    <section className="about-content-section">
+    <section className="about-content-section about-anchor-section" id="how-it-works" tabIndex="-1">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutProcessEyebrow')}</p><h2>{t('aboutProcessTitle')}</h2><p>{t('aboutProcessIntro')}</p></div>
       <div className="about-step-grid">{workSteps.map(({ title, description, icon: Icon }, index) => <article className="about-step-card" key={title}>
         <div className="about-step-top"><span className="about-step-number">{String(index + 1).padStart(2, '0')}</span><Icon size={22} aria-hidden="true"/></div><h3>{t(title)}</h3><p>{t(description)}</p>
       </article>)}</div>
     </section>
 
-    <section className="about-content-section">
+    <section className="about-content-section about-anchor-section" id="why-choose-eventhub" tabIndex="-1">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutWhyEyebrow')}</p><h2>{t('aboutWhyTitle')}</h2><p>{t('aboutWhyIntro')}</p></div>
       <div className="about-feature-grid">{platformFeatures.map(({ title, description, icon: Icon }) => <article className="about-feature-card" key={title}>
         <Icon size={20} aria-hidden="true"/><div><h3>{t(title)}</h3><p>{t(description)}</p></div>
       </article>)}</div>
     </section>
 
-    <section className="about-content-section">
+    <section className="about-content-section about-anchor-section" id="about-audiences" tabIndex="-1">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutAudienceEyebrow')}</p><h2>{t('aboutAudienceTitle')}</h2><p>{t('aboutAudienceIntro')}</p></div>
       <div className="about-audience-grid">{audiences.map(({ title, description, action, destination, icon: Icon }) => <article className="about-audience-card" key={title}>
         <div className="about-card-icon"><Icon size={21} aria-hidden="true"/></div><h3>{t(title)}</h3><p>{t(description)}</p><button className="about-text-link" type="button" onClick={() => onNavigate(destination)}>{t(action)}<ArrowRight size={15} aria-hidden="true"/></button>
+      </article>)}</div>
+    </section>
+
+    <section className="about-content-section about-anchor-section" id="our-team" tabIndex="-1">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutTeamEyebrow')}</p><h2>{t('aboutTeamTitle')}</h2><p>{t('aboutTeamIntro')}</p></div>
+      {team.length ? <div className="about-people-grid">{team.map((member) => <article className="about-person-card" key={member.id}>
+        {member.imageUrl && <img src={resolveApiAssetUrl(member.imageUrl)} alt="" loading="lazy"/>}
+        <h3>{member.name}</h3><p>{member.role}</p>
+      </article>)}</div> : <div className="about-empty-state" role={error ? 'alert' : 'status'}>{error ? t('aboutSectionUnavailable') : t('aboutTeamEmpty')}</div>}
+    </section>
+
+    <section className="about-content-section about-anchor-section" id="our-partners" tabIndex="-1">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutPartnersEyebrow')}</p><h2>{t('aboutPartnersTitle')}</h2><p>{t('aboutPartnersIntro')}</p></div>
+      {partners.length ? <div className="about-partner-grid">{partners.map((partner) => <article className="about-partner-card" key={partner.id}>
+        {partner.logoUrl && <img src={resolveApiAssetUrl(partner.logoUrl)} alt="" loading="lazy"/>}
+        <div><h3>{partner.name}</h3>{partner.category && <p>{partner.category}</p>}{partner.city && <p>{partner.city}</p>}</div>
+      </article>)}</div> : <div className="about-empty-state" role={error ? 'alert' : 'status'}>{error ? t('aboutSectionUnavailable') : t('aboutPartnersEmpty')}</div>}
+    </section>
+
+    <section className="about-content-section about-anchor-section" id="success-stories" tabIndex="-1">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutStoriesEyebrow')}</p><h2>{t('aboutStoriesTitle')}</h2><p>{t('aboutStoriesIntro')}</p></div>
+      {error ? <div className="about-empty-state" role="alert">{t('aboutSectionUnavailable')}</div> : testimonials.length ? <div className="about-testimonial-grid">{testimonials.map((testimonial) => <article className="about-testimonial-card" key={testimonial.id}>
+        <div className="about-testimonial-rating" aria-label={`${testimonial.rating} / 5`}>{Array.from({ length: testimonial.rating }, (_, index) => <Star size={16} fill="currentColor" key={index} aria-hidden="true"/>)}</div>
+        <blockquote>{testimonial.quote}</blockquote>
+        <p>{t('aboutTestimonialCustomer')}{testimonial.vendorName ? ` · ${testimonial.vendorName}` : ''}</p>
+      </article>)}</div> : <div className="about-empty-state" role="status">{t('aboutStoriesEmpty')}</div>}
+    </section>
+
+    <section className="about-content-section about-anchor-section" id="faqs" tabIndex="-1">
+      <div className="about-section-heading"><p className="about-eyebrow">{t('aboutFaqEyebrow')}</p><h2>{t('aboutFaqTitle')}</h2><p>{t('aboutFaqIntro')}</p></div>
+      <div className="about-faq-list">{faqs.map(([question, answer], index) => <article className={`about-faq-item ${openFaq === index ? 'is-open' : ''}`} key={question}>
+        <h3><button type="button" id={`about-faq-question-${index}`} aria-expanded={openFaq === index} aria-controls={`about-faq-answer-${index}`}
+          onClick={() => setOpenFaq((current) => current === index ? null : index)}>{t(question)}<ChevronDown size={18} aria-hidden="true"/></button></h3>
+        <div id={`about-faq-answer-${index}`} role="region" aria-labelledby={`about-faq-question-${index}`} hidden={openFaq !== index}><p>{t(answer)}</p></div>
       </article>)}</div>
     </section>
 
@@ -3080,7 +3524,9 @@ function ContactPage() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState('');
   const [submitError, setSubmitError] = useState('');
-  const [contactDetailsOpen, setContactDetailsOpen] = useState(false);
+  const [contactDetailsOpen, setContactDetailsOpen] = useState(true);
+  const [emailDeliveryWarning, setEmailDeliveryWarning] = useState('');
+  const submitLock = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -3109,11 +3555,12 @@ function ContactPage() {
     setErrors((current) => ({ ...current, [key]: '' }));
     setSubmitError('');
     setSuccess('');
+    setEmailDeliveryWarning('');
   }
 
   async function submitContact(event) {
     event.preventDefault();
-    if (submitting) return;
+    if (submitLock.current) return;
 
     const { normalized, errors: validationErrors } = validateContactForm(form, language);
     if (Object.keys(validationErrors).length) {
@@ -3121,6 +3568,7 @@ function ContactPage() {
       return;
     }
 
+    submitLock.current = true;
     setSubmitting(true);
     setSubmitError('');
     setSuccess('');
@@ -3131,15 +3579,22 @@ function ContactPage() {
         method: 'POST',
         body: JSON.stringify(normalized),
       });
-      if (!response?.success || !response?.data?.id) {
+      if (!response?.success || !response?.data?.reference) {
         throw new Error(response?.message || t('contactSubmitError'));
       }
       const reference = response.data.reference;
       setSuccess(reference ? `${t('messageSaved')} ${t('reference')}: ${reference}` : t('messageSaved'));
+      const emailDelivery = response.data.email;
+      if (emailDelivery && (
+        emailDelivery.administrator !== 'sent' || emailDelivery.customer !== 'sent'
+      )) {
+        setEmailDeliveryWarning(t('contactEmailDeliveryWarning'));
+      }
       setForm({ ...emptyForm });
     } catch (issue) {
       setSubmitError(issue.status === 429 ? issue.message : issue.message || t('contactSubmitError'));
     } finally {
+      submitLock.current = false;
       setSubmitting(false);
     }
   }
@@ -3203,6 +3658,7 @@ function ContactPage() {
           </div>
           {submitError && <div className="alert error" role="alert">{submitError}</div>}
           {success && <div className="alert success" role="status">{success}</div>}
+          {emailDeliveryWarning && <div className="alert error" role="status">{emailDeliveryWarning}</div>}
           <form className="contact-form" onSubmit={submitContact} noValidate>
             <div className="contact-form-grid">
               <label className="contact-field">
@@ -3817,7 +4273,10 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
         const endpoints = ['overview', 'vendors', 'services', 'categories', 'bookings', 'history', 'events', 'favorites', 'saved-services', 'quotations', 'payments', 'refunds', 'messages', 'reviews', 'notifications', 'profile'];
         const results = await Promise.all(endpoints.map((endpoint) => api(`/customer/${endpoint}`)));
         const next = {};
-        endpoints.forEach((endpoint, index) => { next[endpoint] = results[index].data; });
+        const objectEndpoints = new Set(['overview', 'profile']);
+        endpoints.forEach((endpoint, index) => {
+          next[endpoint] = results[index]?.data ?? (objectEndpoints.has(endpoint) ? {} : []);
+        });
         setData(next);
       } catch (issue) {
         setError(issue.message);
@@ -3831,20 +4290,22 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <div className="alert error">{error}</div>;
-    return <CustomerWorkspace
-      view={slug}
-      data={data}
-      api={api}
-      user={user}
-      onNavigate={setSlug}
-      onNavigatePublic={onNavigatePublic}
-      onUserChange={onUserChange}
-      onRefresh={() => setRefreshKey((current) => current + 1)}
-    />;
+    return <ErrorBoundary key={slug}>
+      <CustomerWorkspace
+        view={slug}
+        data={data}
+        api={api}
+        user={user}
+        onNavigate={setSlug}
+        onNavigatePublic={onNavigatePublic}
+        onUserChange={onUserChange}
+        onRefresh={() => setRefreshKey((current) => current + 1)}
+      />
+    </ErrorBoundary>;
 
     switch (slug) {
       case 'overview':
-        return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('customerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || t('customerArea')}</h2><p className="muted">{t('trackBookings')}</p></div><div className="header-actions"><LanguageSelector user={user}/><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div></div><div className="metric-grid"><article className="metric-card"><p>{t('totalBookings')}</p><strong>{data.overview?.totalBookings ?? 0}</strong><span>{data.overview?.pendingBookings ?? 0} {t('pendingLabel')}</span></article><article className="metric-card"><p>{t('confirmedLabel')}</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingEvents ?? 0} {t('upcomingEvents')}</span></article><article className="metric-card"><p>{t('outstandingPayments')}</p><strong>{data.overview?.outstandingPayments ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} {t('openQuotations')}</span></article><article className="metric-card"><p>{t('unreadMessages')}</p><strong>{data.overview?.unreadMessages ?? 0}</strong><span>{data.overview?.unreadNotifications ?? 0} {t('notificationsLabel')}</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('recentBookings')}</h3><button className="button secondary small">{t('openBookings')}</button></div><div className="list-stack">{(data.bookings || []).slice(0,4).map((booking) => <div key={booking.id} className="list-card"><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} • {translateText(booking.status, language)}</small></div><span>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount || 0)}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>{t('savedVendors')}</h3></div><div className="list-stack">{(data.favorites || []).slice(0,3).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.city}</small></div><span className="pill active">{t('savedVendors')}</span></div>)}</div></article></div></section>;
+        return <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('customerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || t('customerArea')}</h2><p className="muted">{t('trackBookings')}</p></div><div className="header-actions"><LanguageSelector user={user}/><button className="button secondary" onClick={onLogout}>{t('logout')}</button></div></div><div className="metric-grid"><article className="metric-card"><p>{t('totalBookings')}</p><strong>{data.overview?.totalBookings ?? 0}</strong><span>{data.overview?.pendingBookings ?? 0} {t('pendingLabel')}</span></article><article className="metric-card"><p>{t('confirmedLabel')}</p><strong>{data.overview?.confirmedBookings ?? 0}</strong><span>{data.overview?.upcomingEvents ?? 0} {t('upcomingEvents')}</span></article><article className="metric-card"><p>{t('outstandingPayments')}</p><strong>{data.overview?.outstandingPayments ?? 0}</strong><span>{data.overview?.pendingQuotations ?? 0} {t('openQuotations')}</span></article><article className="metric-card"><p>{t('unreadMessages')}</p><strong>{data.overview?.unreadMessages ?? 0}</strong><span>{data.overview?.unreadNotifications ?? 0} {t('notificationsLabel')}</span></article></div><div className="two-column-layout"><article className="panel"><div className="panel-header"><h3>{t('recentBookings')}</h3><button className="button secondary small">{t('openBookings')}</button></div><div className="list-stack">{(data.bookings || []).slice(0,4).map((booking) => <div key={booking.id} className="list-card"><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} • {translateText(booking.status, language)}</small></div><span>{formatCustomerMoney(booking.quotedAmount, booking.currency)}</span></div>)}</div></article><article className="panel"><div className="panel-header"><h3>{t('savedVendors')}</h3></div><div className="list-stack">{(data.favorites || []).slice(0,3).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.city}</small></div><span className="pill active">{t('savedVendors')}</span></div>)}</div></article></div></section>;
       case 'vendors':
         return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BROWSE VENDORS</p><h2>Discover trusted event vendors</h2><p className="muted">Search by city, category, rating, and price to compare and save the right match.</p></div></div><div className="panel" style={{ padding: '20px' }}><div className="toolbar"><input className="field-input" placeholder="Search vendor name" /><select className="filter-select"><option>All categories</option>{(data.categories || []).map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select><select className="filter-select"><option>Any rating</option><option>4.5+</option><option>4.8+</option></select></div><div className="table-wrap"><table><thead><tr><th>Vendor</th><th>Category</th><th>Location</th><th>Verified</th><th>Rating</th><th>From</th></tr></thead><tbody>{(data.vendors || []).map((vendor) => <tr key={vendor.id}><td>{vendor.name}</td><td>{vendor.category}</td><td>{vendor.city}</td><td><span className="pill active">{vendor.verified ? 'Verified' : 'Unverified'}</span></td><td>{vendor.rating?.toFixed ? vendor.rating.toFixed(1) : '—'}★</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(vendor.priceFrom || 0)}</td></tr>)}</tbody></table></div></div></section>;
       case 'services':
@@ -4062,8 +4523,20 @@ function Overview({ onNavigate }) {
 
   const number = (value) => Number(value || 0).toLocaleString();
   const money = (value,currency) => {
-    try { return new Intl.NumberFormat('en-ET',{style:'currency',currency,maximumFractionDigits:2}).format(Number(value || 0)); }
-    catch { return `${number(value)} ${currency}`; }
+    const code = typeof currency === 'string' && /^[A-Za-z]{3}$/.test(currency.trim())
+      ? currency.trim().toUpperCase()
+      : 'ETB';
+    const amount = Number(value);
+    const safeAmount = Number.isFinite(amount) ? amount : 0;
+    try {
+      return new Intl.NumberFormat('en-ET', {
+        style: 'currency',
+        currency: code,
+        maximumFractionDigits: 2,
+      }).format(safeAmount);
+    } catch {
+      return `${safeAmount.toLocaleString()} ${code}`;
+    }
   };
   const dateTime = (value) => {
     const date = new Date(value);
@@ -4459,13 +4932,13 @@ function GenericDataPage({slug,user,onUserChange}) {
     actions: [],
   };
   const [data,setData]=useState([]); const [pagination,setPagination]=useState({page:1,pageSize:20,total:0});
-  const [loading,setLoading]=useState(true); const [error,setError]=useState(''); const [notice,setNotice]=useState(''); const [query,setQuery]=useState(''); const [search,setSearch]=useState(''); const [status,setStatus]=useState(''); const [inquiryType,setInquiryType]=useState(''); const [modal,setModal]=useState(null); const [busy,setBusy]=useState(false); const [form,setForm]=useState({}); const [roleRows,setRoleRows]=useState([]);
+  const [loading,setLoading]=useState(true); const [error,setError]=useState(''); const [notice,setNotice]=useState(''); const [query,setQuery]=useState(''); const [search,setSearch]=useState(''); const [status,setStatus]=useState(''); const [inquiryType,setInquiryType]=useState(''); const [archived,setArchived]=useState('active'); const [modal,setModal]=useState(null); const [busy,setBusy]=useState(false); const [form,setForm]=useState({}); const [roleRows,setRoleRows]=useState([]);
   const [profilePhotoFile,setProfilePhotoFile]=useState(null); const [profilePhotoPreview,setProfilePhotoPreview]=useState(''); const [profilePhotoError,setProfilePhotoError]=useState(''); const [profilePhotoRemoved,setProfilePhotoRemoved]=useState(false); const profilePhotoInputRef=useRef(null);
   useEffect(()=>()=>{if(profilePhotoPreview)URL.revokeObjectURL(profilePhotoPreview);},[profilePhotoPreview]);
   const statuses={users:['active','suspended','pending'],roles:['active','inactive'],categories:['active','inactive'],vendors:['pending','verified','rejected'],events:['draft','active','booked','in_progress','completed','cancelled'],bookings:['requested','quoted','accepted','rejected','cancelled','completed','under_review'],'package-requests':['new','reviewed','replied','closed'],reviews:['published','hidden','flagged'],complaints:['open','investigating','resolved','dismissed'],messages:['new','reviewed','in_progress','replied','resolved','closed'],notifications:['queued','sent','failed','read']}[slug]||[];
   const statusLabel=(value)=>slug==='messages'?({new:'New',reviewed:'Read',in_progress:'In Progress',replied:'Replied',resolved:'Resolved',closed:'Closed'}[value]||value):translateText(value,language);
-  const load=useCallback(async(page=1)=>{setLoading(true);setError('');try{const params=new URLSearchParams({page:String(page),pageSize:String(pagination.pageSize)});if(search)params.set('q',search);if(status)params.set('status',slug==='roles'||slug==='categories'?(status==='active'?'1':'0'):status);if(inquiryType)params.set('inquiry_type',inquiryType);const result=await api(`/admin/${config.endpoint}?${params}`);setData(result.data);setPagination(result.pagination);}catch(issue){setError(issue.message);}finally{setLoading(false);}},[config.endpoint,inquiryType,pagination.pageSize,search,status,slug]);
-  useEffect(()=>{if(slug==='profile'){setLoading(false);return;}load(1);},[load,slug]);
+  const load=useCallback(async(page=1)=>{setLoading(true);setError('');try{const params=new URLSearchParams({page:String(page),pageSize:String(pagination.pageSize)});if(search)params.set('q',search);if(status)params.set('status',slug==='roles'||slug==='categories'?(status==='active'?'1':'0'):status);if(inquiryType)params.set('inquiry_type',inquiryType);if(slug==='messages')params.set('archived',archived);const result=await api(`/admin/${config.endpoint}?${params}`);setData(result.data);setPagination(result.pagination);}catch(issue){setError(issue.message);}finally{setLoading(false);}},[archived,config.endpoint,inquiryType,pagination.pageSize,search,status,slug]);
+  useEffect(()=>{if(slug==='profile'){setLoading(false);return;}if(slug==='messages'&&DEMO_AUTH_ENABLED){setLoading(false);setError('Contact message management requires a connected administrator API and is unavailable in demo mode.');return;}load(1);},[load,slug]);
   useEffect(()=>{if(slug==='users')api('/admin/roles?pageSize=100').then((r)=>setRoleRows(r.data.filter((x)=>x.is_active&&!x.is_admin))).catch(()=>{});},[slug]);
   function startCreate(){setForm({});setModal({kind:'create'});}
   function startEdit(row){setForm(Object.fromEntries(config.fields.map(([key])=>[key,row[key] ?? ''])));setModal({kind:'edit',row});}
@@ -4532,7 +5005,13 @@ function GenericDataPage({slug,user,onUserChange}) {
       setProfilePhotoFile(null);setProfilePhotoPreview('');setProfilePhotoRemoved(false);
     }
     if(modal.kind==='setting'){result=await api(`/admin/settings/${encodeURIComponent(form.setting_key)}`,{method:'PUT',body:JSON.stringify({value:form.setting_value})});}
-    setNotice(modal.kind==='profile'?(DEMO_AUTH_ENABLED?t('demoProfileUpdated'):t('profileUpdatedSuccessfully')):'Changes saved.');setModal(null);if(slug!=='profile')await load(pagination.page);
+    const replyEmailStatus = slug === 'messages' && modal.kind === 'status' ? result?.data?.email : null;
+    setNotice(modal.kind==='profile'?(DEMO_AUTH_ENABLED?t('demoProfileUpdated'):t('profileUpdatedSuccessfully'))
+      : replyEmailStatus === 'sent' ? 'Contact message updated and reply email sent.'
+        : replyEmailStatus === 'not_configured' ? 'Contact message updated. The reply was saved, but email is not configured.'
+          : replyEmailStatus === 'failed' ? 'Contact message updated. The reply was saved, but email delivery failed.'
+            : 'Changes saved.');
+    setModal(null);if(slug!=='profile')await load(pagination.page);
   }catch(issue){setError(issue.message);if(modal.kind==='profile'&&(profilePhotoFile||profilePhotoRemoved))setProfilePhotoError(issue.message);}finally{setBusy(false);}}
   async function deleteContactMessage(row){
     if(!window.confirm(translateText(`Permanently delete contact message #${row.id}? This action is recorded in the audit log.`)))return;
@@ -4544,9 +5023,30 @@ function GenericDataPage({slug,user,onUserChange}) {
       await load(Math.min(pagination.page,lastPage));
     }catch(issue){setError(issue.message);}finally{setBusy(false);}
   }
+  async function toggleContactArchive(row){
+    setBusy(true);setError('');setNotice('');
+    try{
+      const archive = !row.archived_at;
+      await api(`/admin/contact/${row.id}/archive`,{method:'PATCH',body:JSON.stringify({archived:archive})});
+      setNotice(archive ? 'Contact message archived.' : 'Contact message restored.');
+      const lastPage=Math.max(1,Math.ceil((pagination.total-1)/pagination.pageSize));
+      await load(Math.min(pagination.page,lastPage));
+    }catch(issue){setError(issue.message);}finally{setBusy(false);}
+  }
+  async function toggleContactRead(row){
+    setBusy(true);setError('');setNotice('');
+    try{
+      const read=row.read_status==='unread';
+      await api(`/admin/contact/${row.id}/read`,{method:'PATCH',body:JSON.stringify({read})});
+      setNotice(read?'Contact message marked as read.':'Contact message marked as unread.');
+      await load(pagination.page);
+    }catch(issue){setError(issue.message);}finally{setBusy(false);}
+  }
   const actions=(row)=>{const names=config.actions||[];return names.map((action)=>{
     if(action==='delete')return <button key={action} className="text-action subtle-danger" type="button" disabled={busy} onClick={()=>deleteContactMessage(row)}>Delete</button>;
-    const label=action==='status'&&slug==='messages'?(row.status==='new'?'Mark read':'Update status'):{edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',role:'Change role',status:row.status==='suspended'?'Activate':'Suspend','package-status':'Update status',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint',view:'View message'}[action];
+    if(action==='archive')return <button key={action} className="text-action" type="button" disabled={busy} onClick={()=>toggleContactArchive(row)}>{row.archived_at?'Restore':'Archive'}</button>;
+    if(action==='read')return <button key={action} className="text-action" type="button" disabled={busy} onClick={()=>toggleContactRead(row)}>{row.read_status==='unread'?'Mark read':'Mark unread'}</button>;
+    const label={edit:'Edit',deactivate:'Deactivate',verify:'Verify',reject:'Reject',moderate:'Moderate',role:'Change role',status:slug==='messages'?'Update status':row.status==='suspended'?'Activate':'Suspend','package-status':'Update status',permissions:'Permissions',review:'Moderate review',complaint:'Update complaint',view:'View message'}[action];
     const danger=['deactivate','reject'].includes(action)||(action==='status'&&slug!=='messages');
     return <button key={action} className={`text-action ${danger?'subtle-danger':''}`} type="button" onClick={()=>startAction(action==='package-status'?'package-status':action,row)}>{label}</button>;
   });};
@@ -4597,7 +5097,7 @@ function GenericDataPage({slug,user,onUserChange}) {
       if (slug === 'messages') {
         return (
           <>
-            <p className="muted">Update the message status and add an internal resolution note.</p>
+            <p className="muted">Update the message status or reply to the customer. Email delivery is reported after saving.</p>
             <label className="field">
               <span>Message status</span>
               <select value={form.status || modal.row.status || 'new'} onChange={(event) => changeField('status', event.target.value)}>
@@ -4605,7 +5105,7 @@ function GenericDataPage({slug,user,onUserChange}) {
               </select>
             </label>
             <label className="field">
-              <span>Internal response</span>
+              <span>Reply to customer (emailed when SMTP is configured)</span>
               <textarea rows="4" maxLength="2000" value={form.admin_reply || ''} onChange={(event) => changeField('admin_reply', event.target.value)} />
             </label>
           </>
@@ -4814,6 +5314,13 @@ function GenericDataPage({slug,user,onUserChange}) {
                 {config.inquiryTypes.map((option) => <option key={option.value} value={option.value}>{translateText(option.label, language)}</option>)}
               </select>
             )}
+            {slug === 'messages' && (
+              <select className="filter-select" aria-label="Filter archived contact messages" value={archived} onChange={(event) => setArchived(event.target.value)}>
+                <option value="active">Active messages</option>
+                <option value="archived">Archived messages</option>
+                <option value="all">All messages</option>
+              </select>
+            )}
             <span className="result-count">{pagination.total} records</span>
           </div>
           <div className="table-wrap">
@@ -4858,7 +5365,7 @@ function GenericDataPage({slug,user,onUserChange}) {
           </div>
         </>
       )}
-      {modal?.kind === 'view' ? <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && closeModal()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="contact-message-title"><div className="modal-head"><h2 id="contact-message-title">Contact message #{modal.row.id}</h2><button className="icon-button" type="button" onClick={closeModal} aria-label="Close"><X size={18}/></button></div><div className="modal-body"><p><strong>From:</strong> {modal.row.full_name} ({modal.row.email})</p>{modal.row.phone && <p><strong>Phone:</strong> {modal.row.phone}</p>}<p><strong>Subject:</strong> {modal.row.subject}</p><p><strong>Inquiry:</strong> {modal.row.inquiry_type}</p><p><strong>Status:</strong> {modal.row.status}</p><p><strong>Received:</strong> {modal.row.created_at}</p><div className="panel" style={{ padding: '14px', whiteSpace: 'pre-wrap' }}>{modal.row.message}</div>{modal.row.admin_reply && <div><strong>Admin reply</strong><p>{modal.row.admin_reply}</p></div>}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={closeModal}>Close</button><button className="button" type="button" onClick={() => startAction('status', modal.row)}>Update status</button></div></section></div> : modal && <Modal title={modalTitle()} onClose={closeModal} onSubmit={submit} busy={busy} submitLabel={modal.kind === 'deactivate' ? 'Deactivate' : t('save')} cancelLabel={modal.kind === 'profile' ? t('cancel') : 'Cancel'} closeLabel={modal.kind === 'profile' ? t('close') : 'Close'} danger={['deactivate', 'reject', 'status'].includes(modal.kind)}>{renderModalFields()}</Modal>}
+      {modal?.kind === 'view' ? <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && closeModal()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="contact-message-title"><div className="modal-head"><h2 id="contact-message-title">Contact message {modal.row.reference_id}</h2><button className="icon-button" type="button" onClick={closeModal} aria-label="Close"><X size={18}/></button></div><div className="modal-body"><p><strong>From:</strong> {modal.row.full_name} ({modal.row.email})</p>{modal.row.phone && <p><strong>Phone:</strong> {modal.row.phone}</p>}<p><strong>Subject:</strong> {modal.row.subject}</p><p><strong>Inquiry:</strong> {modal.row.inquiry_type}</p><p><strong>Status:</strong> {modal.row.status}</p><p><strong>Received:</strong> {modal.row.created_at}</p><div className="panel" style={{ padding: '14px', whiteSpace: 'pre-wrap' }}>{modal.row.message}</div>{modal.row.admin_reply && <div><strong>Admin reply</strong><p>{modal.row.admin_reply}</p></div>}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={closeModal}>Close</button><button className="button" type="button" onClick={() => startAction('status', modal.row)}>Update status</button></div></section></div> : modal && <Modal title={modalTitle()} onClose={closeModal} onSubmit={submit} busy={busy} submitLabel={modal.kind === 'deactivate' ? 'Deactivate' : t('save')} cancelLabel={modal.kind === 'profile' ? t('cancel') : 'Cancel'} closeLabel={modal.kind === 'profile' ? t('close') : 'Close'} danger={['deactivate', 'reject', 'status'].includes(modal.kind)}>{renderModalFields()}</Modal>}
     </section>
   );
 }
@@ -5458,7 +5965,7 @@ function SettingsPage() {
 export default function App(){
   const language = useLanguage();
   const authSessionState = useAuthSessionSnapshot();
-  const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [sidebarCollapsed,setSidebarCollapsed]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => window.location.pathname || '/');const [platformAvailability,setPlatformAvailability]=useState(null);
+  const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [sidebarCollapsed,setSidebarCollapsed]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => `${window.location.pathname || '/'}${window.location.search || ''}`);const [platformAvailability,setPlatformAvailability]=useState(null);
   const [passwordResetEmail, setPasswordResetEmail] = useState('');
 
   const normalizePath = useCallback((path) => {
@@ -5724,8 +6231,7 @@ export default function App(){
     '/vendors': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>,
     '/services': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>,
     '/categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>,
-    '/about': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>,
-    '/contact': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>,
+    '/about': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>,
     '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword />,
     '/register': <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} />,
     '/forgot-password': <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />,
@@ -5758,7 +6264,7 @@ export default function App(){
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorApplicationPage user={user} onNavigate={navigatePublic}/></PublicPageLayout>;
   }
   if (eventRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventDetailsPage eventId={eventRoute[1]} user={user} api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
-  if (routePath === '/events') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>;
+  if (routePath === '/events' || routePath === '/events/upcoming') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>;
   if (routePath === '/vendors' || routePath.startsWith('/vendors?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if (vendorRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorDetailPage vendorId={vendorRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/services') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
@@ -5768,18 +6274,19 @@ export default function App(){
     const slug = routePath.replace(/^\/categories\//, '');
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoryDetailPage slug={slug} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
-  if (routePath === '/about') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/about') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if (routePath === '/contact') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>;
   if (routePath === '/') return publicRoutes['/'];
   if (routePath === '/calendar') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventCalendarPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/venues') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><PopularVenuesPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/compare') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CompareVendorsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/recently-viewed') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><RecentlyViewedPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/my-favorites' || routePath === '/recommendations') {
-    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
-    if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('navigationCustomerOnly', language)}</div></main></PublicPageLayout>;
+    if (routePath === '/my-favorites' && !user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
+    if (routePath === '/my-favorites' && user?.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('navigationCustomerOnly', language)}</div></main></PublicPageLayout>;
     const page = routePath === '/my-favorites'
       ? <MyFavoritesPage api={api} onNavigate={navigatePublic} />
-      : <RecommendationsPage api={api} onNavigate={navigatePublic} />;
+      : <RecommendationsPage api={api} onNavigate={navigatePublic} user={user} />;
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}>{page}</PublicPageLayout>;
   }
   if (routePath === '/my-bookings') {
@@ -5799,7 +6306,7 @@ export default function App(){
     if (currentPath === '/privacy') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>;
     if (currentPath === '/terms') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><TermsPage /></PublicPageLayout>;
     if (currentPath === '/help') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>;
-    if (currentPath.split('?')[0] === '/events') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={null} currentPath={currentPath} /></PublicPageLayout>;
+    if (['/events', '/events/upcoming'].includes(currentPath.split('?')[0])) return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={null} currentPath={currentPath} /></PublicPageLayout>;
     if (publicRoutes[routePath]) return publicRoutes[routePath];
     return <NotFoundPage onNavigate={navigatePublic}/>;
   }

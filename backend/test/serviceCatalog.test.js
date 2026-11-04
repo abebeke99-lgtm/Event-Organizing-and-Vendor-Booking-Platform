@@ -7,6 +7,7 @@ const services = [
   {
     id: 1,
     vendorId: 1,
+    categoryId: 11,
     title: 'Luxury Wedding Venue',
     vendorName: 'Aster Floral Studio',
     category: 'Wedding Venues',
@@ -18,10 +19,12 @@ const services = [
     status: 'active',
     published: true,
     visibility: 'public',
+    createdAt: '2026-03-10T00:00:00.000Z',
   },
   {
     id: 2,
     vendorId: 2,
+    categoryId: 12,
     title: 'Premium Catering Package',
     vendorName: 'Golden Horizon Catering',
     category: 'Catering',
@@ -33,6 +36,7 @@ const services = [
     status: 'active',
     published: true,
     visibility: 'public',
+    createdAt: '2026-02-10T00:00:00.000Z',
   },
   {
     id: 3,
@@ -62,6 +66,16 @@ const services = [
     published: false,
     visibility: 'public',
   },
+  {
+    id: 5,
+    vendorId: 1,
+    title: 'Archived planning',
+    vendorName: 'Aster Floral Studio',
+    category: 'Wedding Planning',
+    city: 'Addis Ababa',
+    status: 'archived',
+    published: true,
+  },
 ];
 
 test('public services exclude draft and unpublished records', () => {
@@ -79,9 +93,14 @@ test('search, category, location and sorting filters apply to public services', 
     page: 1,
     limit: 10,
   });
-
   assert.equal(result.total, 1);
   assert.equal(result.services[0].title, 'Premium Catering Package');
+});
+
+test('category ID filtering selects only services linked to the requested database category', () => {
+  const result = listPublicServices(services, { categoryId: 11, page: 1, limit: 10 });
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.services.map((service) => service.id), [1]);
 });
 
 test('service lookup rejects hidden or invalid ids', () => {
@@ -108,4 +127,23 @@ test('price, rating, and availability filters combine', () => {
 
   assert.equal(result.total, 1);
   assert.equal(result.services[0].id, 1);
+});
+
+test('vendor-name filter and newest sorting use real service fields', () => {
+  const result = listPublicServices([
+    { ...services[0], createdAt: '2026-01-01T00:00:00.000Z' },
+    { ...services[0], id: 6, title: 'Recent catering', createdAt: '2026-05-01T00:00:00.000Z' },
+    { ...services[1], id: 7, createdAt: '2026-04-01T00:00:00.000Z' },
+  ], { vendor: 'aster', sort: 'newest', page: 1, limit: 10 });
+  assert.deepEqual(result.services.map((service) => service.id), [6, 1]);
+});
+
+test('popular services rank by actual bookings, then reviews and ratings', () => {
+  const result = listPublicServices([
+    { ...services[0], id: 11, bookingCount: 2, reviewCount: 20, rating: 4.9 },
+    { ...services[1], id: 12, bookingCount: 15, reviewCount: 1, rating: 4.2 },
+    { ...services[0], id: 13, title: 'No engagement', bookingCount: 0, reviewCount: 0, rating: 0 },
+  ], { sort: 'popular', page: 1, limit: 10 });
+
+  assert.deepEqual(result.services.map((service) => service.id), [12, 11, 13]);
 });

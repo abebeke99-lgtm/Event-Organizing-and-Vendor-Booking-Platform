@@ -10,6 +10,8 @@ const customerId = 42;
 const savedServices = [];
 const quotations = [];
 const writes = [];
+const freeTicketBookings = [];
+let freeTicketSold = 0;
 let activeEventBookings = 0;
 let nextQuotationId = 60;
 const passwordHash = bcrypt.hashSync('CurrentPassword123', 4);
@@ -134,6 +136,66 @@ async function execute(sql, values = []) {
     return [[11, 12].includes(eventId) ? [{ id: eventId, organizer_id: eventId === 11 ? customerId : 99, status: 'draft' }] : [], []];
   }
   if (sql.startsWith('SELECT COUNT(*) AS total FROM bookings')) return [[{ total: activeEventBookings }], []];
+  if (sql.startsWith('SELECT id, status, start_date, capacity, start_date > NOW() AS is_future FROM events WHERE id = ? FOR UPDATE')) {
+    return [Number(values[0]) === 88 ? [{
+      id: 88, status: 'published', start_date: '2031-02-01 10:00:00', capacity: null, is_future: 1,
+    }] : [], []];
+  }
+  if (sql.startsWith('SELECT id, name, price, capacity, sold_quantity')) {
+    return [Number(values[0]) === 880 ? [{
+      id: 880, name: 'Free Admission', price: '0.00', capacity: 2, sold_quantity: freeTicketSold,
+    }] : [], []];
+  }
+  if (sql.startsWith('SELECT COALESCE(SUM(quantity), 0) AS quantity')) return [[{ quantity: 0 }], []];
+  if (sql.startsWith('SELECT id FROM event_ticket_bookings') && sql.includes('customer_id = ? AND event_id = ? AND unit_price = 0')) {
+    return [freeTicketBookings.filter((booking) => booking.customer_id === Number(values[0])
+      && booking.event_id === Number(values[1]) && booking.booking_status === 'confirmed').map(({ id }) => ({ id })), []];
+  }
+  if (sql.startsWith('INSERT INTO event_ticket_bookings')) {
+    const booking = {
+      id: freeTicketBookings.length + 1,
+      booking_reference: values[0],
+      event_id: Number(values[2]),
+      ticket_type_id: Number(values[3]),
+      customer_id: Number(values[4]),
+      quantity: Number(values[5]),
+      unit_price: Number(values[6]),
+      total_amount: Number(values[7]),
+      payment_status: values[8],
+      booking_status: values[9],
+      created_at: '2030-01-01 00:00:00',
+    };
+    freeTicketBookings.push(booking);
+    return [{ insertId: booking.id, affectedRows: 1 }, []];
+  }
+  if (sql.includes('SET sold_quantity = sold_quantity + ?')) {
+    freeTicketSold += Number(values[0]);
+    return [{ affectedRows: 1 }, []];
+  }
+  if (sql.startsWith('SELECT b.id, b.booking_reference, b.quantity, b.unit_price, b.total_amount')) {
+    const booking = freeTicketBookings.find((item) => item.id === Number(values[0])
+      && item.customer_id === Number(values[1]));
+    return [booking ? [{
+      ...booking, event_title: 'Free Event', start_date: '2031-02-01 10:00:00',
+      city: 'Addis Ababa', venue: 'City Hall', ticket_name: 'Free Admission',
+    }] : [], []];
+  }
+  if (sql.startsWith('SELECT b.id, b.event_id, b.ticket_type_id, b.quantity, b.unit_price,')) {
+    const booking = freeTicketBookings.find((item) => item.id === Number(values[0])
+      && item.customer_id === Number(values[1]));
+    return [booking ? [{ ...booking, start_date: '2031-02-01 10:00:00' }] : [], []];
+  }
+  if (sql.startsWith("UPDATE event_ticket_bookings SET booking_status = 'cancelled'")) {
+    const booking = freeTicketBookings.find((item) => item.id === Number(values[0])
+      && item.customer_id === Number(values[1]) && item.booking_status === values[2]);
+    if (!booking) return [{ affectedRows: 0 }, []];
+    booking.booking_status = 'cancelled';
+    return [{ affectedRows: 1 }, []];
+  }
+  if (sql.startsWith('UPDATE event_ticket_types SET sold_quantity = GREATEST(0, sold_quantity - ?')) {
+    freeTicketSold = Math.max(0, freeTicketSold - Number(values[0]));
+    return [{ affectedRows: 1 }, []];
+  }
   if (sql.startsWith('UPDATE events SET')) {
     writes.push({ kind: 'event_update', sql, values });
     return [{ affectedRows: 1 }, []];
@@ -189,6 +251,36 @@ test('service wishlist is owner-scoped, persistent, and duplicate-safe', async (
   const saved = await request('/api/customer/saved-services');
   assert.equal((await saved.json()).data[0].id, 5);
   assert.equal((await request('/api/customer/saved-services/5', { method: 'DELETE' })).status, 204);
+});
+
+test('free event tickets are confirmed without payment, protected from duplicates, capacity-checked, and cancellable', async () => {
+  const body = { eventId: 88, ticketTypeId: 880, quantity: 1 };
+  assert.equal((await request('/api/platform/ticket-bookings', {
+    method: 'POST', body, authenticated: false,
+  })).status, 401);
+
+  const overCapacity = await request('/api/platform/ticket-bookings', {
+    method: 'POST', body: { ...body, quantity: 3 },
+  });
+  assert.equal(overCapacity.status, 409, JSON.stringify(await overCapacity.json()));
+
+  const registered = await request('/api/platform/ticket-bookings', { method: 'POST', body });
+  const registeredPayload = await registered.json();
+  assert.equal(registered.status, 201, JSON.stringify(registeredPayload));
+  const registration = registeredPayload.data;
+  assert.equal(registration.totalAmount, 0);
+  assert.equal(registration.bookingStatus, 'confirmed');
+  assert.equal(registration.paymentStatus, 'paid');
+  assert.equal(freeTicketSold, 1);
+
+  const duplicate = await request('/api/platform/ticket-bookings', { method: 'POST', body });
+  assert.equal(duplicate.status, 409);
+
+  const cancelled = await request(`/api/platform/ticket-bookings/${registration.id}/cancel`, { method: 'PATCH' });
+  assert.equal(cancelled.status, 200);
+  assert.equal((await cancelled.json()).data.bookingStatus, 'cancelled');
+  assert.equal(freeTicketSold, 0);
+  assert.equal((await request(`/api/platform/ticket-bookings/${registration.id}/cancel`, { method: 'PATCH' })).status, 409);
 });
 
 test('customer quotation decisions are restricted to owned quotations and notify vendors', async () => {

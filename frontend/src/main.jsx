@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import { translateText } from './language.js';
 import './styles.css';
+import './homepage.css';
 
 const nativeConfirm = window.confirm.bind(window);
 window.confirm = (message) => nativeConfirm(translateText(String(message)));

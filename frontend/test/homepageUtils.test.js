@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageSectionState, getHomepageStatistics } from '../src/homepageUtils.js';
+import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageSectionState, getHomepageStatistics, getHomepageTestimonials } from '../src/homepageUtils.js';
 
 test('homepage statistics include only valid values supplied by the API', () => {
   assert.deepEqual(getHomepageStatistics({
@@ -59,4 +59,23 @@ test('homepage sections distinguish loading, empty, error, and populated states'
   assert.equal(getHomepageSectionState({ loading: false, error: true, items: [{ id: 1 }] }), 'error');
   assert.equal(getHomepageSectionState({ loading: false, error: false, items: [] }), 'empty');
   assert.equal(getHomepageSectionState({ loading: false, error: false, items: [{ id: 1 }] }), 'populated');
+});
+
+test('homepage testimonials include only real public reviews with valid ratings and comments', () => {
+  assert.deepEqual(getHomepageTestimonials([{
+    vendor: { id: 9, business_name: 'Bright Events' },
+    reviews: [
+      { id: 2, rating: 5, comment: '  Great service. ', customerName: 'Customer' },
+      { id: 3, rating: 0, comment: 'No rating' },
+      { id: 4, rating: 4, comment: '  ' },
+      { id: 5, rating: 6, comment: 'Invalid rating' },
+    ],
+  }]), [{
+    id: 2,
+    quote: 'Great service.',
+    rating: 5,
+    customerName: 'Customer',
+    vendorName: 'Bright Events',
+  }]);
+  assert.deepEqual(getHomepageTestimonials(null), []);
 });

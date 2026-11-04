@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { readFile } from 'node:fs/promises';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { getFooterSocialLinks } from '../src/socialLinks.js';
+import { translate } from '../src/language.js';
+import { getFooterSocialLinks, getTopBarSocialLinks } from '../src/socialLinks.js';
 import SocialMediaLink from '../src/SocialMediaLink.js';
 import AppFooter from '../src/AppFooter.js';
 import ContactTopBar from '../src/ContactTopBar.js';
@@ -134,31 +135,24 @@ test('social media links open safely in a new tab and expose an accessible label
   assert.match(markup, /<svg[^>]*aria-hidden="true"/);
 });
 
-test('contact top bar renders email, optional phone and address, and configured social icons', () => {
+test('contact top bar always renders the configured email and only includes an optional phone', () => {
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, {
     environment: {
-      VITE_CONTACT_PHONE: '0986481821',
-      VITE_CONTACT_ADDRESS: 'Addis Ababa',
-      VITE_TELEGRAM_URL: 'https://t.me/eventhub',
-      VITE_YOUTUBE_URL: '',
-      VITE_FACEBOOK_URL: 'https://facebook.com/eventhub',
-      VITE_LINKEDIN_URL: '',
+      VITE_CONTACT_PHONE: '+251986481821',
     },
   }));
 
   assert.match(markup, /href="mailto:abebeke99@gmail\.com"/);
-  assert.match(markup, /href="tel:0986481821"/);
-  assert.match(markup, /Addis Ababa/);
-  assert.match(markup, /href="https:\/\/t\.me\/eventhub"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
-  assert.match(markup, /href="https:\/\/facebook\.com\/eventhub"[^>]*target="_blank"[^>]*rel="noopener noreferrer"/);
-  assert.doesNotMatch(markup, /youtube|linkedin/i);
+  assert.match(markup, /aria-label="Email: abebeke99@gmail\.com"/);
+  assert.match(markup, /href="tel:\+251986481821"/);
+  assert.match(markup, /aria-label="Phone: \+251986481821"/);
+  assert.doesNotMatch(markup, /VITE_CONTACT_ADDRESS|Addis Ababa/);
 });
 
-test('contact top bar hides empty phone and address values and renders no social area without configured URLs', () => {
+test('contact top bar omits an empty optional phone and has no social list when URLs are empty', () => {
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, {
     environment: {
       VITE_CONTACT_PHONE: '',
-      VITE_CONTACT_ADDRESS: '',
       VITE_TELEGRAM_URL: '',
       VITE_YOUTUBE_URL: '',
       VITE_FACEBOOK_URL: '',
@@ -167,7 +161,107 @@ test('contact top bar hides empty phone and address values and renders no social
   }));
 
   assert.match(markup, /href="mailto:abebeke99@gmail\.com"/);
-  assert.doesNotMatch(markup, /href="tel:/);
-  assert.doesNotMatch(markup, /contact-top-bar-address/);
-  assert.doesNotMatch(markup, /contact-top-bar-social/);
+  assert.doesNotMatch(markup, /href="tel:|contact-top-bar-social|https:\/\/|unconfigured/);
+});
+
+test('top bar renders only valid configured HTTPS profile URLs with safe, translated links', () => {
+  const environment = {
+    VITE_TELEGRAM_URL: 'https://t.me/eventhub',
+    VITE_YOUTUBE_URL: 'http://youtube.com/@eventhub',
+    VITE_FACEBOOK_URL: 'https://facebook.com/eventhub',
+    VITE_LINKEDIN_URL: 'https://example.com/company/eventhub',
+  };
+  const markup = renderToStaticMarkup(React.createElement(ContactTopBar, { environment }));
+
+  assert.deepEqual(getTopBarSocialLinks(environment), [
+    { id: 'telegram', labelKey: 'telegram', url: 'https://t.me/eventhub' },
+    { id: 'facebook', labelKey: 'facebook', url: 'https://facebook.com/eventhub' },
+  ]);
+  assert.deepEqual(
+    Array.from(markup.matchAll(/href="(https:\/\/[^"]+)"/g), ([, href]) => href),
+    ['https://t.me/eventhub', 'https://facebook.com/eventhub'],
+  );
+  assert.equal((markup.match(/target="_blank"/g) || []).length, 2);
+  assert.equal((markup.match(/rel="noopener noreferrer"/g) || []).length, 2);
+  assert.match(markup, /aria-label="EventHub on Telegram"/);
+  assert.match(markup, /title="EventHub on Telegram"/);
+  assert.match(markup, /aria-label="EventHub on Facebook"/);
+  assert.match(markup, /title="EventHub on Facebook"/);
+  assert.doesNotMatch(markup, /youtube|example\.com/);
+});
+
+test('top bar supports the supplied internationalized profile URLs', () => {
+  const environment = {
+    VITE_TELEGRAM_URL: 'https://t.me/የአንተ_ቻናል',
+    VITE_YOUTUBE_URL: 'https://youtube.com/@የአንተ_ቻናል',
+    VITE_FACEBOOK_URL: 'https://facebook.com/የአንተ_ገጽ',
+    VITE_LINKEDIN_URL: 'https://linkedin.com/company/የአንተ_ገጽ',
+    VITE_CONTACT_PHONE: '+251986481821',
+  };
+  const markup = renderToStaticMarkup(React.createElement(ContactTopBar, { environment }));
+
+  assert.equal(getTopBarSocialLinks(environment).length, 4);
+  assert.match(markup, /href="tel:\+251986481821"/);
+  assert.equal((markup.match(/target="_blank"/g) || []).length, 4);
+});
+
+test('top bar contact and social labels are translated in Amharic', () => {
+  assert.equal(translate('topBarContactInfo', 'am'), 'የመገኛ መረጃ');
+  assert.equal(translate('topBarEmail', 'am'), 'ኢሜይል');
+  assert.equal(translate('eventHubOn', 'am'), 'EventHub በ');
+  assert.equal(translate('telegram', 'am'), 'ቴሌግራም');
+  assert.equal(translate('youtube', 'am'), 'ዩቲዩብ');
+  assert.equal(translate('facebook', 'am'), 'ፌስቡክ');
+  assert.equal(translate('linkedin', 'am'), 'ሊንክድኢን');
+});
+
+test('top bar social icon order follows Telegram, YouTube, Facebook, LinkedIn', () => {
+  const links = getTopBarSocialLinks({
+    VITE_TELEGRAM_URL: 'https://t.me/eventhub',
+    VITE_YOUTUBE_URL: 'https://youtube.com/@eventhub',
+    VITE_FACEBOOK_URL: 'https://facebook.com/eventhub',
+    VITE_LINKEDIN_URL: 'https://linkedin.com/company/eventhub',
+  });
+
+  assert.deepEqual(links.map(({ id }) => id), ['telegram', 'youtube', 'facebook', 'linkedin']);
+});
+
+test('top bar ignores invalid profile URLs without changing footer output', () => {
+  assert.deepEqual(getTopBarSocialLinks({
+    VITE_TELEGRAM_URL: 'https://user:password@t.me/eventhub',
+    VITE_YOUTUBE_URL: 'not a URL',
+    VITE_FACEBOOK_URL: 'https://facebook.com/',
+    VITE_LINKEDIN_URL: 'javascript:alert(1)',
+  }), []);
+
+  const footerWithProfiles = renderToStaticMarkup(React.createElement(AppFooter, {
+    socialEnvironment: {
+      VITE_TELEGRAM_URL: 'https://t.me/eventhub',
+      VITE_YOUTUBE_URL: 'https://youtube.com/@eventhub',
+      VITE_FACEBOOK_URL: 'https://facebook.com/eventhub',
+      VITE_LINKEDIN_URL: 'https://linkedin.com/company/eventhub',
+    },
+  }));
+  const footerWithoutProfiles = renderToStaticMarkup(React.createElement(AppFooter, {
+    socialEnvironment: {},
+  }));
+
+  assert.equal(footerWithProfiles, footerWithoutProfiles);
+});
+
+test('example and development env files keep contact links empty until configured', async () => {
+  const keys = [
+    'VITE_TELEGRAM_URL',
+    'VITE_YOUTUBE_URL',
+    'VITE_FACEBOOK_URL',
+    'VITE_LINKEDIN_URL',
+    'VITE_CONTACT_PHONE',
+  ];
+
+  for (const filename of ['../.env.example', '../.env.development']) {
+    const contents = await readFile(new URL(filename, import.meta.url), 'utf8');
+    for (const key of keys) {
+      assert.match(contents, new RegExp(`^${key}=$`, 'm'), `${filename} should leave ${key} empty`);
+    }
+  }
 });

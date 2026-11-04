@@ -1,6 +1,9 @@
 import mysql from 'mysql2/promise';
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'node:url';
 import { createDatabaseConfig } from './lib/databaseConfig.js';
+
+dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
 export {
   createDatabaseConfig,
@@ -14,13 +17,16 @@ export function formatDatabaseError(error, password = process.env.DB_PASSWORD) {
     Number.isInteger(error?.errno) ? `errno=${error.errno}` : null,
     typeof error?.sqlState === 'string' ? `sqlState=${error.sqlState}` : null,
   ].filter(Boolean);
-  let message = typeof error?.message === 'string' ? error.message : '';
-  message = message
-    .replace(/((?:password|passwd|pwd)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1[REDACTED]')
-    .replace(/\b([a-z][a-z\d+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@');
-  if (password) message = message.replaceAll(password, '[REDACTED]');
-  message = message.replace(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g, '[REDACTED CERTIFICATE]');
-  if (message) details.push(message);
+  const messages = [...new Set([error?.message, error?.sqlMessage]
+    .filter((message) => typeof message === 'string' && message))];
+  for (let message of messages) {
+    message = message
+      .replace(/((?:password|passwd|pwd)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1[REDACTED]')
+      .replace(/\b([a-z][a-z\d+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@');
+    if (password) message = message.replaceAll(password, '[REDACTED]');
+    message = message.replace(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g, '[REDACTED CERTIFICATE]');
+    details.push(message);
+  }
   return details.join(': ') || 'Unknown database error';
 }
 

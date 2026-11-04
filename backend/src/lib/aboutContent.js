@@ -5,10 +5,10 @@ export function normalizeText(value, fallback = '') {
 
 export function normalizeAboutRecord(record = {}) {
   const heroHeading = normalizeText(record.hero_heading, 'About EventHub');
-  const heroSubtitle = normalizeText(record.hero_subtitle, 'Your trusted platform for planning and organizing memorable events.');
+  const heroSubtitle = normalizeText(record.hero_subtitle, 'Discover events and connect with event service providers in one place.');
   const introduction = normalizeText(record.introduction, 'EventHub helps customers discover ready-to-book event services and connect with the right vendors for their plans.');
   const mission = normalizeText(record.mission, 'Simplify event planning by helping customers discover relevant vendors and service categories with confidence.');
-  const vision = normalizeText(record.vision, 'Make service discovery and coordination more accessible, practical, and reliable for every event experience.');
+  const vision = normalizeText(record.vision, 'Make event discovery and service coordination more accessible and practical.');
 
   const cleanArray = (value, fallback = []) => Array.isArray(value) ? value
     .map((entry) => ({
@@ -20,7 +20,7 @@ export function normalizeAboutRecord(record = {}) {
 
   const values = cleanArray(record.values, [
     { title: 'Trust and Transparency', description: 'Clear service information and direct coordination.', icon: 'shield' },
-    { title: 'Quality Service', description: 'Access to vetted and relevant service providers.', icon: 'sparkles' },
+    { title: 'Quality Service', description: 'Access to approved and relevant service providers.', icon: 'sparkles' },
     { title: 'Customer Satisfaction', description: 'A faster, organized journey from discovery to booking.', icon: 'star' },
   ]);
 
@@ -60,7 +60,13 @@ export function getAboutStatistics(catalog = {}) {
   const bookings = Array.isArray(catalog.bookings) ? catalog.bookings : [];
 
   const categoryCount = categories.filter((entry) => entry && entry.isActive !== false && entry.is_active !== false).length;
-  const vendorCount = vendors.filter((vendor) => vendor && vendor.verified === true && vendor.visibility !== 'private' && vendor.visibility !== 'hidden' && vendor.status === 'active' && vendor.isPublished !== false).length;
+  const vendorCount = vendors.filter((vendor) => vendor
+    && vendor.verified === true
+    && vendor.visibility !== 'private'
+    && vendor.visibility !== 'hidden'
+    && vendor.status === 'active'
+    && vendor.isPublished !== false
+    && normalizeText(vendor.business_name || vendor.name)).length;
   const serviceCount = services.filter((service) => service && service.published !== false && service.visibility !== 'private' && service.visibility !== 'hidden' && service.status !== 'draft').length;
   const completedBookingCount = bookings.filter((booking) => booking && String(booking.status || '').toLowerCase() === 'completed').length;
 
@@ -70,6 +76,42 @@ export function getAboutStatistics(catalog = {}) {
     serviceCount,
     completedBookingCount,
   };
+}
+
+export function getAboutPartners(catalog = {}) {
+  const vendors = Array.isArray(catalog.vendors) ? catalog.vendors : [];
+  return vendors
+    .filter((vendor) => vendor
+      && vendor.verified === true
+      && vendor.status === 'active'
+      && vendor.isPublished !== false
+      && vendor.visibility !== 'private'
+      && vendor.visibility !== 'hidden'
+      && normalizeText(vendor.business_name || vendor.name))
+    .map((vendor) => ({
+      id: vendor.id,
+      name: normalizeText(vendor.business_name || vendor.name),
+      category: normalizeText(vendor.category),
+      city: normalizeText(vendor.city),
+      logoUrl: normalizeText(vendor.logoUrl, ''),
+    }));
+}
+
+export function getAboutTestimonials(catalog = {}) {
+  const testimonials = Array.isArray(catalog.testimonials) ? catalog.testimonials : [];
+  return testimonials.flatMap((review) => {
+    const quote = normalizeText(review?.comment);
+    const rating = Number(review?.rating);
+    if (review?.status !== 'published' || !quote || !Number.isFinite(rating) || rating < 1 || rating > 5) return [];
+    return [{
+      id: review.id,
+      quote,
+      rating,
+      vendorName: normalizeText(review.vendorName),
+      serviceName: normalizeText(review.serviceName),
+      createdAt: review.createdAt || null,
+    }];
+  });
 }
 
 export function buildAboutPagePayload(content = {}, catalog = {}) {
@@ -92,6 +134,9 @@ export function buildAboutPagePayload(content = {}, catalog = {}) {
     },
     categories: categoryList,
     statistics: getAboutStatistics(catalog),
+    team: [],
+    partners: getAboutPartners(catalog),
+    testimonials: getAboutTestimonials(catalog),
   };
 
   return base;

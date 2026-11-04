@@ -141,6 +141,22 @@ export default function AdminVendorVerification() {
     }
   }
 
+  async function toggleFeatured() {
+    if (!detail || detail.verification_status !== 'verified' || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      const isFeatured = !detail.is_featured;
+      await apiClient.patch(`/admin/vendors/${detail.id}/featured`, { is_featured: isFeatured });
+      setDetail((current) => current ? { ...current, is_featured: isFeatured } : current);
+      await loadApplications(pagination.page);
+    } catch (issue) {
+      setError(issue.message || 'The featured vendor status could not be updated.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function downloadDocument(document) {
     setError('');
     try {
@@ -229,6 +245,11 @@ export default function AdminVendorVerification() {
                 <div><p className="eyebrow">APPLICATION #{detail.id}</p><h3>{detail.business_name}</h3><span className={`av-status ${detail.verification_status}`}>{statusLabel(detail.verification_status)}</span></div>
                 {detail.verification_status === 'suspended' && <ShieldAlert className="av-warning" size={20}/>}
               </div>
+              {detail.verification_status === 'verified' && <div className="av-actions">
+                <button type="button" className={`button ${detail.is_featured ? 'secondary' : ''}`} onClick={toggleFeatured} disabled={saving}>
+                  {detail.is_featured ? 'Remove from featured vendors' : 'Feature this vendor'}
+                </button>
+              </div>}
               {detail.verification_reason && <p className="av-reason"><strong>Latest review note:</strong> {detail.verification_reason}</p>}
 
               <div className="av-info-grid">

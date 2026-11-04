@@ -9,9 +9,9 @@ INSERT INTO system_settings (setting_key, setting_value, updated_by)
 VALUES
   ('platform_status', 'open', NULL),
   ('maintenance_mode', 'false', NULL),
-  ('support_email', 'support@eventhub.example', NULL),
-  ('support_phone', '+251 911 000 000', NULL),
-  ('support_address', 'Addis Ababa, Ethiopia', NULL),
-  ('support_hours', 'Monday to Friday, 8:00 AM - 6:00 PM', NULL),
-  ('social_links', '[]', NULL)
+  ('support_email', 'abebeke99@gmail.com', NULL),
+  ('support_phone', '+251986481821', NULL),
+  ('support_address', '', NULL),
+  ('support_hours', '', NULL),
+  ('social_links', '[{"label":"Telegram","url":"https://t.me/የአንተ_ቻናል"},{"label":"YouTube","url":"https://youtube.com/@የአንተ_ቻናል"},{"label":"Facebook","url":"https://facebook.com/የአንተ_ገጽ"},{"label":"LinkedIn","url":"https://linkedin.com/company/የአንተ_ገጽ"}]', NULL)
 ON DUPLICATE KEY UPDATE setting_key = setting_key;

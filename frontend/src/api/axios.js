@@ -1,11 +1,13 @@
 import axios from 'axios';
-import { getRetryAfterMilliseconds } from '../authSession.js';
+import { clearPlatformSessionHint, getRetryAfterMilliseconds } from '../authSession.js';
 import { getLanguage } from '../language.js';
 
+const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : import.meta.env;
+
 function resolveApiBaseUrl() {
-  const configuredUrl = (import.meta.env.VITE_API_URL || '').trim();
+  const configuredUrl = (viteEnvironment.VITE_API_URL || '').trim();
   if (!configuredUrl) {
-    if (import.meta.env.PROD) {
+    if (viteEnvironment.PROD) {
       throw new Error('VITE_API_URL must be configured to the deployed API origin or its /api base path.');
     }
     return '/api';
@@ -16,7 +18,7 @@ function resolveApiBaseUrl() {
   if (parsedUrl.search || parsedUrl.hash || (path && path !== '/api')) {
     throw new Error('VITE_API_URL must be an API origin or end in /api, without query or fragment.');
   }
-  if (import.meta.env.PROD && parsedUrl.protocol !== 'https:') {
+  if (viteEnvironment.PROD && parsedUrl.protocol !== 'https:') {
     throw new Error('Production VITE_API_URL must use HTTPS.');
   }
 
@@ -26,6 +28,7 @@ function resolveApiBaseUrl() {
 const apiClient = axios.create({
   baseURL: resolveApiBaseUrl(),
   withCredentials: true,
+  timeout: 15_000,
 });
 
 let invalidationQueued = false;
@@ -37,7 +40,18 @@ apiClient.interceptors.request.use((config) => {
 });
 
 apiClient.interceptors.response.use(undefined, async (error) => {
-  if (!axios.isAxiosError(error) || !error.response) throw error;
+  if (!axios.isAxiosError(error) || axios.isCancel(error)) throw error;
+  if (!error.response) {
+    const timedOut = error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT';
+    throw Object.assign(new Error(
+      timedOut
+        ? 'The server took too long to respond. Please try again.'
+        : 'Unable to reach the server. Check your connection and try again.',
+    ), {
+      code: error.code || 'NETWORK_ERROR',
+      cause: error,
+    });
+  }
 
   let body = error.response.data;
   if (body instanceof Blob) {
@@ -53,15 +67,20 @@ apiClient.interceptors.response.use(undefined, async (error) => {
     ?? error.response.headers?.['retry-after'];
   const requestPath = String(error.config?.url || '');
   const isSessionProbe = /\/(?:auth|platform)\/me(?:\?|$)/.test(requestPath);
+  const isPlatformSessionProbe = /\/platform\/me(?:\?|$)/.test(requestPath);
   const isLoginRequest = /\/(?:auth|platform)\/login(?:\?|$)/.test(requestPath);
+  const isPlatformRequest = /^\/(?:platform|vendor|customer|organizer)(?:\/|$)/.test(requestPath);
 
-  if (status === 401 && !isSessionProbe && !isLoginRequest && typeof window !== 'undefined' && !invalidationQueued) {
+  if (status === 401 && isPlatformRequest && !isSessionProbe && !isLoginRequest
+    && typeof window !== 'undefined' && !invalidationQueued) {
+    clearPlatformSessionHint();
     invalidationQueued = true;
     queueMicrotask(() => {
       window.dispatchEvent(new Event('eventhub:auth-invalidated'));
       invalidationQueued = false;
     });
   }
+  if (status === 401 && isPlatformSessionProbe) clearPlatformSessionHint();
 
   throw Object.assign(new Error(message || `Request failed (${status}).`), {
     status,

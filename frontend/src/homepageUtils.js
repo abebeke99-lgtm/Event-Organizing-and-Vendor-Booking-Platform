@@ -81,3 +81,26 @@ export function getHomepageSectionState({ loading, error, items }) {
   if (error) return 'error';
   return Array.isArray(items) && items.length ? 'populated' : 'empty';
 }
+
+export function getHomepageTestimonials(vendorReviewGroups, limit = 3) {
+  if (!Array.isArray(vendorReviewGroups) || !Number.isInteger(limit) || limit < 1) return [];
+
+  return vendorReviewGroups.flatMap(({ vendor, reviews }) => {
+    if (!Array.isArray(reviews)) return [];
+    const vendorName = vendor?.business_name || vendor?.name || '';
+    return reviews.flatMap((review, index) => {
+      const quote = typeof review?.comment === 'string' ? review.comment.trim() : '';
+      const rating = toNonNegativeNumber(review?.rating, { maximum: 5 });
+      if (!quote || rating === null || rating < 1) return [];
+      return [{
+        id: review.id ?? `${vendor?.id || vendorName || 'vendor'}-${review.createdAt || index}`,
+        quote,
+        rating,
+        customerName: typeof review.customerName === 'string' && review.customerName.trim()
+          ? review.customerName.trim()
+          : 'Customer',
+        vendorName,
+      }];
+    });
+  }).slice(0, limit);
+}

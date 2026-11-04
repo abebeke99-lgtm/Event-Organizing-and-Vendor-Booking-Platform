@@ -13,6 +13,8 @@ const sampleVendors = [
     verified: true,
     rating: 4.9,
     reviewCount: 24,
+    bookingCount: 18,
+    isFeatured: true,
     priceFrom: 18000,
     isPublished: true,
     status: 'active',
@@ -91,9 +93,31 @@ test('verified-only and location/category filters combine correctly', () => {
     page: 1,
     limit: 10,
   });
-
   assert.equal(result.total, 1);
   assert.equal(result.vendors[0].id, 1);
+});
+
+test('featured listings use persisted flags and popularity uses bookings and reviews', () => {
+  const vendors = [
+    { ...sampleVendors[0], bookingCount: 2, reviewCount: 40, isFeatured: false },
+    { ...sampleVendors[1], bookingCount: 10, reviewCount: 1, isFeatured: true },
+    { ...sampleVendors[0], id: 5, business_name: 'No engagement', bookingCount: 0, reviewCount: 0, rating: 0, isFeatured: true },
+  ];
+  assert.deepEqual(listPublicVendors(vendors, { filter: 'featured' }).vendors.map((vendor) => vendor.id), [2, 5]);
+  assert.deepEqual(listPublicVendors(vendors, { sort: 'popular' }).vendors.map((vendor) => vendor.id), [2, 1, 5]);
+});
+
+test('category slugs match the selected category exactly', () => {
+  const vendors = [
+    { ...sampleVendors[0], category: 'Photography' },
+    { ...sampleVendors[1], category: 'Photography and Videography' },
+  ];
+  const result = listPublicVendors(vendors, {
+    category: 'photography-and-videography',
+    page: 1,
+    limit: 10,
+  });
+  assert.deepEqual(result.vendors.map((vendor) => vendor.id), [2]);
 });
 
 test('minimum rating and price range filters combine', () => {

@@ -1,11 +1,40 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CalendarDays, Check, Clock3, MapPin, Share2, Ticket, Users } from 'lucide-react';
-import { formatEventDate, formatEventBudget } from './eventUtils.js';
+import { formatEventDate, formatEventBudget, getEventCountdown } from './eventUtils.js';
+import { translate, useLanguage } from './language.js';
 import { withStableKeys } from './listKeys.js';
 import './eventsExperience.css';
 
 function messageFor(error, fallback) {
   return error?.message || fallback;
+}
+
+export function EventCountdown({ startDate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
+  const [countdown, setCountdown] = useState(() => getEventCountdown(startDate));
+
+  useEffect(() => {
+    let timer;
+    const updateCountdown = () => {
+      const next = getEventCountdown(startDate);
+      setCountdown(next);
+      if (next?.started && timer) window.clearInterval(timer);
+    };
+    updateCountdown();
+    timer = window.setInterval(updateCountdown, 1000);
+    return () => window.clearInterval(timer);
+  }, [startDate]);
+
+  if (!countdown) return null;
+  if (countdown.started) return <p className="event-countdown is-started" role="status">{t('eventStarted')}</p>;
+
+  return <div className="event-countdown" aria-label={t('countdownUntilStart')}>
+    <span><strong>{countdown.days}</strong><small>{t('countdownDays')}</small></span>
+    <span><strong>{String(countdown.hours).padStart(2, '0')}</strong><small>{t('countdownHours')}</small></span>
+    <span><strong>{String(countdown.minutes).padStart(2, '0')}</strong><small>{t('countdownMinutes')}</small></span>
+    <span><strong>{String(countdown.seconds).padStart(2, '0')}</strong><small>{t('countdownSeconds')}</small></span>
+  </div>;
 }
 
 function EventStatus({ event, available }) {
@@ -21,6 +50,8 @@ function EventStatus({ event, available }) {
 }
 
 export function EventDetailsPage({ eventId, user, api, onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [event, setEvent] = useState(null);
   const [tickets, setTickets] = useState([]);
   const [related, setRelated] = useState([]);
@@ -37,6 +68,11 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
   const [contactBusy, setContactBusy] = useState(false);
   const [contactError, setContactError] = useState('');
   const [contactSuccess, setContactSuccess] = useState('');
+  const bookingIdempotencyKey = useRef(null);
+
+  useEffect(() => {
+    bookingIdempotencyKey.current = null;
+  }, [eventId]);
 
   async function loadEvent() {
     setLoading(true);
@@ -55,7 +91,7 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
       setRelated(Array.isArray(relatedResponse?.data) ? relatedResponse.data : []);
       setSelectedTicket((current) => nextTickets.some((ticket) => String(ticket.id) === current)
         ? current
-        : String(nextTickets[0]?.id || ''));
+        : String(nextTickets.find((ticket) => Number(ticket.price) === 0)?.id || nextTickets[0]?.id || ''));
       if (!nextEvent) setError('This event is no longer available.');
     } catch (issue) {
       setError(messageFor(issue, 'Unable to load event details.'));
@@ -83,7 +119,7 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
         setEvent(nextEvent);
         setTickets(nextTickets);
         setRelated(Array.isArray(relatedResponse?.data) ? relatedResponse.data : []);
-        setSelectedTicket(String(nextTickets[0]?.id || ''));
+        setSelectedTicket(String(nextTickets.find((ticket) => Number(ticket.price) === 0)?.id || nextTickets[0]?.id || ''));
         if (!nextEvent) setError('This event is no longer available.');
       } catch (issue) {
         if (active) setError(messageFor(issue, 'Unable to load event details.'));
@@ -97,6 +133,9 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
 
   const selected = tickets.find((ticket) => String(ticket.id) === selectedTicket);
   const available = selected ? Number(selected.availableQuantity) : null;
+  const eventCountdown = getEventCountdown(event?.startDate);
+  const eventAcceptsBookings = eventCountdown && !eventCountdown.started
+    && ['active', 'published', 'upcoming', 'open'].includes(String(event?.status || '').toLowerCase());
 
   async function bookTicket(event) {
     event.preventDefault();
@@ -110,13 +149,14 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
     setBookingError('');
     setConfirmation(null);
     try {
+      bookingIdempotencyKey.current ||= window.crypto?.randomUUID?.();
       const result = await api('/platform/ticket-bookings', {
         method: 'POST',
         body: JSON.stringify({
           eventId: Number(eventId),
           ticketTypeId: Number(selected.id),
           quantity: Number(quantity),
-          idempotencyKey: window.crypto?.randomUUID?.(),
+          idempotencyKey: bookingIdempotencyKey.current,
         }),
       });
       setConfirmation(result?.data || null);
@@ -224,16 +264,16 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
 
       <aside className="panel ticket-panel" aria-label="Ticket booking">
         <h2>Tickets</h2>
-        {tickets.length === 0 ? <p className="muted">Ticket sales are not currently available for this event.</p> : confirmation ? <div className="booking-confirmation" role="status">
-          <Check size={24} /><h3>Reservation received</h3><p>Reference: <strong>{confirmation.reference || 'Pending'}</strong></p><p>{confirmation.quantity || quantity} × {confirmation.ticketName || selected?.name}</p><p>Total: <strong>{formatEventBudget(confirmation.totalAmount ?? Number(selected.price) * quantity)}</strong></p><p>Payment: <strong>Pending</strong></p><small>Payment verification is not configured yet. This reservation remains pending and is held for 15 minutes.</small><button className="button secondary" type="button" onClick={() => onNavigate('/my-bookings')}>View My Bookings</button>
+        {tickets.length === 0 || !eventAcceptsBookings ? <p className="muted">Ticket sales are not currently available for this event.</p> : confirmation ? <div className="booking-confirmation" role="status">
+          <Check size={24} /><h3>{Number(confirmation.totalAmount) === 0 ? t('registrationConfirmed') : 'Reservation received'}</h3><p>Reference: <strong>{confirmation.reference || 'Pending'}</strong></p><p>{confirmation.quantity || quantity} × {confirmation.ticketName || selected?.name}</p><p>Total: <strong>{Number(confirmation.totalAmount) === 0 ? 'ETB 0' : formatEventBudget(confirmation.totalAmount ?? Number(selected.price) * quantity)}</strong></p>{Number(confirmation.totalAmount) === 0 ? <p>{t('noPaymentRequired')}</p> : <><p>Payment: <strong>Pending</strong></p><small>Payment verification is not configured yet. This reservation remains pending and is held for 15 minutes.</small></>}<button className="button secondary" type="button" onClick={() => onNavigate('/my-bookings')}>View My Bookings</button>
         </div> : <form onSubmit={bookTicket} className="ticket-booking-form">
           <label className="field"><span>Ticket type</span><select value={selectedTicket} onChange={(event) => setSelectedTicket(event.target.value)} required>{tickets.map((ticket) => <option key={ticket.id} value={ticket.id}>{ticket.name} — {Number(ticket.price) === 0 ? 'Free' : formatEventBudget(ticket.price)}</option>)}</select></label>
-          {selected && <p className="ticket-availability">{available > 0 ? `${available} available` : 'Sold out'}</p>}
+          {selected && <p className="ticket-availability">{available > 0 ? `${available} available` : 'Sold out'}{selected.salesEnd ? ` · Registration closes ${formatEventDate(selected.salesEnd)}` : ''}</p>}
           <label className="field"><span>Quantity</span><input type="number" min="1" max={Math.min(10, available || 1)} value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value)))} disabled={!available} required /></label>
-          {selected && <div className="ticket-total"><span>Total</span><strong>{formatEventBudget(Number(selected.price) * quantity) || 'Free'}</strong></div>}
-          <div className="ticket-payment-note"><Clock3 size={15} /> Reservations are pending payment and expire after 15 minutes.</div>
+          {selected && <div className="ticket-total"><span>Total</span><strong>{Number(selected.price) === 0 ? 'ETB 0' : formatEventBudget(Number(selected.price) * quantity)}</strong></div>}
+          {selected && Number(selected.price) === 0 ? <p className="muted">{t('noPaymentRequired')}</p> : <div className="ticket-payment-note"><Clock3 size={15} /> Reservations are pending payment and expire after 15 minutes.</div>}
           {bookingError && <p className="event-inline-error" role="alert">{bookingError}</p>}
-          <button className="button ticket-submit" type="submit" disabled={booking || !available}>{booking ? 'Reserving…' : user?.role === 'customer' ? 'Reserve tickets' : 'Log in to book'}</button>
+          <button className="button ticket-submit" type="submit" disabled={booking || !available}>{booking ? 'Reserving…' : user?.role === 'customer' ? Number(selected?.price) === 0 ? t('registerFreeTicket') : 'Reserve tickets' : 'Log in to book'}</button>
           {user && user.role !== 'customer' && <p className="muted">Ticket booking is available to customer accounts.</p>}
         </form>}
       </aside>
@@ -242,6 +282,8 @@ export function EventDetailsPage({ eventId, user, api, onNavigate }) {
 }
 
 export function MyEventBookingsPage({ api, onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -281,8 +323,8 @@ export function MyEventBookingsPage({ api, onNavigate }) {
     {loading ? <div className="loading" role="status"><span className="spinner" />Loading bookings…</div> : bookings.length === 0 ? <div className="empty panel"><strong>No event bookings yet</strong><span>When you reserve event tickets, they will appear here.</span><button className="button" onClick={() => onNavigate('/events')}>Discover events</button></div> : <div className="ticket-booking-list">
       {bookings.map((item) => <article className="panel ticket-booking-item" key={item.id}>
         <div><span className="event-category">{item.ticketName}</span><h2>{item.eventTitle}</h2><p>{formatEventDate(item.startDate) || 'Date to be announced'} · {item.location || 'Location to be announced'}</p></div>
-        <dl><div><dt>Reference</dt><dd>{item.reference}</dd></div><div><dt>Tickets</dt><dd>{item.quantity}</dd></div><div><dt>Total</dt><dd>{formatEventBudget(item.totalAmount)}</dd></div><div><dt>Payment</dt><dd>{item.paymentStatus}</dd></div><div><dt>Booking</dt><dd>{item.bookingStatus.replaceAll('_', ' ')}</dd></div></dl>
-        <div className="ticket-booking-actions"><button className="button secondary small" onClick={() => onNavigate(`/events/${item.eventId}`)}>Event details</button>{item.bookingStatus === 'pending_payment' && <button className="button danger small" disabled={busyId === item.id} onClick={() => cancelBooking(item.id)}>{busyId === item.id ? 'Cancelling…' : 'Cancel reservation'}</button>}</div>
+        <dl><div><dt>Reference</dt><dd>{item.reference}</dd></div><div><dt>Tickets</dt><dd>{item.quantity}</dd></div><div><dt>Total</dt><dd>{Number(item.totalAmount) === 0 ? 'ETB 0' : formatEventBudget(item.totalAmount)}</dd></div><div><dt>Payment</dt><dd>{Number(item.unitPrice) === 0 ? t('noPaymentRequired') : item.paymentStatus}</dd></div><div><dt>Booking</dt><dd>{item.bookingStatus.replaceAll('_', ' ')}</dd></div></dl>
+        <div className="ticket-booking-actions"><button className="button secondary small" onClick={() => onNavigate(`/events/${item.eventId}`)}>Event details</button>{(item.bookingStatus === 'pending_payment' || Number(item.unitPrice) === 0 && item.bookingStatus === 'confirmed' && new Date(item.startDate).getTime() > Date.now()) && <button className="button danger small" disabled={busyId === item.id} onClick={() => cancelBooking(item.id)}>{busyId === item.id ? 'Cancelling…' : Number(item.unitPrice) === 0 ? t('cancelFreeRegistration') : 'Cancel reservation'}</button>}</div>
       </article>)}
     </div>}
   </main>;

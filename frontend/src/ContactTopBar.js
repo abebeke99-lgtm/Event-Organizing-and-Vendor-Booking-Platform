@@ -1,41 +1,27 @@
 import React, { createElement as h } from 'react';
-import { Clock3, Mail, MapPin, Phone } from 'lucide-react';
+import { Mail, Phone } from 'lucide-react';
 import { translate, useLanguage } from './language.js';
-import { getFooterSocialLinks } from './socialLinks.js';
+import { getTopBarSocialLinks } from './socialLinks.js';
 import SocialMediaLink from './SocialMediaLink.js';
 
-const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : {
-  VITE_CONTACT_PHONE: import.meta.env.VITE_CONTACT_PHONE,
-  VITE_CONTACT_ADDRESS: import.meta.env.VITE_CONTACT_ADDRESS,
-  VITE_TELEGRAM_URL: import.meta.env.VITE_TELEGRAM_URL,
-  VITE_YOUTUBE_URL: import.meta.env.VITE_YOUTUBE_URL,
-  VITE_FACEBOOK_URL: import.meta.env.VITE_FACEBOOK_URL,
-  VITE_LINKEDIN_URL: import.meta.env.VITE_LINKEDIN_URL,
-};
-
-const supportEmail = 'abebeke99@gmail.com';
+const CONTACT_EMAIL = 'abebeke99@gmail.com';
+const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : import.meta.env;
 
 export default function ContactTopBar({ environment = viteEnvironment }) {
   const language = useLanguage();
   const phone = environment.VITE_CONTACT_PHONE?.trim();
-  const address = environment.VITE_CONTACT_ADDRESS?.trim();
-  const socialLinks = getFooterSocialLinks(environment).filter((social) => social.url);
-  const infoItems = [
+  const socialLinks = getTopBarSocialLinks(environment);
+  const items = [
     h('a', {
       key: 'email',
       className: 'contact-top-bar-item contact-top-bar-email',
-      href: `mailto:${supportEmail}`,
-      'aria-label': `${translate('topBarEmail', language)}: ${supportEmail}`,
-    }, h(Mail, { size: 16, 'aria-hidden': 'true' }), h('span', null, supportEmail)),
-    h('span', {
-      key: 'hours',
-      className: 'contact-top-bar-item contact-top-bar-hours',
-      'aria-label': `${translate('topBarWorkingHours', language)}: ${translate('topBarWorkingDays', language)}`,
-    }, h(Clock3, { size: 16, 'aria-hidden': 'true' }), h('span', null, translate('topBarWorkingDays', language))),
+      href: `mailto:${CONTACT_EMAIL}`,
+      'aria-label': `${translate('topBarEmail', language)}: ${CONTACT_EMAIL}`,
+    }, h(Mail, { size: 16, 'aria-hidden': 'true' }), h('span', null, CONTACT_EMAIL)),
   ];
 
   if (phone) {
-    infoItems.push(h('a', {
+    items.push(h('a', {
       key: 'phone',
       className: 'contact-top-bar-item contact-top-bar-phone',
       href: `tel:${phone.replace(/[^\d+]/g, '')}`,
@@ -43,22 +29,22 @@ export default function ContactTopBar({ environment = viteEnvironment }) {
     }, h(Phone, { size: 16, 'aria-hidden': 'true' }), h('span', null, phone)));
   }
 
-  if (address) {
-    infoItems.push(h('span', {
-      key: 'address',
-      className: 'contact-top-bar-item contact-top-bar-address',
-      'aria-label': `${translate('topBarAddress', language)}: ${address}`,
-    }, h(MapPin, { size: 16, 'aria-hidden': 'true' }), h('span', null, address)));
-  }
-
-  return h('div', { className: 'contact-top-bar', role: 'region', 'aria-label': translate('topBarContactInfo', language) },
+  return h('aside', {
+    className: `contact-top-bar${socialLinks.length ? ' contact-top-bar-has-socials' : ''}`,
+    'aria-label': translate('topBarContactInfo', language),
+  },
     h('div', { className: 'contact-top-bar-inner' },
-      h('div', { className: 'contact-top-bar-info' }, infoItems),
-      socialLinks.length > 0 && h('div', { className: 'contact-top-bar-social', 'aria-label': translate('topBarSocialLinks', language) },
-        socialLinks.map((social) => h(SocialMediaLink, {
-          key: social.id,
-          platform: social.id,
-          label: `${translate('eventHubOn', language)} ${translate(social.labelKey, language)}`,
-          url: social.url,
-        })))));
+      h('div', { className: 'contact-top-bar-info' }, items),
+      socialLinks.length > 0 && h('ul', {
+        className: 'contact-top-bar-social',
+        'aria-label': translate('topBarSocialLinks', language),
+      }, socialLinks.map((social) => {
+        const label = `${translate('eventHubOn', language)} ${translate(social.labelKey, language)}`;
+        return h('li', { key: social.id },
+          h(SocialMediaLink, {
+            platform: social.id,
+            label,
+            url: social.url,
+          }));
+      }))));
 }

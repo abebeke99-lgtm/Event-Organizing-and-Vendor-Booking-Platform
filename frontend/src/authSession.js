@@ -25,7 +25,39 @@ export function getRetryAfterMilliseconds(value, now = Date.now()) {
   return Number.isNaN(retryAt) ? undefined : Math.max(0, retryAt - now);
 }
 
-export function createAuthSessionLoader({ getAdminSession, getPlatformSession, now = Date.now }) {
+export const PLATFORM_SESSION_HINT_KEY = 'eventhub-platform-session';
+
+export function hasPlatformSessionHint() {
+  try {
+    return globalThis.localStorage?.getItem(PLATFORM_SESSION_HINT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setPlatformSessionHint() {
+  try {
+    globalThis.localStorage?.setItem(PLATFORM_SESSION_HINT_KEY, '1');
+  } catch {
+    return;
+  }
+}
+
+export function clearPlatformSessionHint() {
+  try {
+    globalThis.localStorage?.removeItem(PLATFORM_SESSION_HINT_KEY);
+  } catch {
+    return;
+  }
+}
+
+export function createAuthSessionLoader({
+  getAdminSession,
+  getPlatformSession,
+  hasPlatformSession = () => true,
+  clearPlatformSession = () => {},
+  now = Date.now,
+}) {
   let snapshot = { status: 'loading' };
   let inFlight = null;
   let generation = 0;
@@ -39,14 +71,17 @@ export function createAuthSessionLoader({ getAdminSession, getPlatformSession, n
   async function resolveSession() {
     const [adminResult, platformResult] = await Promise.allSettled([
       getAdminSession(),
-      getPlatformSession(),
+      hasPlatformSession() ? getPlatformSession() : Promise.resolve({ user: null }),
     ]);
     const adminResponse = adminResult.status === 'fulfilled' ? adminResult.value : null;
     const platformResponse = platformResult.status === 'fulfilled' ? platformResult.value : null;
     const hasAdminPayload = Boolean(adminResponse && Object.hasOwn(adminResponse, 'user'));
-    const hasPlatformPayload = Boolean(platformResponse?.data && Object.hasOwn(platformResponse.data, 'user'));
+    const hasPlatformPayload = Boolean(
+      (platformResponse?.data && Object.hasOwn(platformResponse.data, 'user'))
+      || (platformResponse && Object.hasOwn(platformResponse, 'user')),
+    );
     const adminUser = hasAdminPayload ? adminResponse.user : null;
-    const platformUser = hasPlatformPayload ? platformResponse.data.user : null;
+    const platformUser = platformResponse?.data?.user ?? platformResponse?.user ?? null;
 
     if (adminUser) return { status: 'authenticated', user: adminUser, role: 'admin' };
     if (platformUser) return { status: 'authenticated', user: platformUser, role: platformUser.role };
@@ -59,6 +94,9 @@ export function createAuthSessionLoader({ getAdminSession, getPlatformSession, n
     const errors = [adminResult, platformResult]
       .filter((result) => result.status === 'rejected')
       .map((result) => result.reason);
+    if (platformResult.status === 'rejected' && platformResult.reason?.status === 401) {
+      clearPlatformSession();
+    }
     const rateLimitError = errors.find((error) => error?.status === 429);
     if (rateLimitError) return getErrorResult(rateLimitError, now);
     const requestError = errors.find((error) => error?.status !== 401);

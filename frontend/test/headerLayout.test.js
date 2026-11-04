@@ -19,3 +19,11 @@ test('header content and actions cannot shrink into the viewport edge', () => {
   assert.match(styleSource, /@media\(max-width:1120px\)\{[\s\S]*?\.public-header-actions\{order:4;flex:0 0 100%;width:100%;margin:0;justify-content:flex-end;flex-wrap:wrap\}/);
   assert.doesNotMatch(styleSource, /\.site-header[^}]*width:100vw/);
 });
+
+test('contact top bar sits above, but does not stick with or offset, the public navbar', () => {
+  assert.match(appSource, /<ContactTopBar\/><header className="site-header"/);
+  assert.match(styleSource, /\.contact-top-bar\{height:40px;[^}]*background:var\(--nav\)/);
+  assert.doesNotMatch(styleSource.match(/\.contact-top-bar\{([^}]*)\}/)?.[1] || '', /position:\s*(?:sticky|fixed)/);
+  assert.match(styleSource, /html\{scroll-padding-top:112px\}/);
+  assert.match(styleSource, /@media\(max-width:1120px\)\{[\s\S]*?html\{scroll-padding-top:152px\}/);
+});

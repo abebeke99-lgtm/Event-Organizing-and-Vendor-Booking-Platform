@@ -19,6 +19,8 @@ function createDatabase() {
     {
       id: 1,
       name: 'Catering',
+      service_menu_name: 'Catering Services',
+      service_menu_order: 1,
       description: 'Food services',
       display_order: 2,
       image: null,
@@ -181,8 +183,17 @@ function createDatabase() {
     if (sql.includes('FROM services s')) return [[], []];
     if (sql.includes('FROM vendor_profiles vp')) return [[], []];
     if (sql.includes('FROM service_categories')) {
-      return [categories.filter((category) => category.is_active).map(({ id, name, description, display_order, image_mime, is_active }) => ({
-        id, name, description, display_order, image_mime, is_active,
+      const serviceScope = sql.includes('sc.service_menu_order IS NOT NULL');
+      return [categories.filter((category) => category.is_active && (!serviceScope || category.service_menu_order != null)).map((category) => ({
+        id: category.id,
+        name: serviceScope ? category.service_menu_name : category.name,
+        database_name: category.name,
+        description: category.description,
+        display_order: category.display_order,
+        service_menu_order: category.service_menu_order,
+        image_mime: category.image_mime,
+        vendor_count: 0,
+        service_count: services.filter((service) => service.category_id === category.id).length,
       })), []];
     }
     throw new Error(`Unexpected test query: ${sql}`);
@@ -252,6 +263,21 @@ test('public categories hide invalid legacy names while keeping valid active cat
   const { response, payload } = await request('/api/platform/categories');
   assert.equal(response.status, 200);
   assert.deepEqual(payload.data.map((category) => category.name), ['Catering']);
+});
+
+test('service navigation categories are active, ordered, and retain database IDs and counts', async () => {
+  const { response, payload } = await request('/api/platform/categories?scope=services', { authenticated: false });
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.categories.map((category) => [category.id, category.name, category.serviceCount]), [
+    [1, 'Catering Services', 1],
+  ]);
+  assert.match(database.statements.at(-1).sql, /sc\.service_menu_order IS NOT NULL/);
+  assert.match(database.statements.at(-1).sql, /GROUP BY[\s\S]*sc\.service_menu_order/);
+});
+
+test('public categories reject unsupported scope filters', async () => {
+  const { response } = await request('/api/platform/categories?scope=vendors', { authenticated: false });
+  assert.equal(response.status, 400);
 });
 
 test('category CRUD enforces unique names and records field changes in history', async () => {

@@ -39,6 +39,8 @@ function mapVendor(row, services = [], media = []) {
     verified: row.verification_status === 'verified',
     rating: toNumber(row.rating),
     reviewCount: toNumber(row.review_count),
+    bookingCount: toNumber(row.booking_count),
+    isFeatured: Boolean(row.is_featured),
     priceFrom: startingPrice,
     currency: startingPriceOptions[0]?.currency || null,
     createdAt: row.created_at,
@@ -62,6 +64,7 @@ function mapService(row) {
     id: toNumber(row.id),
     title: String(row.title || '').trim(),
     vendorId: toNumber(row.vendor_id),
+    categoryId: toNumber(row.category_id) || null,
     vendorName: String(row.business_name || '').trim(),
     category: isValidCategoryName(row.category) ? String(row.category).trim() : '',
     city: String(row.city || '').trim(),
@@ -70,6 +73,8 @@ function mapService(row) {
     currency: String(row.currency || 'ETB').trim().toUpperCase(),
     rating: toNumber(row.rating),
     reviewCount: toNumber(row.review_count),
+    bookingCount: toNumber(row.booking_count),
+    createdAt: row.created_at || null,
     packages: [],
     images: [],
     status: 'active',
@@ -92,17 +97,38 @@ const vendorRatingSelect = `
     WHERE b.vendor_id = vp.id AND r.status = 'published'
   ) AS review_count`;
 
+const serviceRatingSelect = `
+  COALESCE((
+    SELECT ROUND(AVG(r.rating), 1)
+    FROM reviews r
+    JOIN bookings b ON b.id = r.booking_id
+    WHERE b.service_id = s.id AND r.status = 'published'
+  ), 0) AS rating,
+  (
+    SELECT COUNT(*)
+    FROM reviews r
+    JOIN bookings b ON b.id = r.booking_id
+    WHERE b.service_id = s.id AND r.status = 'published'
+  ) AS review_count`;
+
 export async function loadPublicServices(db = pool) {
   const [rows] = await db.query(`
-    SELECT s.id, s.vendor_id, s.title, s.description, s.price, s.currency, s.status,
+    SELECT s.id, s.vendor_id, s.category_id, s.title, s.description, s.price, s.created_at,
+           COALESCE(NULLIF(TRIM(s.currency), ''), 'ETB') AS currency, s.status,
            vp.business_name, vp.city, vp.verification_status,
-           sc.name AS category,
-           ${vendorRatingSelect}
+           COALESCE(sc.service_menu_name, sc.name) AS category,
+           (
+             SELECT COUNT(*)
+             FROM bookings b
+             WHERE b.service_id = s.id AND b.status NOT IN ('cancelled', 'rejected')
+           ) AS booking_count,
+           ${serviceRatingSelect}
     FROM services s
     JOIN vendor_profiles vp ON vp.id = s.vendor_id
     JOIN users u ON u.id = vp.user_id AND u.status = 'active'
     LEFT JOIN service_categories sc ON sc.id = s.category_id AND sc.is_active = TRUE
     WHERE s.status = 'active' AND vp.verification_status = 'verified'
+      AND (s.category_id IS NULL OR sc.id IS NOT NULL)
     ORDER BY s.id ASC`);
 
   const services = rows
@@ -113,7 +139,8 @@ export async function loadPublicServices(db = pool) {
   const serviceIds = services.map((service) => service.id);
   const placeholders = serviceIds.map(() => '?').join(', ');
   const [packageRows] = await db.execute(
-    `SELECT p.id, p.service_id, p.name, p.description, p.price, p.currency,
+    `SELECT p.id, p.service_id, p.name, p.description, p.price,
+            COALESCE(NULLIF(TRIM(p.currency), ''), 'ETB') AS currency,
             p.included_features, p.extras, p.minimum_booking
      FROM service_packages p
      JOIN services s ON s.id = p.service_id
@@ -175,13 +202,19 @@ export async function loadPublicServices(db = pool) {
 
 export async function loadPublicVendors(db = pool, providedServices = null) {
   const [rows] = await db.query(`
-    SELECT vp.id, vp.user_id, vp.business_name, vp.city, vp.description, vp.verification_status, vp.created_at,
+    SELECT vp.id, vp.user_id, vp.business_name, vp.city, vp.description, vp.verification_status,
+           vp.is_featured, vp.created_at,
            sc.name AS category,
            (
              SELECT MIN(s.price)
              FROM services s
              WHERE s.vendor_id = vp.id AND s.status = 'active'
            ) AS min_price,
+           (
+             SELECT COUNT(*)
+             FROM bookings b
+             WHERE b.vendor_id = vp.id AND b.status NOT IN ('cancelled', 'rejected')
+           ) AS booking_count,
            ${vendorRatingSelect}
     FROM vendor_profiles vp
     JOIN users u ON u.id = vp.user_id AND u.status = 'active'

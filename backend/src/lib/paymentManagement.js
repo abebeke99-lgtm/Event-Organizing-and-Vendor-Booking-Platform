@@ -157,7 +157,7 @@ export async function createRefundRequest(database, {
       `INSERT INTO refund_requests
          (payment_id, requester_id, amount, currency, reason, idempotency_key)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [paymentId, requesterId, fromCents(requestedCents), payment.currency, reason, idempotencyKey],
+      [paymentId, requesterId, fromCents(requestedCents), payment.currency || 'ETB', reason, idempotencyKey],
     );
     await appendHistory(connection, {
       paymentId,

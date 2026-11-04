@@ -125,13 +125,15 @@ export function createApp({
     try {
       await verifyDatabaseConnection(database, expectedDatabase);
     } catch (error) {
-      console.error('Database health check failed:', formatDatabaseError(error));
+      const databaseError = formatDatabaseError(error);
+      console.error('Database health check failed:', databaseError);
       return res.status(503).json({
+        ok: false,
         status: 'unavailable',
         reasonCode: getDatabaseFailureCode(error),
       });
     }
-    res.json({ status: 'ok', db: 'connected' });
+    res.json({ ok: true, status: 'ok', db: 'connected' });
   }));
   app.get('/api/platform/availability', asyncHandler(async (req, res) => {
     const settings = await loadSystemSettings(database);
@@ -184,7 +186,7 @@ export function createApp({
   app.use((req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    console.error(`Request failed: ${req.method} ${req.originalUrl}`);
+    console.error(`Request failed: ${req.method} ${req.originalUrl}: ${formatDatabaseError(error)}`);
     console.error(error.stack || error);
     const status = Number.isInteger(error.status) ? error.status : 500;
     res.status(status).json({ message: error.expose ? error.message : 'The request could not be completed.' });

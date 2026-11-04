@@ -187,7 +187,7 @@ async function request(path, { method = 'GET', body, authenticated = true } = {}
 test('vendor profile and services require an authenticated vendor session', async () => {
   const response = await request('/api/vendor/profile', { authenticated: false });
   assert.equal(response.status, 401);
-  assert.deepEqual(await response.json(), { error: 'Authentication required.' });
+  assert.deepEqual(await response.json(), { message: 'Unauthorized' });
 });
 
 test('vendor can update only supported profile fields and persists them through the injected database', async () => {

@@ -19,7 +19,7 @@ import { loadSystemSettings } from '../lib/systemSettings.js';
 import { isStrongPassword } from '../lib/authFlow.js';
 import { isValidCategoryName } from '../lib/categoryName.js';
 import { calculateDashboardSummary, createBookingSnapshot } from '../lib/bookingRules.js';
-import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } from '../lib/eventCatalog.js';
+import { buildPublicEventCategoriesQuery, buildPublicEventListingQuery, getPublicEvents, mapDatabaseEvent, resolveEventCategoryFilter, sanitizeText } from '../lib/eventCatalog.js';
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
 import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
 import { createEventSchema, dateTimeSchema, toMysqlDateTime } from '../lib/eventInput.js';
@@ -32,6 +32,7 @@ import {
   reserveBookingDate,
 } from '../lib/bookingAvailability.js';
 import {
+  categorySlug,
   ensureVendorProfile as ensureVendorProfileRecord,
   loadPublicMarketplace,
   mapBookingRecord,
@@ -127,18 +128,30 @@ const bookingSelect = `
   JOIN users cu ON cu.id = e.organizer_id
   JOIN vendor_profiles vp ON vp.id = b.vendor_id`;
 
-const publicEventSelect = `
-  SELECT e.id, e.title, e.event_type, e.description, e.notes, e.city, e.venue, e.cover_image_url,
-         e.gallery_images, e.start_date, e.end_date, e.budget, e.capacity, e.status,
-         e.published_at, e.created_at, u.full_name AS organizer_name,
-         t.starting_price,
-         COALESCE(t.available_quantity, 0) AS available_quantity
+const publicEventOwnerFrom = `
   FROM events e
-  JOIN users u ON u.id = e.organizer_id
+  JOIN users u ON u.id = e.organizer_id`;
+const publicEventFrom = `${publicEventOwnerFrom}
   LEFT JOIN (
     SELECT tt.event_id,
-           MIN(CASE WHEN tt.capacity - tt.sold_quantity - COALESCE(reserved.quantity, 0) > 0 THEN tt.price END) AS starting_price,
-           SUM(GREATEST(tt.capacity - tt.sold_quantity - COALESCE(reserved.quantity, 0), 0)) AS available_quantity
+           MIN(CASE
+             WHEN (tt.sales_start IS NULL OR tt.sales_start <= NOW())
+               AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
+             THEN tt.price
+           END) AS starting_price,
+           SUM(CASE
+             WHEN (tt.sales_start IS NULL OR tt.sales_start <= NOW())
+               AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
+             THEN GREATEST(tt.capacity - tt.sold_quantity - COALESCE(reserved.quantity, 0), 0)
+             ELSE 0
+           END) AS available_quantity,
+           SUM(CASE
+              WHEN tt.price = 0
+                AND (tt.sales_start IS NULL OR tt.sales_start <= NOW())
+                AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
+              THEN GREATEST(tt.capacity - tt.sold_quantity - COALESCE(reserved.quantity, 0), 0)
+              ELSE 0
+           END) AS free_available_quantity
     FROM event_ticket_types tt
     LEFT JOIN (
       SELECT ticket_type_id, SUM(quantity) AS quantity
@@ -148,12 +161,24 @@ const publicEventSelect = `
       GROUP BY ticket_type_id
     ) reserved ON reserved.ticket_type_id = tt.id
     WHERE tt.status = 'active'
-      AND (tt.sales_start IS NULL OR tt.sales_start <= NOW())
-      AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
     GROUP BY tt.event_id
   ) t ON t.event_id = e.id`;
 
-const publicEventWhere = `WHERE e.start_date >= NOW() AND e.status IN ('active', 'published', 'upcoming', 'open')`;
+const publicEventSelect = `
+  SELECT e.id, e.title, e.event_type, e.description, e.notes, e.city, e.venue, e.cover_image_url,
+         e.gallery_images, e.start_date, e.end_date, e.budget, e.capacity, e.status,
+         e.published_at, e.created_at, u.full_name AS organizer_name,
+         e.is_featured,
+         COALESCE((SELECT SUM(etb.quantity) FROM event_ticket_bookings etb
+                   WHERE etb.event_id = e.id AND etb.booking_status = 'confirmed'), 0) AS popularity_count,
+         t.starting_price,
+         COALESCE(t.available_quantity, 0) AS available_quantity,
+         COALESCE(t.free_available_quantity, 0) AS free_available_quantity
+  ${publicEventFrom}`;
+const publicEventWhere = `WHERE (e.status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
+  OR (e.status = 'completed' AND e.published_at IS NOT NULL))`;
+const upcomingPublicEventWhere = `WHERE e.start_date >= NOW() AND (e.status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
+  OR (e.status = 'completed' AND e.published_at IS NOT NULL))`;
 const dateOnlySchema = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
   .refine((value) => {
@@ -166,10 +191,17 @@ const publicEventsQuerySchema = z.object({
   location: z.string().trim().max(120).optional(),
   startDate: dateOnlySchema.optional(),
   endDate: dateOnlySchema.optional(),
+  datePreset: z.enum(['upcoming', 'today', 'tomorrow', 'this_week', 'this_weekend', 'this_month', 'next_month']).optional(),
+  priceFilter: z.enum(['free', 'paid']).optional(),
   minPrice: z.coerce.number().finite().min(0).optional(),
   maxPrice: z.coerce.number().finite().min(0).optional(),
-  status: z.enum(['upcoming', 'available', 'free', 'paid']).optional(),
-  sort: z.enum(['upcoming', 'earliest', 'latest', 'alphabetical', 'recent', 'price_asc', 'price_desc']).optional(),
+  status: z.enum(['all', 'upcoming', 'ongoing', 'past', 'available', 'free', 'paid']).optional(),
+  filter: z.enum(['all', 'upcoming', 'ongoing', 'past', 'available', 'free', 'paid', 'featured']).optional(),
+  sort: z.enum([
+    'upcoming', 'earliest', 'latest', 'alphabetical', 'recent',
+    'newest', 'oldest', 'date_earliest', 'date_latest', 'title_asc', 'title_desc',
+    'price_asc', 'price_desc', 'popular',
+  ]).optional(),
   page: z.coerce.number().int().min(1).max(100000).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
 }).superRefine((query, context) => {
@@ -215,17 +247,62 @@ router.get('/overview', async (req, res) => {
 });
 
 async function listAllPublicEvents() {
-  const [rows] = await pool.query(`${publicEventSelect} ${publicEventWhere} ORDER BY e.start_date ASC LIMIT 48`);
+  const [rows] = await pool.query(`${publicEventSelect} ${upcomingPublicEventWhere} ORDER BY e.start_date ASC LIMIT 48`);
   return rows.map(mapDatabaseEvent);
 }
 
 router.get('/categories', asyncHandler(async (req, res) => {
-  const marketplace = await loadPublicMarketplace(req.app?.locals?.database || pool);
+  const database = req.app?.locals?.database || pool;
+  const scope = req.query.scope;
+  if (scope !== undefined && scope !== 'services') {
+    return res.status(400).json({ error: 'Category scope must be services when provided.' });
+  }
   const search = sanitizeText(req.query.search, '').toLowerCase();
-  const categories = search
-    ? marketplace.categories.filter((category) => `${category.name} ${category.description}`.toLowerCase().includes(search))
-    : marketplace.categories;
-  return res.json({ data: categories });
+  const filters = search
+    ? 'AND (LOWER(COALESCE(sc.service_menu_name, sc.name)) LIKE ? OR LOWER(COALESCE(sc.description, \'\')) LIKE ?)'
+    : '';
+  const values = search ? [`%${search}%`, `%${search}%`] : [];
+  const serviceScope = scope === 'services';
+  const [rows] = await database.query(
+    `SELECT sc.id, ${serviceScope ? 'COALESCE(sc.service_menu_name, sc.name)' : 'sc.name'} AS name,
+            sc.name AS database_name, sc.description, sc.display_order, sc.image_mime,
+            ${serviceScope ? 'sc.service_menu_order,' : ''}
+            COUNT(DISTINCT CASE
+              WHEN vp.verification_status = 'verified' AND u.status = 'active' THEN vp.id
+            END) AS vendor_count,
+            COUNT(DISTINCT CASE
+              WHEN vp.verification_status = 'verified' AND u.status = 'active'
+                AND s.status = 'active' AND s.category_id = sc.id THEN s.id
+            END) AS service_count
+     FROM service_categories sc
+     LEFT JOIN vendor_profiles vp ON vp.category_id = sc.id
+     LEFT JOIN users u ON u.id = vp.user_id
+     LEFT JOIN services s ON s.vendor_id = vp.id
+     WHERE sc.is_active = TRUE ${serviceScope ? 'AND sc.service_menu_order IS NOT NULL' : ''} ${filters}
+     GROUP BY sc.id, sc.name, sc.service_menu_name, sc.description, sc.display_order,
+              ${serviceScope ? 'sc.service_menu_order,' : ''} sc.image_mime
+     ORDER BY ${serviceScope ? 'sc.service_menu_order ASC' : 'name ASC'}, sc.name ASC`,
+    values,
+  );
+  const categories = rows.filter((row) => isValidCategoryName(row.name)).map((row) => {
+    const id = Number(row.id);
+    const image = row.image_mime ? `/api/platform/categories/${id}/image` : null;
+    return {
+      id,
+      name: row.name,
+      slug: categorySlug(row.name),
+      description: row.description || '',
+      icon: image,
+      image,
+      isActive: true,
+      displayOrder: Number(row.display_order || 0),
+      vendor_count: Number(row.vendor_count || 0),
+      vendorCount: Number(row.vendor_count || 0),
+      serviceCount: Number(row.service_count || 0),
+      serviceMenuOrder: row.service_menu_order === undefined ? null : Number(row.service_menu_order),
+    };
+  });
+  return res.json({ categories, data: categories });
 }));
 
 router.get('/categories/:id/image', async (req, res) => {
@@ -270,11 +347,12 @@ router.get('/vendors', asyncHandler(async (req, res) => {
     category: z.string().trim().max(80).optional(),
     location: z.string().trim().max(120).optional(),
     verified: z.enum(['true', 'false', '1', '0']).optional(),
+    filter: z.enum(['featured']).optional(),
     availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
     minRating: z.coerce.number().finite().min(0).max(5).optional(),
     minPrice: z.coerce.number().finite().min(0).optional(),
     maxPrice: z.coerce.number().finite().min(0).optional(),
-    sort: z.enum(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added']).optional(),
+    sort: z.enum(['recommended', 'popular', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added']).optional(),
     page: z.coerce.number().int().min(1).max(100000).optional(),
     limit: z.coerce.number().int().min(1).max(50).optional(),
   }).strict().superRefine((filters, context) => {
@@ -398,19 +476,47 @@ router.get('/vendors/:id', asyncHandler(async (req, res) => {
 }));
 
 router.get('/services', asyncHandler(async (req, res) => {
-  const marketplace = await loadPublicMarketplace(databaseFor(req));
+  const database = databaseFor(req);
+  const parsedFilters = z.object({
+    search: z.string().trim().max(120).optional(),
+    category: z.string().trim().min(1).max(120).optional(),
+    location: z.string().trim().max(120).optional(),
+    vendor: z.string().trim().max(120).optional(),
+    vendorId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+    minPrice: z.coerce.number().finite().min(0).optional(),
+    maxPrice: z.coerce.number().finite().min(0).optional(),
+    minRating: z.coerce.number().finite().min(0).max(5).optional(),
+    availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+    sort: z.enum(['recommended', 'popular', 'newest', 'highest-rated', 'rating', 'price-low', 'price-high', 'alphabetical']).optional(),
+    page: z.coerce.number().int().min(1).max(100000).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+  }).strict().superRefine((filters, context) => {
+    if (filters.minPrice !== undefined && filters.maxPrice !== undefined && filters.maxPrice < filters.minPrice) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxPrice'], message: 'Maximum price must be greater than or equal to minimum price.' });
+    }
+  }).safeParse(req.query);
+  if (!parsedFilters.success) {
+    return res.status(400).json({
+      error: 'Invalid service filters.',
+      details: parsedFilters.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+    });
+  }
+  let categoryId;
+  if (parsedFilters.data.category !== undefined) {
+    const [categories] = await database.query(
+      'SELECT id, name, service_menu_name FROM service_categories WHERE is_active = TRUE',
+    );
+    const categoryKey = categorySlug(parsedFilters.data.category);
+    const match = categories.find((category) => String(category.id) === parsedFilters.data.category)
+      || categories.find((category) => categorySlug(category.name) === categoryKey
+        || (category.service_menu_name && categorySlug(category.service_menu_name) === categoryKey));
+    if (!match) return res.status(400).json({ error: 'The selected service category is unavailable.' });
+    categoryId = Number(match.id);
+  }
+  const marketplace = await loadPublicMarketplace(database);
   const result = listPublicServices(marketplace.services, {
-    search: req.query.search,
-    category: req.query.category,
-    location: req.query.location,
-    vendorId: req.query.vendorId,
-    minPrice: req.query.minPrice,
-    maxPrice: req.query.maxPrice,
-    minRating: req.query.minRating,
-    availableOnly: req.query.availableOnly,
-    sort: req.query.sort,
-    page: req.query.page,
-    limit: req.query.limit,
+    ...parsedFilters.data,
+    categoryId,
   });
   return res.json({
     data: result.services,
@@ -464,51 +570,106 @@ router.get('/services/:id', asyncHandler(async (req, res) => {
 router.get('/events', async (req, res) => {
   const parsed = publicEventsQuerySchema.safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid event filters.' });
-  const [rows] = await pool.query(`${publicEventSelect} ${publicEventWhere} ORDER BY e.start_date ASC`);
-  const events = rows.map(mapDatabaseEvent);
-  const result = listPublicEvents(events, parsed.data);
+  const filters = {
+    ...parsed.data,
+    status: parsed.data.status || (['upcoming', 'featured'].includes(parsed.data.filter) ? '' : parsed.data.filter || ''),
+  };
+  const database = databaseFor(req);
+  if (filters.category && !/^\d+$/.test(filters.category)) {
+    const [categories] = await database.query(
+      'SELECT id, name FROM service_categories WHERE is_active = TRUE',
+    );
+    filters.category = resolveEventCategoryFilter(filters.category, categories);
+  }
+  const listing = buildPublicEventListingQuery(filters);
+  const countFrom = listing.requiresTicketData ? publicEventFrom : publicEventOwnerFrom;
+  const [countRows] = await database.query(`SELECT COUNT(*) AS total ${countFrom} ${listing.where}`, listing.params);
+  const total = Number(countRows[0]?.total || 0);
+  const totalPages = Math.max(1, Math.ceil(total / listing.limit));
+  const page = Math.min(parsed.data.page || 1, totalPages);
+  const pageListing = buildPublicEventListingQuery({ ...filters, page });
+  const [rows] = await database.query(
+    `${publicEventSelect} ${pageListing.where} ORDER BY ${pageListing.orderBy} LIMIT ? OFFSET ?`,
+    [...pageListing.params, pageListing.limit, pageListing.offset],
+  );
   return res.json({
-    data: result.events,
-    pagination: { total: result.total, page: result.page, limit: result.limit, totalPages: result.totalPages },
+    data: rows.map(mapDatabaseEvent),
+    pagination: { total, page, limit: pageListing.limit, totalPages },
   });
 });
 
 router.get('/events/featured', async (req, res) => {
-  const events = await listAllPublicEvents();
-  return res.json({ data: events.slice(0, 6) });
+  const listing = buildPublicEventListingQuery({ filter: 'featured', sort: 'upcoming', limit: 6 });
+  const [rows] = await databaseFor(req).query(
+    `${publicEventSelect} ${listing.where} ORDER BY ${listing.orderBy} LIMIT ?`,
+    [...listing.params, listing.limit],
+  );
+  return res.json({ data: rows.map(mapDatabaseEvent) });
 });
 
-router.get('/events/categories', async (req, res) => {
-  const [rows] = await pool.query(
-    `SELECT event_type, COUNT(*) AS total
-     FROM events
-     WHERE start_date >= CURDATE() AND status IN ('active', 'published', 'upcoming', 'open')
-     GROUP BY event_type
-     ORDER BY event_type ASC`
-  );
+router.get('/events/categories', asyncHandler(async (req, res) => {
+  const [rows] = await databaseFor(req).query(buildPublicEventCategoriesQuery());
   return res.json({
-    data: rows.filter((row) => isValidCategoryName(row.event_type)).map((row) => ({
-      id: row.event_type,
-      name: row.event_type,
-      slug: String(row.event_type || '').toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-      total: Number(row.total),
+    data: rows.filter((row) => isValidCategoryName(row.name)).map((row) => ({
+      id: Number(row.id),
+      name: row.name,
+      slug: String(row.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      description: row.description || '',
+      image: row.image_mime ? `/api/platform/categories/${Number(row.id)}/image` : null,
+      total: Number(row.total || 0),
+      displayOrder: Number(row.display_order),
     })),
   });
-});
+}));
+
+router.get('/events/popular-venues', asyncHandler(async (req, res) => {
+  const parsed = z.object({ limit: z.coerce.number().int().min(1).max(50).default(12) }).safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid venue listing limit.' });
+  const [rows] = await databaseFor(req).query(
+    `SELECT MIN(TRIM(e.venue)) AS name, MAX(e.city) AS city,
+            COUNT(DISTINCT e.id) AS event_count,
+            COALESCE(SUM(popularity.attendee_count), 0) AS attendee_count,
+            MAX(e.start_date) AS latest_event_date
+     FROM events e
+     LEFT JOIN (
+       SELECT event_id, SUM(quantity) AS attendee_count
+       FROM event_ticket_bookings
+       WHERE booking_status = 'confirmed'
+       GROUP BY event_id
+     ) popularity ON popularity.event_id = e.id
+     WHERE (e.status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
+       OR (e.status = 'completed' AND e.published_at IS NOT NULL))
+       AND e.venue IS NOT NULL AND TRIM(e.venue) <> ''
+     GROUP BY LOWER(TRIM(e.venue)), LOWER(COALESCE(e.city, ''))
+     ORDER BY attendee_count DESC, event_count DESC, name ASC
+     LIMIT ?`,
+    [parsed.data.limit],
+  );
+  return res.json({
+    data: rows.map((row) => ({
+      name: row.name,
+      city: row.city || null,
+      eventCount: Number(row.event_count || 0),
+      attendeeCount: Number(row.attendee_count || 0),
+      latestEventDate: row.latest_event_date || null,
+    })),
+  });
+}));
 
 router.get('/events/:id/related', async (req, res) => {
   const eventId = Number(req.params.id);
   if (!Number.isSafeInteger(eventId) || eventId < 1) return res.status(400).json({ error: 'Invalid event id.' });
   const [currentRows] = await pool.execute(
     `SELECT event_type, city FROM events
-     WHERE id = ? AND start_date >= NOW() AND status IN ('active', 'published', 'upcoming', 'open')
+     WHERE id = ? AND (status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
+       OR (status = 'completed' AND published_at IS NOT NULL))
      LIMIT 1`,
     [eventId]
   );
   if (!currentRows.length) return res.status(404).json({ error: 'Event not found.' });
   const [rows] = await pool.execute(
     `${publicEventSelect}
-     ${publicEventWhere} AND e.id <> ?
+     ${upcomingPublicEventWhere} AND e.id <> ?
        AND (LOWER(e.event_type) = LOWER(?) OR LOWER(COALESCE(e.city, '')) = LOWER(COALESCE(?, '')))
      ORDER BY CASE WHEN LOWER(e.event_type) = LOWER(?) THEN 0 ELSE 1 END, e.start_date ASC
      LIMIT 6`,
@@ -522,7 +683,8 @@ router.get('/events/:id/tickets', async (req, res) => {
   if (!Number.isSafeInteger(eventId) || eventId < 1) return res.status(400).json({ error: 'Invalid event id.' });
   const [eventRows] = await pool.execute(
     `SELECT id FROM events
-     WHERE id = ? AND start_date >= NOW() AND status IN ('active', 'published', 'upcoming', 'open')
+     WHERE id = ? AND (status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
+       OR (status = 'completed' AND published_at IS NOT NULL))
      LIMIT 1`,
     [eventId]
   );
@@ -1013,7 +1175,7 @@ router.patch('/events/:id/tickets/:ticketId', requirePlatformUser, async (req, r
 
 router.get('/ticket-bookings/mine', requirePlatformUser, async (req, res) => {
   if (req.platformUser.role !== 'customer') return res.status(403).json({ error: 'Customer access is required.' });
-  const [rows] = await pool.execute(
+  const [rows] = await databaseFor(req).execute(
     `SELECT b.id, b.booking_reference, b.quantity, b.unit_price, b.total_amount,
             b.payment_status, b.booking_status, b.created_at, b.event_id,
             e.title AS event_title, e.start_date, e.city, e.venue, tt.name AS ticket_name
@@ -1029,7 +1191,7 @@ router.get('/ticket-bookings/mine', requirePlatformUser, async (req, res) => {
 
 router.get('/ticket-bookings/:id', requirePlatformUser, async (req, res) => {
   if (req.platformUser.role !== 'customer') return res.status(403).json({ error: 'Customer access is required.' });
-  const [rows] = await pool.execute(
+  const [rows] = await databaseFor(req).execute(
     `SELECT b.id, b.booking_reference, b.quantity, b.unit_price, b.total_amount,
             b.payment_status, b.booking_status, b.created_at, b.event_id,
             e.title AS event_title, e.start_date, e.city, e.venue, tt.name AS ticket_name
@@ -1071,8 +1233,9 @@ router.post('/ticket-bookings', requirePlatformUser, async (req, res) => {
   }).safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid ticket booking.' });
   const { eventId, ticketTypeId, quantity, idempotencyKey } = parsed.data;
+  const database = databaseFor(req);
   try {
-    const bookingId = await inTransaction(async (connection) => {
+    const bookingId = await inDatabaseTransaction(database, async (connection) => {
       if (idempotencyKey) {
         const [existing] = await connection.execute(
           `SELECT id, customer_id FROM event_ticket_bookings WHERE idempotency_key = ? LIMIT 1`,
@@ -1153,17 +1316,50 @@ router.post('/ticket-bookings', requirePlatformUser, async (req, res) => {
       }
       const unitPrice = Number(ticket.price);
       const totalAmount = Number((unitPrice * quantity).toFixed(2));
+      const isFreeRegistration = unitPrice === 0;
+      if (isFreeRegistration) {
+        const [existingRegistrations] = await connection.execute(
+          `SELECT id FROM event_ticket_bookings
+           WHERE customer_id = ? AND event_id = ? AND unit_price = 0
+             AND booking_status = 'confirmed'
+           LIMIT 1 FOR UPDATE`,
+          [req.platformUser.id, eventId]
+        );
+        if (existingRegistrations.length) {
+          const error = new Error('You are already registered for this free event.');
+          error.status = 409;
+          throw error;
+        }
+      }
       const reference = `EVT-${randomBytes(6).toString('hex').toUpperCase()}`;
       const [result] = await connection.execute(
         `INSERT INTO event_ticket_bookings
            (booking_reference, idempotency_key, event_id, ticket_type_id, customer_id,
             quantity, unit_price, total_amount, payment_status, booking_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending_payment')`,
-        [reference, idempotencyKey || null, eventId, ticketTypeId, req.platformUser.id, quantity, unitPrice, totalAmount]
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          reference, idempotencyKey || null, eventId, ticketTypeId, req.platformUser.id,
+          quantity, unitPrice, totalAmount,
+          isFreeRegistration ? 'paid' : 'pending',
+          isFreeRegistration ? 'confirmed' : 'pending_payment',
+        ]
       );
+      if (isFreeRegistration) {
+        const [inventoryUpdate] = await connection.execute(
+          `UPDATE event_ticket_types
+           SET sold_quantity = sold_quantity + ?
+           WHERE id = ? AND event_id = ? AND sold_quantity + ? <= capacity`,
+          [quantity, ticketTypeId, eventId, quantity]
+        );
+        if (inventoryUpdate.affectedRows !== 1) {
+          const error = new Error('Not enough tickets are available.');
+          error.status = 409;
+          throw error;
+        }
+      }
       return Number(result.insertId);
     });
-    const [rows] = await pool.execute(
+    const [rows] = await database.execute(
       `SELECT b.id, b.booking_reference, b.quantity, b.unit_price, b.total_amount,
               b.payment_status, b.booking_status, b.created_at, b.event_id,
               e.title AS event_title, e.start_date, e.city, e.venue, tt.name AS ticket_name
@@ -1176,12 +1372,12 @@ router.post('/ticket-bookings', requirePlatformUser, async (req, res) => {
     return res.status(201).json({ data: mapTicketBooking(rows[0]) });
   } catch (error) {
     if (error?.code === 'ER_DUP_ENTRY' && idempotencyKey) {
-      const [rows] = await pool.execute(
+      const [rows] = await database.execute(
         `SELECT id, customer_id FROM event_ticket_bookings WHERE idempotency_key = ? LIMIT 1`,
         [idempotencyKey]
       );
       if (rows.length && Number(rows[0].customer_id) === Number(req.platformUser.id)) {
-        const [bookingRows] = await pool.execute(
+        const [bookingRows] = await database.execute(
           `SELECT b.id, b.booking_reference, b.quantity, b.unit_price, b.total_amount,
                   b.payment_status, b.booking_status, b.created_at, b.event_id,
                   e.title AS event_title, e.start_date, e.city, e.venue, tt.name AS ticket_name
@@ -1199,24 +1395,46 @@ router.post('/ticket-bookings', requirePlatformUser, async (req, res) => {
   }
 });
 
-router.patch('/ticket-bookings/:id/cancel', requirePlatformUser, async (req, res) => {
+router.patch('/ticket-bookings/:id/cancel', requirePlatformUser, asyncHandler(async (req, res) => {
   if (req.platformUser.role !== 'customer') return res.status(403).json({ error: 'Customer access is required.' });
-  const [rows] = await pool.execute(
-    `SELECT id, booking_status, payment_status FROM event_ticket_bookings
-     WHERE id = ? AND customer_id = ? LIMIT 1`,
-    [req.params.id, req.platformUser.id]
-  );
-  const booking = rows[0];
-  if (!booking) return res.status(404).json({ error: 'Booking not found.' });
-  if (booking.booking_status !== 'pending_payment' || booking.payment_status !== 'pending') {
-    return res.status(409).json({ error: 'Only unpaid pending bookings can be cancelled online.' });
-  }
-  await pool.execute(
-    `UPDATE event_ticket_bookings SET booking_status = 'cancelled' WHERE id = ? AND customer_id = ?`,
-    [booking.id, req.platformUser.id]
-  );
-  return res.json({ data: { id: Number(booking.id), bookingStatus: 'cancelled' } });
-});
+  const database = databaseFor(req);
+  const result = await inDatabaseTransaction(database, async (connection) => {
+    const [rows] = await connection.execute(
+      `SELECT b.id, b.event_id, b.ticket_type_id, b.quantity, b.unit_price,
+              b.booking_status, b.payment_status, e.start_date
+       FROM event_ticket_bookings b
+       JOIN events e ON e.id = b.event_id
+       WHERE b.id = ? AND b.customer_id = ? LIMIT 1 FOR UPDATE`,
+      [req.params.id, req.platformUser.id]
+    );
+    const booking = rows[0];
+    if (!booking) return { status: 404, error: 'Booking not found.' };
+    const isPendingReservation = booking.booking_status === 'pending_payment' && booking.payment_status === 'pending';
+    const isFreeRegistration = Number(booking.unit_price) === 0
+      && booking.booking_status === 'confirmed'
+      && booking.payment_status === 'paid'
+      && new Date(booking.start_date).getTime() > Date.now();
+    if (!isPendingReservation && !isFreeRegistration) {
+      return { status: 409, error: 'This booking can no longer be cancelled online.' };
+    }
+    const [update] = await connection.execute(
+      `UPDATE event_ticket_bookings SET booking_status = 'cancelled'
+       WHERE id = ? AND customer_id = ? AND booking_status = ?`,
+      [booking.id, req.platformUser.id, booking.booking_status]
+    );
+    if (update.affectedRows !== 1) return { status: 409, error: 'This booking can no longer be cancelled online.' };
+    if (isFreeRegistration) {
+      await connection.execute(
+        `UPDATE event_ticket_types SET sold_quantity = GREATEST(0, sold_quantity - ?)
+         WHERE id = ? AND event_id = ?`,
+        [booking.quantity, booking.ticket_type_id, booking.event_id]
+      );
+    }
+    return { data: { id: Number(booking.id), bookingStatus: 'cancelled' } };
+  });
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  return res.json({ data: result.data });
+}));
 
 router.get('/bookings', requirePlatformUser, async (req, res) => {
   const rows = await loadOwnedBookings(req.platformUser);
@@ -2029,7 +2247,7 @@ router.post('/logout', async (req, res) => {
 });
 
 router.get('/me', sessionCheckLimiter, optionalPlatformUser, asyncHandler(async (req, res) => {
-  if (!req.platformUser) return res.json({ data: { user: null } });
+  if (!req.platformUser) return res.json({ user: null });
   const profile = req.platformUser.role === 'vendor'
     ? await ensureVendorProfileRecord(req.platformUser.id, req.platformUser.full_name)
     : null;

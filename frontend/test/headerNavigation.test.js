@@ -24,11 +24,13 @@ test('navigation focus outline is focus-visible only, and open menus have a hove
 });
 
 test('About group headings, category visuals, and category empty states are accessible', () => {
-  assert.match(navigationSource, /translate\(child\.groupHeading, language\)/);
+  assert.match(navigationSource, /translate\(group\.heading, language\)/);
   assert.match(navigationSource, /public-nav-group-heading/);
   assert.match(navigationSource, /public-nav-category-icon/);
   assert.match(navigationSource, /public-nav-category-count/);
-  assert.match(navigationSource, /child\.icon && <img/);
+  assert.match(navigationSource, /typeof child\.icon === 'function' \|\| typeof child\.icon === 'object'/);
+  assert.match(navigationSource, /eventCategoryIcons/);
+  assert.match(navigationSource, /typeof child\.icon === 'string' && <img/);
   assert.match(navigationSource, /item\.emptyMessage && !item\.children\.some\(\(child\) => child\.database\)/);
   assert.match(navigationSource, /navigationRecentlyViewedSaveFailed/);
 });

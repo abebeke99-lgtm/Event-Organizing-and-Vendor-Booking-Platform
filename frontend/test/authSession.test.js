@@ -57,6 +57,25 @@ test('401 responses resolve to an anonymous state without inventing a user', asy
   assert.equal(platformCalls, 1);
 });
 
+test('guest bootstrap skips the platform session request when no session hint exists', async () => {
+  let platformCalls = 0;
+  const loader = createAuthSessionLoader({
+    async getAdminSession() {
+      return { user: null };
+    },
+    async getPlatformSession() {
+      platformCalls += 1;
+      return { data: { user: null } };
+    },
+    hasPlatformSession: () => false,
+  });
+
+  const result = await loader.load();
+
+  assert.deepEqual(result, { status: 'unauthenticated', user: null, role: null });
+  assert.equal(platformCalls, 0);
+});
+
 test('a valid platform session is loaded after the expected administrator 401', async () => {
   const loader = createAuthSessionLoader({
     async getAdminSession() {
@@ -75,6 +94,7 @@ test('a valid platform session is loaded after the expected administrator 401', 
 });
 
 test('an invalid session cookie returns to the unauthenticated state', async () => {
+  let clearedSessions = 0;
   const loader = createAuthSessionLoader({
     async getAdminSession() {
       return { user: null };
@@ -82,11 +102,16 @@ test('an invalid session cookie returns to the unauthenticated state', async () 
     async getPlatformSession() {
       throw httpError(401);
     },
+    hasPlatformSession: () => true,
+    clearPlatformSession() {
+      clearedSessions += 1;
+    },
   });
 
   const result = await loader.load();
 
   assert.deepEqual(result, { status: 'unauthenticated', user: null, role: null });
+  assert.equal(clearedSessions, 1);
 });
 
 test('429 responses honor Retry-After and do not retry before the cooldown expires', async () => {

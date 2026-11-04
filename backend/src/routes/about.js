@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { inTransaction, pool } from '../db.js';
 import { buildAboutPagePayload, normalizeAboutRecord } from '../lib/aboutContent.js';
 import { loadPublicMarketplace } from '../lib/marketplace.js';
+import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const publicRouter = Router();
 const adminRouter = Router();
@@ -31,8 +32,8 @@ const aboutSchema = z.object({
   is_published: z.boolean().optional(),
 }).strict();
 
-async function loadAboutContent() {
-  const [rows] = await pool.execute(
+async function loadAboutContent(database) {
+  const [rows] = await database.execute(
     'SELECT * FROM site_content WHERE page_key = ? ORDER BY updated_at DESC LIMIT 1',
     ['about_us']
   );
@@ -44,30 +45,56 @@ async function loadAboutContent() {
   }
 }
 
-async function loadAboutCatalog() {
-  const marketplace = await loadPublicMarketplace();
-  const [bookingRows] = await pool.query('SELECT status FROM bookings');
+async function loadAboutCatalog(database) {
+  const [marketplace, [bookingRows], [testimonialRows]] = await Promise.all([
+    loadPublicMarketplace(database),
+    database.query("SELECT status FROM bookings WHERE status = 'completed'"),
+    database.query(`
+      SELECT r.id, r.rating, r.comment, r.status, r.created_at,
+             vp.business_name AS vendor_name,
+             COALESCE(s.title, b.service_description) AS service_name
+      FROM reviews r
+      JOIN bookings b ON b.id = r.booking_id
+      JOIN vendor_profiles vp ON vp.id = b.vendor_id AND vp.verification_status = 'verified'
+      JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+      LEFT JOIN services s ON s.id = b.service_id AND s.status = 'active'
+      WHERE r.status = 'published' AND r.comment IS NOT NULL AND TRIM(r.comment) <> ''
+      ORDER BY r.created_at DESC, r.id DESC
+      LIMIT 12
+    `),
+  ]);
   return {
     categories: marketplace.categories,
     vendors: marketplace.vendors,
     services: marketplace.services,
     bookings: bookingRows,
+    testimonials: testimonialRows.map((row) => ({
+      id: Number(row.id),
+      rating: Number(row.rating),
+      comment: row.comment,
+      status: row.status,
+      vendorName: row.vendor_name,
+      serviceName: row.service_name,
+      createdAt: row.created_at,
+    })),
   };
 }
 
-publicRouter.get('/', async (req, res) => {
-  const [content, catalog] = await Promise.all([loadAboutContent(), loadAboutCatalog()]);
+publicRouter.get('/', asyncHandler(async (req, res) => {
+  const database = req.app?.locals?.database || pool;
+  const [content, catalog] = await Promise.all([loadAboutContent(database), loadAboutCatalog(database)]);
   return res.json({ success: true, data: buildAboutPagePayload(content || {}, catalog) });
-});
+}));
 
-publicRouter.get('/statistics', async (req, res) => {
-  const catalog = await loadAboutCatalog();
+publicRouter.get('/statistics', asyncHandler(async (req, res) => {
+  const catalog = await loadAboutCatalog(req.app?.locals?.database || pool);
   const payload = buildAboutPagePayload({}, catalog);
   return res.json({ success: true, data: payload.statistics });
-});
+}));
 
-publicRouter.get('/homepage-statistics', async (req, res) => {
-  const [rows] = await pool.query(`
+publicRouter.get('/homepage-statistics', asyncHandler(async (req, res) => {
+  const database = req.app?.locals?.database || pool;
+  const [rows] = await database.query(`
     SELECT
       (
         SELECT ROUND(AVG(r.rating), 1)
@@ -101,10 +128,10 @@ publicRouter.get('/homepage-statistics', async (req, res) => {
   `);
   res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
   return res.json({ success: true, data: rows[0] });
-});
+}));
 
-adminRouter.get('/', async (req, res) => {
-  const [rows] = await pool.execute(
+adminRouter.get('/', asyncHandler(async (req, res) => {
+  const [rows] = await (req.app?.locals?.database || pool).execute(
     'SELECT * FROM site_content WHERE page_key = ? ORDER BY updated_at DESC LIMIT 1',
     ['about_us']
   );
@@ -117,9 +144,9 @@ adminRouter.get('/', async (req, res) => {
     }
   }
   return res.json({ success: true, data: normalizeAboutRecord(record) });
-});
+}));
 
-adminRouter.put('/', async (req, res) => {
+adminRouter.put('/', asyncHandler(async (req, res) => {
   const parsed = aboutSchema.safeParse(req.body || {});
   if (!parsed.success) {
     return res.status(400).json({ error: 'About Us content is invalid.', details: parsed.error.issues });
@@ -143,7 +170,7 @@ adminRouter.put('/', async (req, res) => {
   });
 
   return res.json({ success: true, data: normalised, message: 'About Us content saved successfully.' });
-});
+}));
 
 export { adminRouter };
 export default publicRouter;

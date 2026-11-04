@@ -1840,7 +1840,7 @@ router.get('/vendor-verification', requirePermission('vendors.verify'), async (r
     );
     const [rows] = await database.execute(
       `SELECT vp.id, vp.user_id, vp.business_name, vp.category_id, sc.name AS category_name,
-              vp.city, vp.description, vp.verification_status, vp.verification_reason,
+              vp.city, vp.description, vp.verification_status, vp.is_featured, vp.verification_reason,
               vp.verified_at, vp.created_at, u.full_name AS owner_name, u.email, u.phone,
               (SELECT COUNT(*) FROM vendor_verification_documents d WHERE d.vendor_id = vp.id) AS document_count
        FROM vendor_profiles vp
@@ -1881,7 +1881,7 @@ router.get('/vendor-verification/:id', requirePermission('vendors.verify'), asyn
   try {
     const [[vendor]] = await database.execute(
       `SELECT vp.id, vp.user_id, vp.business_name, vp.category_id, sc.name AS category_name,
-              vp.city, vp.description, vp.verification_status, vp.verification_reason,
+              vp.city, vp.description, vp.verification_status, vp.is_featured, vp.verification_reason,
               vp.verified_at, vp.created_at, u.full_name AS owner_name, u.email, u.phone
        FROM vendor_profiles vp
        JOIN users u ON u.id = vp.user_id
@@ -1953,6 +1953,44 @@ router.patch('/vendor-verification/:id/status', requirePermission('vendors.verif
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
     next(error);
+  }
+});
+
+router.patch('/vendors/:id/featured', requirePermission('vendors.verify'), async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  const parsed = z.object({ is_featured: z.boolean() }).strict().safeParse(req.body);
+  if (!id.success || !parsed.success) {
+    return res.status(400).json({ error: 'Provide a valid vendor ID and featured status.' });
+  }
+  const database = getDatabase(req);
+  try {
+    const result = await inDatabaseTransaction(database, async (connection) => {
+      const [[vendor]] = await connection.execute(
+        'SELECT id, verification_status, is_featured FROM vendor_profiles WHERE id = ? FOR UPDATE',
+        [id.data],
+      );
+      if (!vendor) throw Object.assign(new Error('Vendor not found.'), { status: 404 });
+      if (parsed.data.is_featured && vendor.verification_status !== 'verified') {
+        throw Object.assign(new Error('Only verified vendors can be featured.'), { status: 409 });
+      }
+      await connection.execute(
+        'UPDATE vendor_profiles SET is_featured = ? WHERE id = ?',
+        [parsed.data.is_featured, id.data],
+      );
+      await writeAudit(connection, {
+        actorId: req.admin.id,
+        action: parsed.data.is_featured ? 'vendor.featured' : 'vendor.unfeatured',
+        entityType: 'vendor',
+        entityId: id.data,
+        details: { is_featured: parsed.data.is_featured },
+        ip: req.ip,
+      });
+      return { id: id.data, is_featured: parsed.data.is_featured };
+    });
+    return res.json({ data: result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    return next(error);
   }
 });
 
@@ -2597,7 +2635,7 @@ router.get('/events', async (req, res, next) => {
     const [rows] = await database.execute(
       `SELECT e.id, e.organizer_id, e.title, e.event_type, e.description, e.city, e.venue,
               e.cover_image_url, e.gallery_images, e.start_date, e.end_date, e.budget,
-              e.guest_count, e.capacity, e.status, e.rejection_reason, e.published_at, e.notes,
+              e.guest_count, e.capacity, e.status, e.rejection_reason, e.published_at, e.is_featured, e.notes,
               e.created_at, u.full_name AS organizer_name, u.email AS organizer_email,
               COALESCE((SELECT COUNT(*) FROM bookings b WHERE b.event_id = e.id), 0)
                 + COALESCE((SELECT COUNT(*) FROM event_ticket_bookings etb WHERE etb.event_id = e.id), 0) AS booking_count,
@@ -2767,7 +2805,7 @@ router.patch('/events/:id', async (req, res, next) => {
   try {
     await inDatabaseTransaction(database, async (connection) => {
       const [[event]] = await connection.execute(
-        `SELECT id, organizer_id, title, status, start_date, end_date, capacity
+        `SELECT id, organizer_id, title, status, start_date, end_date, capacity, is_featured
          FROM events WHERE id = ? FOR UPDATE`,
         [id.data],
       );

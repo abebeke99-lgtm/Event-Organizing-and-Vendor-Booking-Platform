@@ -98,7 +98,8 @@ router.use((req, res, next) => {
 });
 
 const customerBookingSelect = `
-  SELECT b.id, b.event_id, b.vendor_id, b.service_description, b.quoted_amount, b.currency,
+  SELECT b.id, b.event_id, b.vendor_id, b.service_description, b.quoted_amount,
+         COALESCE(NULLIF(TRIM(b.currency), ''), 'ETB') AS currency,
          b.status, b.moderation_reason, b.created_at,
          e.title AS event_title, DATE_FORMAT(e.start_date, '%Y-%m-%d') AS event_start_date,
          u.full_name AS customer_name, vp.business_name AS vendor_name
@@ -196,6 +197,7 @@ getRoute('/history', async (req, res) => {
 getRoute('/events', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
         `SELECT id, title, event_type, description, city, venue, cover_image_url, start_date,
+          'ETB' AS currency,
           end_date, budget, guest_count, capacity, notes, status
      FROM events WHERE organizer_id = ? ORDER BY start_date DESC`,
     [req.platformUser.id]
@@ -215,6 +217,7 @@ getRoute('/events', async (req, res) => {
     budget: row.budget === null ? null : Number(row.budget),
     guestCount: row.guest_count === null ? null : Number(row.guest_count),
     capacity: row.capacity === null ? null : Number(row.capacity),
+    currency: row.currency || 'ETB',
     notes: row.notes || '',
     status: row.status,
   })));
@@ -278,7 +281,8 @@ deletePermissionRoute('/favorites/:vendorId', 'favorites.manage_own', async (req
 
 getPermissionRoute('/saved-services', 'favorites.manage_own', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT s.id, s.title, s.description, s.price, s.currency, vp.business_name,
+    `SELECT s.id, s.title, s.description, s.price,
+            COALESCE(NULLIF(TRIM(s.currency), ''), 'ETB') AS currency, vp.business_name,
             vp.city, sc.name AS category, s.status
      FROM customer_service_favorites f
      JOIN services s ON s.id = f.service_id
@@ -336,7 +340,8 @@ deletePermissionRoute('/saved-services/:serviceId', 'favorites.manage_own', asyn
 
 getRoute('/quotations', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT q.id, q.vendor_id, q.event_id, q.service_id, q.service_description, q.amount, q.currency,
+    `SELECT q.id, q.vendor_id, q.event_id, q.service_id, q.service_description, q.amount,
+            COALESCE(NULLIF(TRIM(q.currency), ''), 'ETB') AS currency,
             q.status, q.valid_until, q.requested_event_name, q.requested_date, q.requested_location,
             q.guest_count, q.budget, q.requested_event_type, q.requested_phone,
             q.required_services, q.additional_requirements, q.request_message,
@@ -432,7 +437,9 @@ patchRoute('/quotations/:id/decision', async (req, res) => {
 
 getRoute('/payments', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT p.id, p.booking_id, p.amount, p.currency, p.provider, p.provider_reference,
+    `SELECT p.id, p.booking_id, p.amount,
+            COALESCE(NULLIF(TRIM(p.currency), ''), 'ETB') AS currency,
+            p.provider, p.provider_reference,
             p.status, p.created_at, b.service_description, e.title AS event_title
      FROM payments p
      JOIN bookings b ON b.id = p.booking_id
@@ -457,7 +464,8 @@ getRoute('/payments', async (req, res) => {
 
 getRoute('/refunds', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT rr.id, rr.payment_id, rr.amount, rr.currency, rr.reason, rr.status,
+    `SELECT rr.id, rr.payment_id, rr.amount,
+            COALESCE(NULLIF(TRIM(rr.currency), ''), 'ETB') AS currency, rr.reason, rr.status,
             rr.decision_reason, rr.created_at, rr.decided_at, p.provider_reference
      FROM refund_requests rr
      JOIN payments p ON p.id = rr.payment_id
@@ -482,7 +490,8 @@ getRoute('/refunds', async (req, res) => {
 
 getRoute('/refunds', async (req, res) => {
   const [rows] = await databaseFor(req).execute(
-    `SELECT rr.id, rr.payment_id, rr.amount, rr.currency, rr.reason, rr.status,
+    `SELECT rr.id, rr.payment_id, rr.amount,
+            COALESCE(NULLIF(TRIM(rr.currency), ''), 'ETB') AS currency, rr.reason, rr.status,
             rr.decision_reason, rr.created_at, rr.decided_at, p.provider_reference
      FROM refund_requests rr
      JOIN payments p ON p.id = rr.payment_id

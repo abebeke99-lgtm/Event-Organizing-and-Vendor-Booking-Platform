@@ -83,8 +83,8 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
 - Set `VITE_API_URL` in Netlify to the Render API origin only (no `/api` suffix or trailing slash). It is a public build-time setting, not a secret. The client appends `/api` and sends credentialed requests.
-- Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to the official profile URLs in Netlify, Vercel, or your frontend host's build environment. These are public build-time values. Redeploy after setting or changing them; do not enter credentials in profile URLs.
-- Optionally set `VITE_CONTACT_PHONE` and `VITE_CONTACT_ADDRESS` in the frontend build environment to show phone and location in the top contact bar. The phone is rendered as a `tel:` link and the address as plain text; leave either value empty to hide that item. For local development, set them in `frontend/.env.development`.
+- Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
+- Optionally set `VITE_CONTACT_PHONE` in the frontend build environment to show a `tel:` link in the public top bar; leave it empty to hide the phone. For local development, set these values in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
 - After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.
 
@@ -98,6 +98,104 @@ Run `.\scripts\check-deploy.ps1` from PowerShell to print live endpoint status c
 | Netlify bundle is stale | Wrong branch/repository, failed build, or old deploy still published | Verify deployed commit/build logs and run **Clear cache and deploy site** |
 
 Do not initialize or migrate the production database as part of deployment without reviewing the SQL and verifying a backup.
+
+## Find Vendors Dropdown Menu
+
+The public **Find Vendors** menu provides a direct link to the complete vendor directory and a database-backed list of active vendor categories. Category entries include the number of public, verified, active vendors (including zero-count categories) and link to a slug-filtered directory. The menu supports keyboard navigation, outside-click and route-change closure, mobile navigation, loading/error states, and a short category cache that refreshes when the browser regains focus.
+
+### Menu items and routes
+
+- **Browse Vendors** → `/vendors`
+- **Vendor category** → `/vendors?category=<slug>`; the directory selects the category and requests matching vendors from the backend.
+
+### API endpoints
+
+`GET /api/platform/categories` returns every active category alphabetically. Its `categories` field is the current shape; `data` is retained as a compatibility alias for existing consumers.
+
+```sh
+curl.exe "http://localhost:4000/api/platform/categories"
+```
+
+Example response:
+
+```json
+{
+  "categories": [
+    {
+      "id": 3,
+      "name": "Photography",
+      "slug": "photography",
+      "description": "",
+      "icon": null,
+      "image": null,
+      "isActive": true,
+      "displayOrder": 0,
+      "vendor_count": 12,
+      "vendorCount": 12,
+      "serviceCount": 8
+    }
+  ],
+  "data": [
+    {
+      "id": 3,
+      "name": "Photography",
+      "slug": "photography",
+      "description": "",
+      "icon": null,
+      "image": null,
+      "isActive": true,
+      "displayOrder": 0,
+      "vendor_count": 12,
+      "vendorCount": 12,
+      "serviceCount": 8
+    }
+  ]
+}
+```
+
+`GET /api/platform/vendors` supports search, category slug, location, price, rating, availability, sorting, and pagination. For example:
+
+```sh
+curl.exe "http://localhost:4000/api/platform/vendors?category=photography&page=1&limit=12"
+```
+
+### Database and seed data
+
+The public menu reuses existing tables; it does not add category or vendor tables.
+
+- `service_categories`: `id`, `name`, `description`, `display_order`, `image`, `image_mime`, and `is_active`.
+- `vendor_profiles`: `id`, `user_id`, `category_id`, `business_name`, and `verification_status`. The `category_id` foreign key connects a profile to `service_categories`.
+- `users`: `id` and `status`; public vendor counts include only `active` users with `verified` profiles.
+- `services`: active service records provide the existing service count shown to other marketplace consumers.
+
+The idempotent development seed adds any missing defaults—Photography and Videography, Catering, Decoration and Flowers, Venues and Halls, Music and DJ, Sound and Lighting, Makeup and Beauty, Wedding Cars and Transport, Event Planners, Tents and Furniture Rental, Cake and Bakery, and Security Services—and two uniquely named active, verified sample vendor profiles per active default category. It preserves existing category IDs, vendor records, and relationships. Sample login emails use the reserved `example.invalid` domain; the seed is restricted to the configured local XAMPP `event_platform` development database. The database enum values are checked before inserts (`users.status = active`; `vendor_profiles.verification_status = verified`).
+
+Run from the repository root in PowerShell:
+
+```powershell
+$env:NODE_ENV = 'development'
+npm --prefix backend run seed:vendor-menu
+```
+
+### Frontend files
+
+- `frontend/src/PublicNavigation.jsx` loads and caches public categories.
+- `frontend/src/VendorsMenu.jsx` renders the accessible, responsive vendor menu.
+- `frontend/src/publicNavigationUtils.js` builds category slugs, links, and counts.
+- `frontend/src/App.jsx` reads the category slug and connects it to the real vendor directory API.
+
+### Adding a category
+
+Use the existing Administrator Category Management to create or update a `service_categories` record. Keep it active to show it in the public menu. Existing category IDs and vendor-profile relationships remain unchanged. The menu refreshes the category cache (30 seconds) when revisited or when the browser window regains focus.
+
+### Testing checklist
+
+- Confirm `GET /api/platform/categories` returns active categories sorted by name, including categories with `vendor_count: 0`.
+- Confirm inactive categories are absent and an empty category table returns `{ "categories": [], "data": [] }`.
+- Click Browse Vendors and every category link; verify the URL uses the category slug and the selected filter remains set after refresh.
+- Verify search and other directory filters still use `/api/platform/vendors` and that no-match results show the directory empty state.
+- Test keyboard Tab/Enter/Space/Arrow/Escape navigation, outside click, route change, and desktop/mobile layouts.
+- Run `npm --prefix backend test`, `npm --prefix frontend test`, and `npm --prefix frontend run build`.
 
 ## 6. Business Rules and Security
 
@@ -220,20 +318,21 @@ Ticket reservations are held for 15 minutes and remain `pending_payment`; no pay
 
 ### Contact Support
 
-The public contact form submits to `POST /api/contact`; `GET /api/contact` returns configured support details and the FAQ. Submissions are rate-limited and stored in `contact_messages`. Administrators can search and filter the inbox with `GET /api/admin/contact`, update message status with `PATCH /api/admin/contact/:id/status`, and delete a message with `DELETE /api/admin/contact/:id`. These inbox routes require an administrator session.
+The public contact form submits to `POST /api/contact`; `GET /api/contact` returns configured support details and the FAQ. Submissions are rate-limited, sanitized, stored in `contact_messages`, and assigned a random public reference. Administrator and customer email delivery results are returned without rolling back saved messages. Administrators can search and filter the inbox with `GET /api/admin/contact`, update status and reply with `PATCH /api/admin/contact/:id/status`, mark messages read or unread with `PATCH /api/admin/contact/:id/read`, archive or restore with `PATCH /api/admin/contact/:id/archive`, and delete a message with `DELETE /api/admin/contact/:id`. These inbox routes require an administrator session.
 
-Apply `007_contact_inquiry_types.sql` with `npm run migrate` to enable the full inquiry type list and resolved status. Configure actual support contact details in `system_settings` (`support_email`, `support_phone`, `support_address`, `support_hours`, and `social_links`); unconfigured details are not shown publicly.
+Apply `007_contact_inquiry_types.sql` and `036_public_contact_details.sql` with `npm run migrate` to enable the full inquiry type list, resolved status, and the configured public support email, phone, and social links. Migration 036 fills only empty contact settings, preserving values already customized by an administrator. Address and business hours remain unset until provided.
 
-The public footer displays the contact email `abebeke99@gmail.com` as a mail link. Telegram, YouTube, Facebook, and LinkedIn icons appear only for configured profile URLs; if none are configured, the footer displays a setup notice. Set the following Vite environment variables in `frontend/.env.development` for local work or in the frontend host's build environment for deployment. The empty values in `frontend/.env.example` are placeholders:
+The public top bar displays `abebeke99@gmail.com` as a mail link, `+251986481821` as a telephone link, and the configured Telegram, YouTube, Facebook, and LinkedIn profiles. Profile URLs must use HTTPS and the expected platform host. The same contact details appear on the Contact page after migration 036 is applied. These Vite values configure the top bar and do not change the footer's current output. Set the following Vite environment variables in `frontend/.env.development` for local work or in the frontend host's build environment before building for deployment; Vite reads env files only at startup:
 
 ```env
-VITE_TELEGRAM_URL=https://t.me/<channel>
-VITE_YOUTUBE_URL=https://youtube.com/@<channel>
-VITE_FACEBOOK_URL=https://facebook.com/<page>
-VITE_LINKEDIN_URL=https://linkedin.com/company/<page>
+VITE_TELEGRAM_URL=https://t.me/your-channel
+VITE_YOUTUBE_URL=https://youtube.com/@your-channel
+VITE_FACEBOOK_URL=https://facebook.com/your-page
+VITE_LINKEDIN_URL=https://linkedin.com/company/your-page
+VITE_CONTACT_PHONE=+251986481821
 ```
 
-Use only confirmed official EventHub profile URLs. Values must use HTTPS and the matching platform host; profile root URLs are ignored. These URLs are public and included in the frontend bundle, so do not put credentials in them.
+For deployment, set these values in the frontend host's build environment and rebuild/redeploy; changing them after the build does not update the frontend. These values are public and included in the frontend bundle, so do not put credentials in them.
 
 ### Payment and refund management
 
