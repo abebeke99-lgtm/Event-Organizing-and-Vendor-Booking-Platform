@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { generateSecurePassword, validateCreateUserForm } from '../src/adminUserManagementUtils.js';
+import { validateCreateUserForm } from '../src/adminUserManagementUtils.js';
+import { translate } from '../src/language.js';
 
 const key = (value) => value;
 const validForm = {
@@ -38,11 +39,17 @@ test('create-user validation accepts an optional phone and backend-compatible pa
   assert.deepEqual(validateCreateUserForm({ ...validForm, phone: '' }, key), {});
 });
 
-test('secure password generation satisfies the backend password policy', () => {
-  const password = generateSecurePassword();
-  assert.equal(password.length, 52);
-  assert.match(password, /[A-Z]/);
-  assert.match(password, /[a-z]/);
-  assert.match(password, /\d/);
-  assert.notEqual(password, generateSecurePassword());
+test('weak passwords retain clear localized validation errors', () => {
+  for (const password of ['weak', 'alllowercasepassword123', 'ALLUPPERCASEPASSWORD123', 'NoDigitsPasswordHere', `${'A'.repeat(127)}a1`]) {
+    const errors = validateCreateUserForm({ ...validForm, password, confirm_password: password }, (key) => translate(key, 'en'));
+    assert.match(errors.password, /at least 16 characters/i);
+    assert.match(errors.password, /uppercase/i);
+    assert.match(errors.password, /lowercase/i);
+    assert.match(errors.password, /number/i);
+  }
+
+  const amharicErrors = validateCreateUserForm({ ...validForm, password: 'weak', confirm_password: 'weak' }, (key) => translate(key, 'am'));
+  assert.match(amharicErrors.password, /16/);
+  assert.match(amharicErrors.password, /128/);
+  assert.ok(amharicErrors.password.length > 0);
 });

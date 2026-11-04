@@ -17,6 +17,7 @@ import { adminSystemSettingsMessages } from './i18n/modules/adminSystemSettings.
 import { publicMarketplaceMessages } from './i18n/modules/publicMarketplace.js';
 import { appDashboardMessages } from './i18n/modules/appDashboard.js';
 import { runtimeMessages } from './i18n/modules/runtimeMessages.js';
+import { heroSlidesMessages } from './i18n/modules/heroSlides.js';
 
 const messages = {
   en: {
@@ -26,6 +27,11 @@ const messages = {
     servicesNav: "Services",
     categoriesNav: "Categories",
     aboutUsNav: "About Us",
+    aboutEventHub: "About EventHub",
+    aboutUsMenu: "About Us menu",
+    publicNavAboutGroup: "About",
+    publicNavSupportGroup: "Support",
+    publicNavLegalGroup: "Legal",
     contactUsNav: "Contact Us",
     languagePreferenceSaveFailed: "Your language preference could not be saved. It will remain selected on this device.",
     login: "Login",
@@ -60,6 +66,14 @@ const messages = {
     footerDescription: "One trusted marketplace for event planning, vendor discovery, booking coordination, and service fulfilment.",
     socialLinksUnconfigured: "Official social profile links are not configured yet.",
     socialProfileUnconfigured: "official profile not configured",
+    topBarEmail: "Email",
+    topBarWorkingHours: "Working hours",
+    topBarWorkingDays: "Mon - Saturday",
+    topBarPhone: "Phone",
+    topBarAddress: "Address",
+    topBarContactInfo: "Contact information",
+    topBarSocialLinks: "Social media links",
+    eventHubOn: "EventHub on",
     telegram: "Telegram",
     youtube: "YouTube",
     facebook: "Facebook",
@@ -92,6 +106,16 @@ const messages = {
     closeMenu: "Close navigation menu",
     search: "Search",
     notifications: "Notifications",
+    unread: "unread",
+    allCaughtUp: "You’re all caught up.",
+    notificationsLoading: "Loading notifications…",
+    notificationUpdateFailed: "The notification could not be updated.",
+    markAsRead: "Mark as read",
+    markAllAsRead: "Mark all as read",
+    viewAllNotifications: "View all",
+    searchLoading: "Searching…",
+    searchNoResults: "No suggestions found.",
+    searchFailed: "Search suggestions could not be loaded.",
     logout: "Logout",
     confirmLogout: "Are you sure you want to log out?",
     logoutFailed: "Logout could not be completed. Please try again.",
@@ -420,9 +444,8 @@ const messages = {
     sending: "Sending…",
     sendInquiry: "Send Message",
     followUs: "Follow Us",
-    footerCopyright: "© 2027 EventHub. All Rights Reserved.",
+    footerCopyright: "{year} EventHub. All Rights Reserved.",
     footerDeveloper: "Developed by Bekele Abebe",
-    footerDesignCredit: "Designed & Developed with ❤️",
     office: "Office",
     supportHours: "Support hours",
     platformCurrency: "Platform currency (ISO 4217)",
@@ -844,6 +867,7 @@ const messages = {
     ...adminVendorVerificationMessages.en,
     ...adminSystemSettingsMessages.en,
     ...publicMarketplaceMessages.en,
+    ...heroSlidesMessages.en,
     ...appDashboardMessages.en,
     ...runtimeMessages.en,
   },
@@ -854,6 +878,11 @@ const messages = {
     servicesNav: "አገልግሎቶች",
     categoriesNav: "ምድቦች",
     aboutUsNav: "ስለ እኛ",
+    aboutEventHub: "ስለ EventHub",
+    aboutUsMenu: "ስለ እኛ ምናሌ",
+    publicNavAboutGroup: "ስለ እኛ",
+    publicNavSupportGroup: "ድጋፍ",
+    publicNavLegalGroup: "ሕጋዊ",
     contactUsNav: "ያግኙን",
     languagePreferenceSaveFailed: "የቋንቋ ምርጫዎን ማስቀመጥ አልተቻለም። በዚህ መሣሪያ ላይ እንደተመረጠ ይቆያል።",
     login: "ግባ",
@@ -888,6 +917,14 @@ const messages = {
     footerDescription: "ለዝግጅት እቅድ፣ አገልግሎት ሰጪ ፍለጋ፣ ቦታ ማስያዝ እና አገልግሎት ማስተባበር የታመነ መድረክ።",
     socialLinksUnconfigured: "ይፋዊ የማህበራዊ ሚዲያ መገለጫ አገናኞች ገና አልተዋቀሩም።",
     socialProfileUnconfigured: "ይፋዊ መገለጫ ገና አልተዋቀረም",
+    topBarEmail: "ኢሜይል",
+    topBarWorkingHours: "የሥራ ሰዓት",
+    topBarWorkingDays: "ከሰኞ እስከ ቅዳሜ",
+    topBarPhone: "ስልክ",
+    topBarAddress: "አድራሻ",
+    topBarContactInfo: "የመገኛ መረጃ",
+    topBarSocialLinks: "የማህበራዊ ሚዲያ አገናኞች",
+    eventHubOn: "EventHub በ",
     telegram: "ቴሌግራም",
     youtube: "ዩቲዩብ",
     facebook: "ፌስቡክ",
@@ -920,6 +957,16 @@ const messages = {
     closeMenu: "የአሰሳ ምናሌን ዝጋ",
     search: "ፈልግ",
     notifications: "ማሳወቂያዎች",
+    unread: "ያልተነበቡ",
+    allCaughtUp: "ሁሉንም አንብበዋል።",
+    notificationsLoading: "ማሳወቂያዎች በመጫን ላይ…",
+    notificationUpdateFailed: "ማሳወቂያውን ማዘመን አልተቻለም።",
+    markAsRead: "እንደተነበበ ምልክት አድርግ",
+    markAllAsRead: "ሁሉንም እንደተነበቡ ምልክት አድርግ",
+    viewAllNotifications: "ሁሉንም ይመልከቱ",
+    searchLoading: "በመፈለግ ላይ…",
+    searchNoResults: "ምንም ውጤት አልተገኘም።",
+    searchFailed: "የፍለጋ ጥቆማዎችን መጫን አልተቻለም።",
     logout: "ውጣ",
     confirmLogout: "ከመለያዎ መውጣት ይፈልጋሉ?",
     logoutFailed: "መውጣት አልተቻለም። እባክዎ እንደገና ይሞክሩ።",
@@ -1242,9 +1289,8 @@ const messages = {
     sending: "በመላክ ላይ…",
     sendInquiry: "መልዕክት ይላኩ",
     followUs: "ይከታተሉን",
-    footerCopyright: "© 2027 EventHub. መብቱ በሕግ የተጠበቀ ነው።",
+    footerCopyright: "{year} EventHub. መብቱ በሕግ የተጠበቀ ነው።",
     footerDeveloper: "በBekele Abebe የተሰራ",
-    footerDesignCredit: "በፍቅር የተነደፈና የተገነባ።",
     office: "ቢሮ",
     supportHours: "የድጋፍ ሰዓት",
     platformCurrency: "የመድረክ ገንዘብ (ISO 4217)",
@@ -1672,6 +1718,7 @@ const messages = {
     ...adminVendorVerificationMessages.am,
     ...adminSystemSettingsMessages.am,
     ...publicMarketplaceMessages.am,
+    ...heroSlidesMessages.am,
     ...appDashboardMessages.am,
     ...runtimeMessages.am,
   },
@@ -1737,6 +1784,11 @@ export function useLanguage() {
 
 export function translate(key, selectedLanguage = getLanguage()) {
   return messages[selectedLanguage]?.[key] || messages.en[key] || key;
+}
+
+export function formatNotificationBadgeCount(count) {
+  const safeCount = Math.max(0, Math.floor(Number(count) || 0));
+  return safeCount > 99 ? '99+' : String(safeCount);
 }
 
 const englishMessageKeys = new Map(Object.entries(messages.en).map(([key, value]) => [value, key]));

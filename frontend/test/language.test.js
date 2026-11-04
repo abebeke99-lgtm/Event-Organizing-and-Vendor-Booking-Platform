@@ -24,6 +24,21 @@ test('footer social labels switch between English and Amharic', () => {
   );
 });
 
+test('navigation feature labels are translated in English and Amharic', () => {
+  assert.equal(translate('navigationEventCalendar', 'en'), 'Event Calendar');
+  assert.equal(translate('navigationCompareVendors', 'am'), 'አቅራቢዎችን ያወዳድሩ');
+  assert.equal(translate('navigationCustomerOnly', 'am'), 'ይህ ባህሪ ለደንበኛ መለያዎች ብቻ ይገኛል።');
+  assert.equal(translate('aboutUsMenu', 'am'), 'ስለ እኛ ምናሌ');
+  assert.equal(translateText('Help & Support', 'am'), 'እገዛ እና ድጋፍ');
+});
+
+test('footer attribution is translated without a copyright symbol or design credit', () => {
+  assert.equal(translate('footerCopyright', 'en'), '{year} EventHub. All Rights Reserved.');
+  assert.equal(translate('footerCopyright', 'am'), '{year} EventHub. መብቱ በሕግ የተጠበቀ ነው።');
+  assert.equal(translate('footerDeveloper', 'en'), 'Developed by Bekele Abebe');
+  assert.equal(translate('footerDeveloper', 'am'), 'በBekele Abebe የተሰራ');
+});
+
 test('translates exact interface phrases and falls back for missing keys', () => {
   assert.equal(translateText('Find Vendors', 'am'), 'አገልግሎት ሰጪዎችን ፈልግ');
   assert.equal(translate('adminUserFullName', 'en'), 'Full Name');
@@ -33,8 +48,8 @@ test('translates exact interface phrases and falls back for missing keys', () =>
   assert.equal(translate('adminUserConfirmPassword', 'en'), 'Confirm Password');
   assert.equal(translate('adminUserAccountType', 'en'), 'Account Type');
   assert.equal(translate('adminUserAccountStatus', 'en'), 'Account Status');
-  assert.equal(translate('adminUserGeneratePassword', 'en'), 'Generate Password');
-  assert.equal(translate('adminUserShowPassword', 'en'), 'Show Password');
+  assert.equal(translate('adminUserShowPassword', 'en'), 'Show password');
+  assert.equal(translate('adminUserHidePassword', 'en'), 'Hide password');
   assert.equal(translate('adminUserStatusSuspended', 'en'), 'Inactive');
   assert.equal(translate('adminUserCreateStatusSuspended', 'en'), 'Suspended');
   assert.equal(translate('adminUserFullName', 'am'), 'ሙሉ ስም');

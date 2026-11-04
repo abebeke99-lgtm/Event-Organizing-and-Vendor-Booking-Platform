@@ -50,3 +50,34 @@ export function getHomepageCategoryTranslationKey(name) {
   if (normalized.includes('transport')) return 'publicHomeTransportation';
   return null;
 }
+
+export function getHomepageLocationOptions(...recordGroups) {
+  const locationsByKey = new Map();
+  for (const records of recordGroups) {
+    if (!Array.isArray(records)) continue;
+    for (const record of records) {
+      const location = typeof record?.city === 'string' && record.city.trim()
+        ? record.city.trim()
+        : typeof record?.location === 'string'
+          ? record.location.trim()
+          : '';
+      if (location && !locationsByKey.has(location.toLocaleLowerCase())) {
+        locationsByKey.set(location.toLocaleLowerCase(), location);
+      }
+    }
+  }
+  return [...locationsByKey.values()].sort((left, right) => left.localeCompare(right));
+}
+
+export function buildHomepageSearchPath(query) {
+  const term = typeof query === 'string' ? query.trim() : '';
+  if (!term) return null;
+  const params = new URLSearchParams({ q: term });
+  return `/search?${params.toString()}`;
+}
+
+export function getHomepageSectionState({ loading, error, items }) {
+  if (loading) return 'loading';
+  if (error) return 'error';
+  return Array.isArray(items) && items.length ? 'populated' : 'empty';
+}

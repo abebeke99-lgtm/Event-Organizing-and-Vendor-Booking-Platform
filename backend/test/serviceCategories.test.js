@@ -27,11 +27,33 @@ function createDatabase() {
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
     },
+    {
+      id: 2,
+      name: 'sssssss',
+      description: 'Invalid legacy name',
+      display_order: 3,
+      image: null,
+      image_mime: null,
+      is_active: 1,
+      created_at: '2026-01-02T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+    },
+    {
+      id: 3,
+      name: 'Inactive category',
+      description: 'Inactive legacy name',
+      display_order: 4,
+      image: null,
+      image_mime: null,
+      is_active: 0,
+      created_at: '2026-01-03T00:00:00.000Z',
+      updated_at: '2026-01-03T00:00:00.000Z',
+    },
   ];
   const services = [{ id: 71, category_id: 1 }];
   const audit = [];
   const statements = [];
-  let nextId = 2;
+  let nextId = 4;
 
   async function execute(sql, values = []) {
     statements.push({ sql, values });
@@ -75,6 +97,12 @@ function createDatabase() {
     if (sql.startsWith('SELECT id, name, description, display_order FROM service_categories WHERE id = ? FOR UPDATE')) {
       const row = categories.find((category) => category.id === Number(values[0]));
       return [row ? [{ id: row.id, name: row.name, description: row.description, display_order: row.display_order }] : [], []];
+    }
+    if (sql.startsWith('SELECT id FROM service_categories')) {
+      const [name, excludeId] = values;
+      const row = categories.find((category) => category.name.toLowerCase() === String(name).toLowerCase()
+        && (excludeId === undefined || category.id !== Number(excludeId)));
+      return [row ? [{ id: row.id }] : [], []];
     }
     if (sql.startsWith('SELECT COUNT(*) AS service_count FROM services WHERE category_id = ?')) {
       return [[{ service_count: services.filter((service) => service.category_id === Number(values[0])).length }], []];
@@ -214,10 +242,16 @@ test('category API searches, sorts, filters, paginates, and reports linked servi
   assert.equal(response.status, 200);
   assert.equal(payload.data[0].name, 'Catering');
   assert.equal(payload.data[0].service_count, 1);
-  assert.equal(payload.pagination.total, 1);
+  assert.equal(payload.pagination.total, 2);
 
   const invalid = await request('/api/admin/categories?sortBy=unknown');
   assert.equal(invalid.response.status, 400);
+});
+
+test('public categories hide invalid legacy names while keeping valid active categories', async () => {
+  const { response, payload } = await request('/api/platform/categories');
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.data.map((category) => category.name), ['Catering']);
 });
 
 test('category CRUD enforces unique names and records field changes in history', async () => {
@@ -226,6 +260,15 @@ test('category CRUD enforces unique names and records field changes in history',
     body: JSON.stringify({ name: ' catering ', description: 'Duplicate', display_order: 1 }),
   });
   assert.equal(duplicate.response.status, 409);
+
+  for (const name of ['  ab  ', 'sssssss', '123', 'x'.repeat(61)]) {
+    const invalid = await request('/api/admin/categories', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+    assert.equal(invalid.response.status, 400, `Expected ${JSON.stringify(name)} to be rejected`);
+    assert.ok(invalid.payload.details?.some((detail) => detail.field === 'name'));
+  }
 
   const created = await request('/api/admin/categories', {
     method: 'POST',

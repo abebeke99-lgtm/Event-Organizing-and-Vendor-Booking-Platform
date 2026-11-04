@@ -17,6 +17,7 @@ import {
 } from '../lib/vendorVerificationDocuments.js';
 import { loadSystemSettings } from '../lib/systemSettings.js';
 import { isStrongPassword } from '../lib/authFlow.js';
+import { isValidCategoryName } from '../lib/categoryName.js';
 import { calculateDashboardSummary, createBookingSnapshot } from '../lib/bookingRules.js';
 import { getPublicEvents, listPublicEvents, mapDatabaseEvent, sanitizeText } from '../lib/eventCatalog.js';
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
@@ -486,7 +487,7 @@ router.get('/events/categories', async (req, res) => {
      ORDER BY event_type ASC`
   );
   return res.json({
-    data: rows.map((row) => ({
+    data: rows.filter((row) => isValidCategoryName(row.event_type)).map((row) => ({
       id: row.event_type,
       name: row.event_type,
       slug: String(row.event_type || '').toLowerCase().replace(/[^a-z0-9]+/g, '-'),

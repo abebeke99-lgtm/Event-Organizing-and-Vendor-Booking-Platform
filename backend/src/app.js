@@ -24,6 +24,7 @@ import paymentWebhookRoutes from './routes/paymentWebhook.js';
 import adminReportsRoutes from './routes/adminReports.js';
 import adminAuditLogRoutes from './routes/adminAuditLogs.js';
 import userAvatarRoutes from './routes/userAvatar.js';
+import heroSlidesRoutes, { adminRouter as adminHeroSlidesRoutes, requireHeroSlideAdmin } from './routes/heroSlides.js';
 import { requestContextMiddleware } from './lib/requestContext.js';
 import { localizationMiddleware } from './lib/localization.js';
 
@@ -45,11 +46,13 @@ export function createApp({
   otpHasher,
   otpVerifier,
   paymentProvider = null,
+  heroSlidesDirectory,
 } = {}) {
   const app = express();
   app.use(requestContextMiddleware);
   app.use(localizationMiddleware);
   app.locals.database = database;
+  app.locals.heroSlidesDirectory = heroSlidesDirectory;
   app.locals.passwordReset = { emailConfigured, emailSender, otpGenerator, otpHasher };
   app.locals.adminEmailChange = {
     emailConfigured: emailChangeEmailConfigured,
@@ -153,6 +156,7 @@ export function createApp({
   }));
   app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'), organizerRoutes);
   app.use('/api/platform', requirePlatformAvailable, platformRoutes);
+  app.use('/api/hero-slides', heroSlidesRoutes);
   app.use('/api/about', requirePlatformAvailable, aboutRoutes);
   app.use('/api/contact', requirePlatformAvailable, contactRoutes);
   app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), vendorRoutes);
@@ -169,6 +173,7 @@ export function createApp({
   app.use('/api/users/me/avatar', userAvatarRoutes);
   app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
   app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
+  app.use('/api/admin/hero-slides', requireHeroSlideAdmin, adminHeroSlidesRoutes);
   app.use('/api/admin', requireAdmin);
   app.use('/api/admin', adminAuditLogRoutes);
   app.use('/api/admin', adminPaymentRoutes);

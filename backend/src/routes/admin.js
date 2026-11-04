@@ -64,7 +64,11 @@ const adminEmailChangeRateLimit = createAuthRateLimiter({
   message: 'Too many email verification attempts. Try again later.',
 });
 const categoryFieldsSchema = z.object({
-  name: z.string().trim().min(1).max(120),
+  name: z.string().trim()
+    .min(3, 'Category name must be at least 3 characters.')
+    .max(60, 'Category name must be 60 characters or fewer.')
+    .refine((name) => /\p{L}/u.test(name), 'Category name must contain at least one letter.')
+    .refine((name) => !/(.)\1{3,}/u.test(name), 'Category name cannot contain more than 3 identical characters in a row.'),
   description: z.string().trim().max(500).nullable().optional(),
   display_order: z.coerce.number().int().min(0).max(100000).optional(),
 }).strict();
@@ -358,6 +362,18 @@ function sendError(res, error) {
     return res.status(409).json({ error: 'The change conflicts with related records.' });
   }
   throw error;
+}
+
+async function assertCategoryNameAvailable(database, name, excludeId) {
+  const [rows] = await database.execute(
+    `SELECT id FROM service_categories
+     WHERE LOWER(name) = LOWER(?)${excludeId ? ' AND id <> ?' : ''}
+     LIMIT 1`,
+    excludeId ? [name, excludeId] : [name],
+  );
+  if (rows.length) {
+    throw Object.assign(new Error('A category with this name already exists.'), { status: 409 });
+  }
 }
 
 function validBody(resource, body, creating = false) {
@@ -3058,6 +3074,7 @@ router.post('/categories', async (req, res, next) => {
   const { name, description = null, display_order = 0 } = parsed.data;
   try {
     const createdId = await inDatabaseTransaction(database, async (db) => {
+      await assertCategoryNameAvailable(db, name);
       const [result] = await db.execute(
         'INSERT INTO service_categories (name, description, display_order) VALUES (?, ?, ?)',
         [name, description || null, display_order],
@@ -3074,6 +3091,9 @@ router.post('/categories', async (req, res, next) => {
     });
     return res.status(201).json({ data: { id: createdId } });
   } catch (error) {
+    if (error?.status === 409 || error?.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ error: 'A category with this name already exists.' });
+    }
     try {
       return sendError(res, error);
     } catch (unhandled) {
@@ -3140,6 +3160,7 @@ router.patch('/categories/:id', async (req, res, next) => {
         [id.data],
       );
       if (!category) throw Object.assign(new Error('Category not found.'), { status: 404 });
+      if (parsed.data.name !== undefined) await assertCategoryNameAvailable(db, parsed.data.name, id.data);
       const before = Object.fromEntries(fields.map((field) => [field, category[field]]));
       const after = Object.fromEntries(fields.map((field) => [
         field,
@@ -3161,6 +3182,7 @@ router.patch('/categories/:id', async (req, res, next) => {
     return res.json({ data: { id: id.data } });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
+    if (error?.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A category with this name already exists.' });
     try {
       return sendError(res, error);
     } catch (unhandled) {

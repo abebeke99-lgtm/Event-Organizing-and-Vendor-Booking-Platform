@@ -16,6 +16,7 @@ export const ADMIN_DASHBOARD_SLUGS = Object.freeze([
   'audit-logs',
   'settings',
   'profile',
+  'hero-images',
   'account-settings',
 ]);
 

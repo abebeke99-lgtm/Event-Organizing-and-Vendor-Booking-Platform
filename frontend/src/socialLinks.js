@@ -1,11 +1,18 @@
 const socialPlatforms = [
-  { id: 'telegram', labelKey: 'telegram', environmentKey: 'VITE_EVENTHUB_TELEGRAM_URL', hosts: ['t.me', 'telegram.me'] },
-  { id: 'youtube', labelKey: 'youtube', environmentKey: 'VITE_EVENTHUB_YOUTUBE_URL', hosts: ['youtube.com', 'www.youtube.com', 'youtu.be', 'www.youtu.be'] },
-  { id: 'facebook', labelKey: 'facebook', environmentKey: 'VITE_EVENTHUB_FACEBOOK_URL', hosts: ['facebook.com', 'www.facebook.com'] },
-  { id: 'linkedin', labelKey: 'linkedin', environmentKey: 'VITE_EVENTHUB_LINKEDIN_URL', hosts: ['linkedin.com', 'www.linkedin.com'] },
+  { id: 'telegram', labelKey: 'telegram', environmentKey: 'VITE_TELEGRAM_URL', hosts: ['t.me'] },
+  { id: 'youtube', labelKey: 'youtube', environmentKey: 'VITE_YOUTUBE_URL', hosts: ['youtube.com'] },
+  { id: 'facebook', labelKey: 'facebook', environmentKey: 'VITE_FACEBOOK_URL', hosts: ['facebook.com'] },
+  { id: 'linkedin', labelKey: 'linkedin', environmentKey: 'VITE_LINKEDIN_URL', hosts: ['linkedin.com'] },
 ];
 
-export function getFooterSocialLinks(environment = import.meta.env ?? {}) {
+const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : {
+  VITE_TELEGRAM_URL: import.meta.env.VITE_TELEGRAM_URL,
+  VITE_YOUTUBE_URL: import.meta.env.VITE_YOUTUBE_URL,
+  VITE_FACEBOOK_URL: import.meta.env.VITE_FACEBOOK_URL,
+  VITE_LINKEDIN_URL: import.meta.env.VITE_LINKEDIN_URL,
+};
+
+export function getFooterSocialLinks(environment = viteEnvironment) {
   return socialPlatforms.map((platform) => {
     const url = environment[platform.environmentKey]?.trim();
     if (!url) return { id: platform.id, labelKey: platform.labelKey, url: null };

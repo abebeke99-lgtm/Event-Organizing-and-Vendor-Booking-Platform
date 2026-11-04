@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Eye, EyeOff, KeyRound, Pencil, Plus, Search, Shield, UserRound, X } from 'lucide-react';
 import apiClient from './api/axios.js';
 import { translate, translateText } from './language.js';
-import { generateSecurePassword, validateCreateUserForm } from './adminUserManagementUtils.js';
+import { validateCreateUserForm } from './adminUserManagementUtils.js';
 import './adminUserManagement.css';
 
 const emptyForm = { full_name: '', email: '', phone: '', role_id: '', password: '', confirm_password: '', status: 'active' };
@@ -34,13 +34,6 @@ function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors
   const t = (key) => translate(key);
   function showFieldError(field) {
     return errors[field] ? <small className="um-field-error" id={`um-error-${field}`} role="alert">{errors[field]}</small> : null;
-  }
-  function generateTemporaryPassword() {
-    const password = generateSecurePassword();
-    onChange('password', password);
-    onChange('confirm_password', password);
-    setPasswordVisible(true);
-    setConfirmPasswordVisible(true);
   }
   return (
     <div className="um-backdrop" role="presentation" onMouseDown={(event) => {
@@ -74,12 +67,8 @@ function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors
             <div className="field um-field">
               <label htmlFor="um-initial-password">{t('adminUserInitialPassword')}</label>
               <span className="um-password-input">
-                <input id="um-initial-password" required type={passwordVisible ? 'text' : 'password'} minLength={16} maxLength={128} autoComplete="new-password" placeholder={t('adminUserPasswordPlaceholder')} value={form.password} onChange={(event) => onChange('password', event.target.value)} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? 'um-error-password' : 'um-password-requirements'}/>
-                <button type="button" className="um-password-toggle" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={passwordVisible} title={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}><span>{t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}</span>{passwordVisible ? <EyeOff size={16}/> : <Eye size={16}/>}</button>
-              </span>
-              <span className="um-password-tools">
-                <small id="um-password-requirements">{t('adminUserPasswordNotice')}</small>
-                <button type="button" className="um-generate-password" onClick={generateTemporaryPassword} disabled={busy}><KeyRound size={14}/>{t('adminUserGeneratePassword')}</button>
+                <input id="um-initial-password" required type={passwordVisible ? 'text' : 'password'} minLength={16} maxLength={128} autoComplete="new-password" placeholder={t('adminUserPasswordPlaceholder')} value={form.password} onChange={(event) => onChange('password', event.target.value)} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? 'um-error-password' : undefined}/>
+                <button type="button" className="um-password-toggle" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={passwordVisible} title={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}>{passwordVisible ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
               </span>
               {showFieldError('password')}
             </div>
@@ -87,7 +76,7 @@ function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors
               <label htmlFor="um-confirm-password">{t('adminUserConfirmPassword')}</label>
               <span className="um-password-input">
                 <input id="um-confirm-password" required type={confirmPasswordVisible ? 'text' : 'password'} minLength={16} maxLength={128} autoComplete="new-password" placeholder={t('adminUserConfirmPasswordPlaceholder')} value={form.confirm_password} onChange={(event) => onChange('confirm_password', event.target.value)} aria-invalid={Boolean(errors.confirm_password)} aria-describedby={errors.confirm_password ? 'um-error-confirm_password' : undefined}/>
-                <button type="button" className="um-password-toggle" onClick={() => setConfirmPasswordVisible((visible) => !visible)} aria-label={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={confirmPasswordVisible} title={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}><span>{t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}</span>{confirmPasswordVisible ? <EyeOff size={16}/> : <Eye size={16}/>}</button>
+                <button type="button" className="um-password-toggle" onClick={() => setConfirmPasswordVisible((visible) => !visible)} aria-label={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={confirmPasswordVisible} title={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}>{confirmPasswordVisible ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
               </span>
               {showFieldError('confirm_password')}
             </div>
@@ -180,14 +169,14 @@ function UserDetails({ user, details, loading, error, onClose }) {
   );
 }
 
-export default function AdminUserManagement() {
+export default function AdminUserManagement({ initialUsers = null } = {}) {
   const focusId = new URLSearchParams(window.location.search).get('focus');
   const openedFocus = useRef('');
-  const [users, setUsers] = useState([]);
+  const [users, setUsers] = useState(initialUsers ?? []);
   const [roles, setRoles] = useState([]);
   const [filterRoles, setFilterRoles] = useState([]);
-  const [pagination, setPagination] = useState(initialPagination);
-  const [loading, setLoading] = useState(true);
+  const [pagination, setPagination] = useState({ ...initialPagination, total: initialUsers?.length ?? 0 });
+  const [loading, setLoading] = useState(initialUsers === null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');

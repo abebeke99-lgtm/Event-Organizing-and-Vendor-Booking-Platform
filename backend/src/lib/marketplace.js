@@ -1,4 +1,5 @@
 import { pool } from '../db.js';
+import { isValidCategoryName } from './categoryName.js';
 
 export function normalizeKey(value = '') {
   return String(value ?? '')
@@ -32,7 +33,7 @@ function mapVendor(row, services = [], media = []) {
     userId: toNumber(row.user_id),
     business_name: String(row.business_name || '').trim(),
     name: String(row.business_name || '').trim(),
-    category: String(row.category || 'General').trim(),
+    category: isValidCategoryName(row.category) ? String(row.category).trim() : '',
     city: String(row.city || '').trim(),
     description: String(row.description || '').trim(),
     verified: row.verification_status === 'verified',
@@ -62,7 +63,7 @@ function mapService(row) {
     title: String(row.title || '').trim(),
     vendorId: toNumber(row.vendor_id),
     vendorName: String(row.business_name || '').trim(),
-    category: String(row.category || 'General').trim(),
+    category: isValidCategoryName(row.category) ? String(row.category).trim() : '',
     city: String(row.city || '').trim(),
     description: String(row.description || '').trim(),
     price: row.price === null || row.price === undefined ? null : toNumber(row.price),
@@ -100,7 +101,7 @@ export async function loadPublicServices(db = pool) {
     FROM services s
     JOIN vendor_profiles vp ON vp.id = s.vendor_id
     JOIN users u ON u.id = vp.user_id AND u.status = 'active'
-    LEFT JOIN service_categories sc ON sc.id = s.category_id
+    LEFT JOIN service_categories sc ON sc.id = s.category_id AND sc.is_active = TRUE
     WHERE s.status = 'active' AND vp.verification_status = 'verified'
     ORDER BY s.id ASC`);
 
@@ -184,7 +185,7 @@ export async function loadPublicVendors(db = pool, providedServices = null) {
            ${vendorRatingSelect}
     FROM vendor_profiles vp
     JOIN users u ON u.id = vp.user_id AND u.status = 'active'
-    LEFT JOIN service_categories sc ON sc.id = vp.category_id
+    LEFT JOIN service_categories sc ON sc.id = vp.category_id AND sc.is_active = TRUE
     WHERE vp.verification_status = 'verified'
     ORDER BY vp.id ASC`);
 
@@ -220,7 +221,7 @@ export async function loadPublicCategories(db = pool, providedVendors = null, pr
   const vendors = providedVendors || await loadPublicVendors(db);
   const services = providedServices || await loadPublicServices(db);
 
-  return rows.map((row) => {
+  return rows.filter((row) => isValidCategoryName(row.name)).map((row) => {
     const key = normalizeKey(row.name);
     const vendorCount = vendors.filter((vendor) => normalizeKey(vendor.category) === key).length;
     const serviceCount = services.filter((service) => normalizeKey(service.category) === key).length;

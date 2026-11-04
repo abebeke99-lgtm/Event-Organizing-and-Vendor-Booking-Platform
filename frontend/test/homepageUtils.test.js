@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageStatistics } from '../src/homepageUtils.js';
+import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageSectionState, getHomepageStatistics } from '../src/homepageUtils.js';
 
 test('homepage statistics include only valid values supplied by the API', () => {
   assert.deepEqual(getHomepageStatistics({
@@ -44,4 +44,19 @@ test('known public categories map to localized homepage labels', () => {
   assert.equal(getHomepageCategoryTranslationKey('Graduation Services'), 'publicHomeGraduations');
   assert.equal(getHomepageCategoryTranslationKey('Entertainment'), 'publicHomeEntertainment');
   assert.equal(getHomepageCategoryTranslationKey('Unlisted category'), null);
+});
+
+test('homepage location options are unique values derived from public records', () => {
+  assert.deepEqual(getHomepageLocationOptions(
+    [{ city: 'Addis Ababa' }, { location: 'Bahir Dar' }],
+    [{ city: ' addis ababa ' }, { city: '' }],
+    [{ location: 'Hawassa' }],
+  ), ['Addis Ababa', 'Bahir Dar', 'Hawassa']);
+});
+
+test('homepage sections distinguish loading, empty, error, and populated states', () => {
+  assert.equal(getHomepageSectionState({ loading: true, error: true, items: [] }), 'loading');
+  assert.equal(getHomepageSectionState({ loading: false, error: true, items: [{ id: 1 }] }), 'error');
+  assert.equal(getHomepageSectionState({ loading: false, error: false, items: [] }), 'empty');
+  assert.equal(getHomepageSectionState({ loading: false, error: false, items: [{ id: 1 }] }), 'populated');
 });

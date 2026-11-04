@@ -1,19 +1,27 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
 import apiClient from './api/axios.js';
-import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, Mail, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, PanelLeftClose, PanelLeftOpen, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
+import { Accessibility, Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, Heart, History, Handshake, Image, Languages, LayoutDashboard, Lightbulb, LifeBuoy, LogOut, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, PanelLeftClose, PanelLeftOpen, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate } from './eventUtils.js';
-import { getLanguage, setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
+import { formatNotificationBadgeCount, getLanguage, setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
 import { setTheme, useTheme } from './theme.js';
 import { getDashboardDateRange } from './dashboardUtils.js';
 import { summarizeOrganizerDashboard } from './organizerDashboardUtils.js';
 import { createAuthSessionLoader } from './authSession.js';
 import { adminPathForSlug, adminSlugFromPath } from './adminNavigation.js';
 import { withStableKeys } from './listKeys.js';
-import { getFooterSocialLinks } from './socialLinks.js';
-import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageStatistics } from './homepageUtils.js';
-import SocialMediaLink from './SocialMediaLink.js';
+import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageStatistics } from './homepageUtils.js';
+import HomepageSearch from './HomepageSearch.jsx';
+import HomepageEventsSection from './HomepageEventsSection.jsx';
+import HomepageImage from './HomepageImage.jsx';
+import HomepageTrustStrip from './HomepageTrustStrip.jsx';
+import ContactTopBar from './ContactTopBar.js';
+import AppFooter from './AppFooter.js';
+import PublicNavigation from './PublicNavigation.jsx';
+import { getListingFiltersFromPath, validateCategoryName } from './publicNavigationUtils.js';
+import { CompareVendorsPage, EventCalendarPage, MyFavoritesPage, RecentlyViewedPage, RecommendationsPage } from './NavigationFeatures.jsx';
+import { getComparedVendorIds, toggleComparedVendor } from './navigationFeatureUtils.js';
 import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
@@ -33,6 +41,8 @@ import AdminNotifications from './AdminNotifications.jsx';
 import AdminAuditLogs from './AdminAuditLogs.jsx';
 import AdminProfile from './AdminProfile.jsx';
 import AdminSystemSettings from './AdminSystemSettings.jsx';
+import AdminHeroImages from './AdminHeroImages.jsx';
+import HomeHeroSlider from './HomeHeroSlider.jsx';
 import './vendorDirectory.css';
 
 const DEMO_AUTH_ENABLED = import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTH === 'true';
@@ -42,14 +52,14 @@ const menu = [
   ['vendors','Vendor Verification',BadgeCheck], ['categories','Service Category Management',Tags], ['events','Event Management',CalendarDays],
   ['bookings','Booking Management',ClipboardList], ['package-requests','Event Package Requests',ClipboardList], ['payments','Payment and Refund Management',CreditCard], ['reviews','Reviews and Complaints',MessageSquareWarning], ['complaints','Complaint Management',MessageSquareWarning],
   ['messages','Contact Messages',MessageSquareWarning], ['reports','Reports and Analytics',ChartNoAxesCombined], ['notifications','Notifications',Bell], ['audit-logs','Audit Logs',Activity],
-  ['settings','System Settings',Settings], ['profile','Profile',UserRound]
+  ['settings','System Settings',Settings], ['profile','Profile',UserRound], ['hero-images','Hero Images',Image]
 ];
 const menuGroups = [
   { id: 'overview', label: 'Dashboard', items: [menu[0]] },
   { id: 'management', label: 'Platform Management', items: menu.slice(1, 8) },
   { id: 'operations', label: 'Operations', items: menu.slice(8, 12).concat([menu[13]]) },
   { id: 'insights', label: 'Insights and Security', items: [menu[12], menu[14]] },
-  { id: 'configuration', label: 'Configuration', items: menu.slice(15, 17) },
+  { id: 'configuration', label: 'Configuration', items: menu.slice(15, 18) },
 ];
 const modules = {
   users:{title:'User Management', endpoint:'users', columns:['id','full_name','email','phone','roles','status','created_at'], fields:[['full_name','Full name','text'],['email','Email','email'],['phone','Phone','text']], create:true, actions:['role','status']},
@@ -304,20 +314,40 @@ function Modal({title,children,onClose,onSubmit,busy,submitLabel='Save',cancelLa
   return <div className="overlay" onMouseDown={(event)=>event.target===event.currentTarget && !busy && onClose()}><form className="modal" onSubmit={onSubmit}><div className="modal-head"><h2>{title}</h2><button className="icon-button" type="button" onClick={onClose} aria-label={closeLabel}><X size={18}/></button></div><div className="modal-body">{children}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>{cancelLabel}</button><button className={`button ${danger?'danger':''}`} disabled={busy}>{busy?'Saving…':submitLabel}</button></div></form></div>;
 }
 
-const PUBLIC_NAV_ITEMS = [
-  { key: 'home', label: 'Home', path: '/' },
-  { key: 'events', label: 'Events', path: '/events' },
-  { key: 'vendors', label: 'Find Vendors', path: '/vendors' },
-  { key: 'services', label: 'Services', path: '/services' },
-  { key: 'categories', label: 'Categories', path: '/categories' },
-  { key: 'about', label: 'About Us', path: '/about' },
-  { key: 'contact', label: 'Contact Us', path: '/contact' },
-];
 const PUBLIC_NOTIFICATION_ENDPOINTS = {
   admin: '/admin/notifications?page=1&pageSize=8',
   customer: '/customer/notifications',
+  organizer: '/platform/organizer/notifications',
   vendor: '/vendor/notifications',
 };
+const PUBLIC_NOTIFICATION_COUNT_ENDPOINTS = {
+  customer: '/customer/overview',
+  organizer: '/platform/organizer/overview',
+  vendor: '/vendor/overview',
+};
+
+function getHeaderSearchSuggestion(type, item) {
+  const id = item.id ?? item.slug ?? item.name;
+  const name = type === 'vendors'
+    ? item.business_name || item.name
+    : type === 'categories'
+      ? item.name
+      : item.title;
+  if (!name || id === undefined || id === null) return null;
+  const path = type === 'categories'
+    ? `/categories/${encodeURIComponent(item.slug || item.name)}`
+    : `/${type}/${encodeURIComponent(id)}`;
+  return {
+    id: `${type}-${id}`,
+    name,
+    detail: item.city || item.location || item.category || item.type || '',
+    path,
+  };
+}
+
+function isUnreadNotification(item) {
+  return !(item.read || item.status === 'read');
+}
 
 const ROUTE_LABELS = {
   '/': 'Home',
@@ -375,38 +405,66 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   const platformName = document.documentElement.dataset.platformName || 'EventHub';
   const platformLogo = document.documentElement.dataset.brandingLogoUrl || '';
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationItems, setNotificationItems] = useState([]);
+  const [notificationUnreadTotal, setNotificationUnreadTotal] = useState(null);
   const [notificationLoading, setNotificationLoading] = useState(false);
   const [notificationError, setNotificationError] = useState('');
+  const [notificationActionError, setNotificationActionError] = useState('');
   const [notificationRetry, setNotificationRetry] = useState(0);
+  const [notificationBusy, setNotificationBusy] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchSuggestions, setSearchSuggestions] = useState([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [searchRetry, setSearchRetry] = useState(0);
+  const [activeSearchSuggestion, setActiveSearchSuggestion] = useState(-1);
   const isAuthenticated = Boolean(user);
   const routePath = currentPath.split('?')[0];
   const accountMenuRef = useRef(null);
   const headerToolsRef = useRef(null);
+  const searchInputRef = useRef(null);
   const role = user?.role || 'customer';
-  const dashboardPath = dashboardPathForRole(role);
-  const displayName = user?.name || user?.full_name || user?.email || 'EventHub User';
   const notificationEndpoint = isAuthenticated && authSessionState.status === 'authenticated'
     ? PUBLIC_NOTIFICATION_ENDPOINTS[role]
     : null;
-  const unreadCount = notificationItems.filter((item) => !(item.read || item.status === 'read')).length;
+  const notificationBasePath = notificationEndpoint?.split('?')[0];
+  const unreadCount = notificationUnreadTotal ?? notificationItems.filter(isUnreadNotification).length;
+  const dashboardPath = dashboardPathForRole(role);
+  const profilePath = role === 'admin'
+    ? '/admin/profile'
+    : `${dashboardPath}?view=${role === 'vendor' ? 'account' : 'profile'}`;
+  const displayName = user?.name || user?.full_name || user?.email || 'EventHub User';
 
   useEffect(() => {
     if (!notificationEndpoint) {
       setNotificationItems([]);
+      setNotificationUnreadTotal(null);
       setNotificationLoading(false);
       setNotificationError('');
+      setNotificationsOpen(false);
       return undefined;
     }
 
     const controller = new AbortController();
+    setNotificationUnreadTotal(null);
     setNotificationLoading(true);
     setNotificationError('');
-    api(notificationEndpoint, { signal: controller.signal })
-      .then((response) => {
+    const unreadCountRequest = role === 'admin'
+      ? Promise.resolve(null)
+      : api(PUBLIC_NOTIFICATION_COUNT_ENDPOINTS[role], { signal: controller.signal });
+    Promise.all([
+      api(notificationEndpoint, { signal: controller.signal }),
+      unreadCountRequest,
+    ])
+      .then(([response, countResponse]) => {
         if (!Array.isArray(response?.data)) throw new Error('Notifications could not be loaded because the response was invalid.');
         setNotificationItems(response.data);
+        const unreadTotal = role === 'admin' ? response.unreadCount : countResponse?.data?.unreadNotifications;
+        if (!Number.isFinite(unreadTotal)) throw new Error('The unread notification count could not be loaded.');
+        setNotificationUnreadTotal(Math.max(0, unreadTotal));
       })
       .catch((error) => {
         if (error.name === 'AbortError') return;
@@ -417,17 +475,62 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
       });
 
     return () => controller.abort();
-  }, [notificationEndpoint, notificationRetry]);
+  }, [notificationEndpoint, notificationRetry, role]);
+
+  useEffect(() => {
+    if (!searchOpen) return undefined;
+    searchInputRef.current?.focus();
+    const term = searchQuery.trim();
+    if (term.length < 2) {
+      setSearchSuggestions([]);
+      setSearchLoading(false);
+      setSearchError('');
+      setActiveSearchSuggestion(-1);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSearchLoading(true);
+      setSearchError('');
+      const encodedQuery = encodeURIComponent(term);
+      const responses = await Promise.allSettled([
+        api(`/platform/events?search=${encodedQuery}&page=1&limit=3`, { signal: controller.signal }),
+        api(`/platform/vendors?search=${encodedQuery}&page=1&limit=3`, { signal: controller.signal }),
+        api(`/platform/services?search=${encodedQuery}&page=1&limit=3`, { signal: controller.signal }),
+        api(`/platform/categories?search=${encodedQuery}`, { signal: controller.signal }),
+      ]);
+      if (controller.signal.aborted) return;
+
+      const suggestions = responses.flatMap((response, index) => {
+        if (response.status !== 'fulfilled') return [];
+        const type = ['events', 'vendors', 'services', 'categories'][index];
+        const records = Array.isArray(response.value?.data) ? response.value.data : [];
+        return records.map((item) => getHeaderSearchSuggestion(type, item)).filter(Boolean);
+      }).slice(0, 8);
+      setSearchSuggestions(suggestions);
+      setSearchError(responses.every((response) => response.status === 'rejected') ? 'failed' : '');
+      setSearchLoading(false);
+      setActiveSearchSuggestion(-1);
+    }, 300);
+
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [searchOpen, searchQuery, searchRetry]);
 
   useEffect(() => {
     function handlePointerDown(event) {
       if (!headerToolsRef.current?.contains(event.target)) {
         setNotificationsOpen(false);
+        setSearchOpen(false);
       }
     }
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
         setNotificationsOpen(false);
+        setSearchOpen(false);
       }
     }
     document.addEventListener('pointerdown', handlePointerDown);
@@ -438,30 +541,153 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
     };
   }, []);
 
-  return <><header className="site-header"><div className="site-header-inner">
+  useEffect(() => {
+    if (searchOpen) setNotificationsOpen(false);
+  }, [searchOpen]);
+
+  function closeSearch() {
+    setSearchOpen(false);
+    setActiveSearchSuggestion(-1);
+  }
+
+  function submitHeaderSearch(event) {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (!query) {
+      searchInputRef.current?.focus();
+      return;
+    }
+    closeSearch();
+    onNavigate(`/search?q=${encodeURIComponent(query)}`);
+  }
+
+  function chooseHeaderSearchSuggestion(suggestion) {
+    closeSearch();
+    onNavigate(suggestion.path);
+  }
+
+  function handleHeaderSearchKeyDown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSearch();
+    } else if (event.key === 'ArrowDown' && searchSuggestions.length) {
+      event.preventDefault();
+      setActiveSearchSuggestion((index) => (index + 1) % searchSuggestions.length);
+    } else if (event.key === 'ArrowUp' && searchSuggestions.length) {
+      event.preventDefault();
+      setActiveSearchSuggestion((index) => index <= 0 ? searchSuggestions.length - 1 : index - 1);
+    } else if (event.key === 'Enter' && activeSearchSuggestion >= 0 && searchSuggestions[activeSearchSuggestion]) {
+      event.preventDefault();
+      chooseHeaderSearchSuggestion(searchSuggestions[activeSearchSuggestion]);
+    }
+  }
+
+  async function markNotificationRead(notification) {
+    if (!notificationBasePath || notificationBusy) return;
+    setNotificationBusy(true);
+    setNotificationActionError('');
+    try {
+      await api(`${notificationBasePath}/${notification.id}/read`, { method: 'POST' });
+      setNotificationItems((items) => items.map((item) => item.id === notification.id
+        ? { ...item, read: true, status: 'read' }
+        : item));
+      if (isUnreadNotification(notification)) {
+        setNotificationUnreadTotal((count) => count === null ? null : Math.max(0, count - 1));
+      }
+    } catch (error) {
+      setNotificationActionError(error.message || translate('notificationUpdateFailed', language));
+    } finally {
+      setNotificationBusy(false);
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    if (!notificationBasePath || notificationBusy) return;
+    setNotificationBusy(true);
+    setNotificationActionError('');
+    try {
+      await api(`${notificationBasePath}/read-all`, { method: 'POST' });
+      setNotificationItems((items) => items.map((item) => ({ ...item, read: true, status: 'read' })));
+      setNotificationUnreadTotal(0);
+    } catch (error) {
+      setNotificationActionError(error.message || translate('notificationUpdateFailed', language));
+    } finally {
+      setNotificationBusy(false);
+    }
+  }
+
+  function viewAllNotifications() {
+    setNotificationsOpen(false);
+    onNavigate(role === 'admin' ? '/admin/notifications' : `${dashboardPath}?view=notifications`);
+  }
+
+  return <><ContactTopBar/><header className="site-header"><div className="site-header-inner">
     <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}><img className="site-brand-logo" src={platformLogo || '/eventhub-logo.png'} alt={platformName} /></a>
     <button type="button" className="mobile-nav-toggle" aria-label={translate(mobileMenuOpen ? 'closeMenu' : 'openMenu', language)} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X size={20}/> : <Menu size={20}/>}</button>
-    <nav className={`site-nav ${mobileMenuOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}>{PUBLIC_NAV_ITEMS.map((item) => <a key={item.path} href={item.path} className={`nav-link ${routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'active' : ''}`} aria-current={routePath === item.path || routePath.startsWith(`${item.path}/`) && item.path !== '/' ? 'page' : undefined} onClick={(event) => { event.preventDefault(); setMobileMenuOpen(false); onNavigate(item.path); }}>{translateText(item.label, language)}</a>)}</nav>
-    <div className="header-actions">
-      {isAuthenticated && <div className="public-header-tools" ref={headerToolsRef}>
-        <div className="public-notification-anchor">
-          <button type="button" className="icon-button public-notification-toggle" aria-label={`${translate('notifications', language)}${unreadCount ? `, ${unreadCount} unread` : ''}`} aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}><Bell size={17}/>{unreadCount > 0 && <span className="notification-count">{unreadCount}</span>}</button>
-          {notificationsOpen && <section className="public-notification-panel" aria-label={translate('notifications', language)} aria-live="polite">
-            <div className="public-notification-heading"><strong>{translate('notifications', language)}</strong><span>{notificationEndpoint ? (unreadCount ? `${unreadCount} unread` : 'All caught up') : 'Notifications are not available for this account role.'}</span></div>
-            {!notificationEndpoint ? <div className="public-notification-empty">Notifications are not available for this account role.</div> :
-              notificationLoading ? <div className="public-notification-empty">Loading notifications…</div> :
-                notificationError ? <div className="public-notification-error"><span>{notificationError}</span><button type="button" onClick={() => setNotificationRetry((retry) => retry + 1)}>Retry</button></div> :
-                  notificationItems.length ? <ul>{notificationItems.slice(0, 8).map((item) => <li key={item.id}>
-                    <strong>{item.title}</strong><p>{item.message}</p>
-                    {(item.createdAt || item.created_at) && <time dateTime={item.createdAt || item.created_at}>{new Date(item.createdAt || item.created_at).toLocaleString()}</time>}
-                  </li>)}</ul> : <div className="public-notification-empty">You’re all caught up.</div>}
+    <PublicNavigation currentPath={currentPath} mobileOpen={mobileMenuOpen} onCloseMobile={closeMobileMenu} onNavigate={onNavigate} api={api} user={user} />
+    <div className="header-actions public-header-actions">
+      <div className="public-header-tools" ref={headerToolsRef}>
+        <div className="public-search-anchor">
+          <button type="button" className="public-header-icon-button public-global-search" aria-label={translate('search', language)} title={translate('search', language)} aria-expanded={searchOpen} aria-controls="header-search-panel" onClick={() => { setNotificationsOpen(false); setSearchOpen((open) => !open); }}><Search size={19} aria-hidden="true"/></button>
+          {searchOpen && <section id="header-search-panel" className="public-search-panel" aria-label={translate('search', language)}>
+            <form role="search" onSubmit={submitHeaderSearch}>
+              <label className="visually-hidden" htmlFor="header-search-input">{translate('searchAll', language)}</label>
+              <div className="public-search-input-row">
+                <Search size={18} aria-hidden="true"/>
+                <input
+                  id="header-search-input"
+                  ref={searchInputRef}
+                  type="search"
+                  value={searchQuery}
+                  maxLength="120"
+                  placeholder={translate('searchAll', language)}
+                  aria-label={translate('searchAll', language)}
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={searchLoading || searchError !== '' || searchSuggestions.length > 0}
+                  aria-controls="header-search-suggestions"
+                  aria-activedescendant={activeSearchSuggestion >= 0 ? `header-search-option-${activeSearchSuggestion}` : undefined}
+                  onChange={(event) => { setSearchQuery(event.target.value); setSearchError(''); setActiveSearchSuggestion(-1); }}
+                  onKeyDown={handleHeaderSearchKeyDown}
+                />
+                <button type="submit" className="public-search-submit" aria-label={translate('search', language)} title={translate('search', language)}><Search size={17} aria-hidden="true"/></button>
+              </div>
+              {(searchLoading || searchError || searchSuggestions.length > 0 || searchQuery.trim().length >= 2) && <ul id="header-search-suggestions" className="public-search-suggestions" role="listbox">
+                {searchLoading ? <li className="public-search-state" role="option" aria-selected="false">{translate('searchLoading', language)}</li>
+                  : searchError ? <li className="public-search-state public-search-error" role="none"><span>{translate('searchFailed', language)}</span><button type="button" onClick={() => setSearchRetry((retry) => retry + 1)}>{translate('retry', language)}</button></li>
+                    : searchSuggestions.length ? searchSuggestions.map((suggestion, index) => <li role="none" key={suggestion.id}>
+                      <button id={`header-search-option-${index}`} type="button" role="option" aria-selected={activeSearchSuggestion === index} onClick={() => chooseHeaderSearchSuggestion(suggestion)}>
+                        <span>{suggestion.name}</span>{suggestion.detail && <small>{suggestion.detail}</small>}
+                      </button>
+                    </li>)
+                      : <li className="public-search-state" role="option" aria-selected="false">{translate('searchNoResults', language)}</li>}
+              </ul>}
+            </form>
           </section>}
         </div>
-      </div>}
+        {notificationEndpoint && <div className="public-notification-anchor">
+          <button type="button" className="public-header-icon-button public-notification-toggle" aria-label={`${translate('notifications', language)}${unreadCount ? `, ${unreadCount} ${translate('unread', language)}` : ''}`} title={translate('notifications', language)} aria-expanded={notificationsOpen} aria-controls="header-notifications-panel" onClick={() => { setSearchOpen(false); setNotificationsOpen((open) => !open); }}><Bell size={19} aria-hidden="true"/>{unreadCount > 0 && <span className="notification-count" aria-label={`${unreadCount} ${translate('unread', language)}`}>{formatNotificationBadgeCount(unreadCount)}</span>}</button>
+          {notificationsOpen && <section id="header-notifications-panel" className="public-notification-panel" aria-label={translate('notifications', language)} aria-live="polite">
+            <div className="public-notification-heading">
+              <div><strong>{translate('notifications', language)}</strong><span>{unreadCount ? `${unreadCount} ${translate('unread', language)}` : translate('allCaughtUp', language)}</span></div>
+              {unreadCount > 0 && <button type="button" onClick={markAllNotificationsRead} disabled={notificationBusy}>{translate('markAllAsRead', language)}</button>}
+            </div>
+            {notificationLoading ? <div className="public-notification-empty" role="status">{translate('notificationsLoading', language)}</div>
+              : notificationError ? <div className="public-notification-error"><span>{notificationError}</span><button type="button" onClick={() => setNotificationRetry((retry) => retry + 1)}>{translate('retry', language)}</button></div>
+                : notificationItems.length ? <ul>{notificationItems.slice(0, 8).map((item) => <li key={item.id} className={isUnreadNotification(item) ? 'unread' : ''}>
+                  <strong>{item.title}</strong><p>{item.message}</p>
+                  {(item.createdAt || item.created_at) && <time dateTime={item.createdAt || item.created_at}>{new Date(item.createdAt || item.created_at).toLocaleString()}</time>}
+                  {isUnreadNotification(item) && <button type="button" onClick={() => markNotificationRead(item)} disabled={notificationBusy}>{translate('markAsRead', language)}</button>}
+                </li>)}</ul> : <div className="public-notification-empty">{translate('allCaughtUp', language)}</div>}
+            {notificationActionError && <div className="public-notification-error" role="alert">{translate('notificationUpdateFailed', language)} {notificationActionError}</div>}
+            <div className="public-notification-footer"><button type="button" onClick={viewAllNotifications}>{translate('viewAllNotifications', language)}</button></div>
+          </section>}
+        </div>}
+      </div>
       <LanguageSelector user={user}/><ThemeToggle/>
       {isAuthenticated ? <details className="public-account" ref={accountMenuRef}>
       <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
-      <div className="public-account-menu"><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
+      <div className="public-account-menu"><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
     </details> : <div className="public-auth-actions"><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></div>}</div>
   </div></header>{['error', 'rate-limited'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
 }
@@ -892,19 +1118,6 @@ function PasswordField({ name, label, value, onChange, autoComplete = 'current-p
   return <div className="field"><span id={`${inputId}-label`}>{label}</span><div className="password-input-wrap"><input id={inputId} aria-labelledby={`${inputId}-label`} aria-describedby={describedBy} aria-invalid={invalid || undefined} name={name} type={visible ? 'text' : 'password'} autoComplete={autoComplete} placeholder={placeholder} minLength={minLength} maxLength={maxLength} value={value} onChange={onChange} required /><button className="password-visibility" type="button" aria-label={translate(visible ? 'hidePassword' : 'showPassword', language)} title={translate(visible ? 'hidePassword' : 'showPassword', language)} onClick={() => setVisible((current) => !current)}>{visible ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></div>;
 }
 
-function AppFooter() {
-  const language = useLanguage();
-  const platformName = document.documentElement.dataset.platformName || 'EventHub';
-  const platformDescription = document.documentElement.dataset.platformDescription || '';
-  const platformLogo = document.documentElement.dataset.brandingLogoUrl || '';
-  const supportEmail = 'abebeke99@gmail.com';
-  const supportPhone = document.documentElement.dataset.supportPhone || '';
-  const socialLinks = getFooterSocialLinks();
-  const socialIcons = (className = 'footer-social-links') => <div className={className}>{socialLinks.map((social) => <SocialMediaLink key={social.id} platform={social.id} label={translate(social.labelKey, language)} url={social.url} unconfiguredLabel={translate('socialProfileUnconfigured', language)}/>)}</div>;
-  const hasUnconfiguredSocialLinks = socialLinks.some((social) => !social.url);
-  return <footer className="site-footer"><div className="site-footer-inner"><div className="footer-column"><div className="brand-pill"><img className="footer-brand-logo" src={platformLogo || '/eventhub-logo.png'} alt={platformName}/></div><p>{platformDescription || translate('footerDescription', language)}</p></div><div className="footer-column"><h4>{translate('explore', language)}</h4><a href="/events">{translate('browseEvents', language)}</a><a href="/vendors">{translate('findVendorsNav', language)}</a><a href="/services">{translate('browseServices', language)}</a><a href="/categories">{translate('serviceCategories', language)}</a></div><div className="footer-column"><h4>{translate('support', language)}</h4><a href="/help">{translate('helpCenter', language)}</a><a href="/help">{translate('frequentlyAskedQuestions', language)}</a><a href="/help">{translate('bookingGuide', language)}</a><a href="/contact">{translate('contactSupport', language)}</a></div><div className="footer-column"><h4>{translate('legal', language)}</h4><a href="/terms">{translate('termsConditions', language)}</a><a href="/privacy">{translate('privacyPolicy', language)}</a><a href="/help">{translate('cookiePolicy', language)}</a><a href="/terms">{translate('refundPolicy', language)}</a></div><div className="footer-column footer-contact-column"><h4>{translate('contactUsNav', language)}</h4><a className="footer-contact-email" href={`mailto:${supportEmail}`} aria-label={`${translate('emailAddress', language)}: ${supportEmail}`}><Mail size={16} aria-hidden="true"/><span>{supportEmail}</span></a>{socialIcons('footer-social-links footer-contact-social-links')}{hasUnconfiguredSocialLinks && <p className="footer-social-notice">{translate('socialLinksUnconfigured', language)}</p>}</div></div><div className="site-footer-bottom"><div className="footer-attribution"><span>{translate('footerCopyright', language)}</span><span>{translate('footerDeveloper', language)}</span><span>{translate('footerDesignCredit', language)}</span></div>{supportPhone && <a href={`tel:${supportPhone.replace(/[^\d+]/g, '')}`}>{supportPhone}</a>}</div></footer>;
-}
-
 function EmptyState({ title, message }) {
   return <div className="empty panel"><strong>{title}</strong><span>{message}</span></div>;
 }
@@ -959,6 +1172,8 @@ function BackToTopButton() {
 }
 
 function SearchResultsPage({ initialQuery, initialCategory = '', initialLocation = '', onNavigate }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
   const [query, setQuery] = useState(initialQuery);
   const [category, setCategory] = useState(initialCategory);
   const [location, setLocation] = useState(initialLocation);
@@ -1043,8 +1258,15 @@ function SearchResultsPage({ initialQuery, initialCategory = '', initialLocation
   ];
   const hasResults = Object.values(results).some((items) => items.length > 0);
   const categoryOptions = results.categories;
-  const searchLocations = [...new Set([...results.events, ...results.vendors, ...results.services].map((item) => item.city || item.location).filter(Boolean))].sort();
+  const searchLocations = [...new Set([...getHomepageLocationOptions(results.events, results.vendors, results.services), initialLocation].filter(Boolean))];
   const hasSearch = Boolean(initialQuery || initialCategory || initialLocation);
+  function getListingPath(key) {
+    const params = new URLSearchParams();
+    if (initialQuery.trim()) params.set('search', initialQuery.trim());
+    if (initialCategory) params.set('category', initialCategory);
+    if (initialLocation) params.set('location', initialLocation);
+    return `/${key}${params.size ? `?${params.toString()}` : ''}`;
+  }
 
   return <main className="page-shell"><div className="content-stack">
     <div className="section-header"><div><p className="eyebrow">DISCOVERY</p><h1>Search EventHub</h1><p className="muted">Search events, vendors, services, categories, and locations.</p></div></div>
@@ -1058,7 +1280,7 @@ function SearchResultsPage({ initialQuery, initialCategory = '', initialLocation
     {loading ? <div className="loading" role="status"><span className="spinner"/>Searching public listings…</div>
       : hasSearch ? <div className="search-result-sections">
         {sections.map((section) => <section key={section.key} className="content-stack">
-          <div className="section-header compact-header"><div><p className="eyebrow">{section.title.toUpperCase()}</p><h2>{section.title}</h2></div></div>
+          <div className="section-header compact-header"><div><p className="eyebrow">{section.title.toUpperCase()}</p><h2>{section.title}</h2></div>{section.key !== 'categories' && <button className="button secondary small" type="button" onClick={() => onNavigate(getListingPath(section.key))}>{t('viewAll')}</button>}</div>
           {errors[section.key] ? <div className="alert error" role="alert">{errors[section.key]}<button className="button secondary small" type="button" onClick={() => setRetryKey((value) => value + 1)}>Retry search</button></div>
             : results[section.key].length ? <div className="search-result-list">{results[section.key].map((item) => <button className="info-card" key={item.id} type="button" onClick={() => onNavigate(section.getPath(item))}>
               <strong>{section.getTitle(item) || 'Untitled listing'}</strong>
@@ -1219,73 +1441,35 @@ function VendorApplicationPage({ user, onNavigate }) {
   </div></main>;
 }
 
-function HomepageImage({ src, alt, fallbackLabel, className = '', loading = 'lazy' }) {
-  const [failed, setFailed] = useState(false);
-  const resolvedSrc = typeof src === 'string' ? resolveApiAssetUrl(src) : '';
-
-  useEffect(() => setFailed(false), [resolvedSrc]);
-
-  if (!resolvedSrc || failed) {
-    return <div className={`homepage-image-fallback ${className}`} role="img" aria-label={fallbackLabel || alt} />;
-  }
-
-  return <img className={className} src={resolvedSrc} alt={alt} loading={loading} onError={() => setFailed(true)} />;
-}
-
 function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [vendors, setVendors] = useState([]);
   const [services, setServices] = useState([]);
   const [events, setEvents] = useState([]);
+  const [latestEvents, setLatestEvents] = useState([]);
+  const [featuredEvents, setFeaturedEvents] = useState([]);
   const [categories, setCategories] = useState([]);
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadErrors, setLoadErrors] = useState({});
   const [retryKey, setRetryKey] = useState(0);
-  const [activeSlide, setActiveSlide] = useState(0);
-  const [slideTransition, setSlideTransition] = useState(null);
-  const [carouselPaused, setCarouselPaused] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [searchError, setSearchError] = useState('');
+  const [savedVendorIds, setSavedVendorIds] = useState([]);
+  const [savedVendorCategories, setSavedVendorCategories] = useState([]);
+  const [favoriteBusyId, setFavoriteBusyId] = useState(null);
+  const [favoriteMessage, setFavoriteMessage] = useState('');
+  const [favoriteError, setFavoriteError] = useState('');
   const [requestService, setRequestService] = useState(null);
-  const touchStartX = useRef(null);
-  const activeSlideRef = useRef(0);
-  const slideTransitionLock = useRef(false);
-  const slideTransitionStartTimer = useRef(null);
-  const slideTransitionTimer = useRef(null);
 
   const translateCategoryName = (name) => {
     const key = getHomepageCategoryTranslationKey(name);
     return key ? t(key) : translateText(name, language);
   };
 
-  const featureSlides = useMemo(() => [
-    { title: t('weddingPlanning'), image: 'https://images.unsplash.com/photo-1520854221256-17451cc331bf?auto=format&fit=crop&w=1200&q=80', description: t('weddingPlanningCopy') },
-    { title: t('corporateEvents'), image: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?auto=format&fit=crop&w=1200&q=80', description: t('corporateEventsCopy') },
-    { title: t('birthdayCelebrations'), image: 'https://images.unsplash.com/photo-1469371670807-013ccf25f16a?auto=format&fit=crop&w=1200&q=80', description: t('birthdayCelebrationsCopy') },
-  ], [language]);
-
   const categoryCards = categories.map((category) => ({
     ...category,
     path: `/categories/${encodeURIComponent(category.slug || category.name)}`,
   }));
-  const categoryChips = [
-    { key: 'publicHomeWeddingVenues', aliases: ['wedding'], search: 'Wedding' },
-    { key: 'publicHomeCorporate', aliases: ['corporate'], search: 'Corporate' },
-    { key: 'publicHomeGraduations', aliases: ['graduation'], search: 'Graduation' },
-    { key: 'catering', aliases: ['catering'], search: 'Catering' },
-    { key: 'publicHomeDecor', aliases: ['decor'], search: 'Decor' },
-    { key: 'publicHomePhotographer', aliases: ['photography'], search: 'Photography' },
-  ].map(({ key, aliases, search }) => {
-    const category = categories.find((item) => aliases.some((alias) => `${item.name || ''} ${item.slug || ''}`.toLowerCase().includes(alias)));
-    return {
-      name: t(key),
-      path: category
-        ? `/categories/${encodeURIComponent(category.slug || category.name)}`
-        : `/categories?search=${encodeURIComponent(search)}`,
-    };
-  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1296,11 +1480,13 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
         api('/platform/categories', { signal: controller.signal }),
         api('/platform/vendors?page=1&limit=4&sort=recommended', { signal: controller.signal }),
         api('/platform/services?page=1&limit=4&sort=recommended', { signal: controller.signal }),
-        api('/platform/events?page=1&limit=3&sort=upcoming', { signal: controller.signal }),
+        api('/platform/events?page=1&limit=6&sort=upcoming', { signal: controller.signal }),
+        api('/platform/events?page=1&limit=3&sort=recent', { signal: controller.signal }),
+        api('/platform/events/featured', { signal: controller.signal }),
       ]);
       if (controller.signal.aborted) return;
 
-      const [statisticsResult, categoriesResult, vendorsResult, servicesResult, eventsResult] = results;
+      const [statisticsResult, categoriesResult, vendorsResult, servicesResult, eventsResult, latestResult, featuredResult] = results;
       const nextErrors = {};
       const getData = (result, key) => {
         if (result.status === 'rejected') {
@@ -1314,11 +1500,15 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
       const vendorData = getData(vendorsResult, 'vendors');
       const serviceData = getData(servicesResult, 'services');
       const eventData = getData(eventsResult, 'events');
+      const latestData = getData(latestResult, 'latestEvents');
+      const featuredData = getData(featuredResult, 'featuredEvents');
       setSummary(statistics && typeof statistics === 'object' ? statistics : null);
       setCategories(Array.isArray(categoryData) ? categoryData : []);
       setVendors(Array.isArray(vendorData) ? vendorData : []);
       setServices(Array.isArray(serviceData) ? serviceData : []);
       setEvents(Array.isArray(eventData) ? eventData : []);
+      setLatestEvents(Array.isArray(latestData) ? latestData : []);
+      setFeaturedEvents(Array.isArray(featuredData) ? featuredData : featuredData && typeof featuredData === 'object' ? [featuredData] : []);
       setLoadErrors(nextErrors);
       setLoading(false);
     }
@@ -1328,68 +1518,70 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   }, [retryKey]);
 
   useEffect(() => {
-    const prefersReducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (prefersReducedMotion || carouselPaused || slideTransition) return undefined;
-    const timer = window.setInterval(() => {
-      moveSlide(1);
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [featureSlides.length, carouselPaused, slideTransition]);
+    if (!user || !['customer', 'organizer'].includes(user.role)) {
+      setSavedVendorIds([]);
+      setSavedVendorCategories([]);
+      return undefined;
+    }
+    const controller = new AbortController();
+    const endpoint = user.role === 'organizer' ? '/platform/organizer/favorites' : '/customer/favorites';
+    api(endpoint, { signal: controller.signal }).then((response) => {
+      if (!controller.signal.aborted) {
+        const savedVendors = Array.isArray(response?.data) ? response.data : [];
+        setSavedVendorIds(savedVendors.map((vendor) => Number(vendor.id)).filter(Number.isFinite));
+        setSavedVendorCategories(savedVendors.map((vendor) => String(vendor.category || '').trim().toLocaleLowerCase()).filter(Boolean));
+        setFavoriteError('');
+      }
+    }).catch((error) => {
+      if (error.name !== 'AbortError' && !controller.signal.aborted) setFavoriteError(error.message || t('publicHomeFavoriteFailed'));
+    });
+    return () => controller.abort();
+  }, [user?.id, user?.role]);
 
-  useEffect(() => () => {
-    if (slideTransitionStartTimer.current !== null) window.clearTimeout(slideTransitionStartTimer.current);
-    if (slideTransitionTimer.current !== null) window.clearTimeout(slideTransitionTimer.current);
-  }, []);
-
-  const displayVendors = vendors.slice(0, 4);
+  const displayVendors = vendors.filter((vendor) => vendor.verified === true || vendor.verificationStatus === 'verified' || vendor.verification_status === 'verified').slice(0, 4);
   const displayServices = services.slice(0, 4);
-  const displayEvents = events.slice(0, 3);
   const stats = getHomepageStatistics(summary);
+  const savedCategorySet = new Set(savedVendorCategories);
+  const recommendedVendors = user && savedCategorySet.size
+    ? displayVendors.filter((vendor) => !savedVendorIds.includes(Number(vendor.id)) && savedCategorySet.has(String(vendor.category || '').trim().toLocaleLowerCase()))
+    : [];
+  const servicePackages = services.flatMap((service) => (Array.isArray(service.packages) ? service.packages : [])
+    .filter((item) => item?.isActive !== false && item?.is_active !== 0 && (!item?.status || ['active', 'published'].includes(String(item.status).toLowerCase())))
+    .map((item) => ({ ...item, serviceId: service.id, serviceTitle: service.title })));
 
-  function submitSearch(event) {
-    event.preventDefault();
-    const query = searchTerm.trim();
-    if (!query) {
-      setSearchError(t('publicHomeSearchError'));
+  async function toggleVendorFavorite(vendor) {
+    const supportedRole = user && ['customer', 'organizer'].includes(user.role);
+    if (!supportedRole) {
+      try {
+        sessionStorage.setItem('eventhub_after_login', '/');
+      } catch (error) {
+        console.error('Could not save the post-login destination:', error);
+      }
+      onNavigate('/login');
       return;
     }
-    setSearchError('');
-    onNavigate(`/search?q=${encodeURIComponent(query)}`);
-  }
+    if (!vendor?.id || favoriteBusyId !== null) return;
 
-  function transitionToSlide(next, direction) {
-    const current = activeSlideRef.current;
-    if (next === current || slideTransitionLock.current) return;
-
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      activeSlideRef.current = next;
-      setActiveSlide(next);
-      return;
+    const vendorId = Number(vendor.id);
+    const wasSaved = savedVendorIds.includes(vendorId);
+    const nextSaved = wasSaved ? savedVendorIds.filter((id) => id !== vendorId) : [...savedVendorIds, vendorId];
+    const endpoint = user.role === 'organizer' ? '/platform/organizer/favorites' : '/customer/favorites';
+    setSavedVendorIds(nextSaved);
+    setFavoriteBusyId(vendorId);
+    setFavoriteError('');
+    setFavoriteMessage('');
+    try {
+      await api(wasSaved ? `${endpoint}/${vendorId}` : endpoint, {
+        method: wasSaved ? 'DELETE' : 'POST',
+        body: wasSaved ? undefined : JSON.stringify({ vendorId }),
+      });
+      setFavoriteMessage(t(wasSaved ? 'publicHomeRemovedVendor' : 'publicHomeSavedVendor'));
+    } catch (error) {
+      setSavedVendorIds(savedVendorIds);
+      setFavoriteError(error.message || t('publicHomeFavoriteFailed'));
+    } finally {
+      setFavoriteBusyId(null);
     }
-
-    slideTransitionLock.current = true;
-    setSlideTransition({ from: current, to: next, direction, phase: 'prepare' });
-    slideTransitionStartTimer.current = window.setTimeout(() => {
-      slideTransitionStartTimer.current = null;
-      setSlideTransition({ from: current, to: next, direction, phase: 'animate' });
-      slideTransitionTimer.current = window.setTimeout(() => {
-        slideTransitionTimer.current = null;
-        activeSlideRef.current = next;
-        setActiveSlide(next);
-        setSlideTransition(null);
-        slideTransitionLock.current = false;
-      }, 700);
-    }, 20);
-  }
-
-  function moveSlide(direction) {
-    transitionToSlide((activeSlideRef.current + direction + featureSlides.length) % featureSlides.length, direction);
-  }
-
-  function selectSlide(index) {
-    const current = activeSlideRef.current;
-    if (index === current || slideTransitionLock.current) return;
-    transitionToSlide(index, index > current ? 1 : -1);
   }
 
   function becomeVendor() {
@@ -1407,43 +1599,34 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
   return <>
     <AppHeader user={user} currentPath={currentPath || '/'} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />
     <main className="platform-landing">
-      <section className="hero-section premium-hero">
-        <div className="hero-copy reveal reveal-up is-visible">
-          <p className="eyebrow">{t('homeHeroEyebrow')}</p>
-          <h1>{t('homeHeroTitle')}</h1>
-          <p className="muted">{t('homeHeroCopy')}</p>
+      <section className="homepage-hero">
+        <HomeHeroSlider onNavigate={onNavigate} />
+        <div className="homepage-hero-content">
+          <p className="homepage-welcome-badge"><Sparkles size={14} aria-hidden="true"/>{t('publicHomeHeroWelcome')}</p>
+          <h1>{t('publicHomeHeroTitle')} <span>{t('publicHomeHeroAccent')}</span></h1>
+          <p>{t('publicHomeHeroDescription')}</p>
           <div className="cta-row">
-            <button className="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
-            <button className="button secondary" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button>
-          </div>
-          <form className="hero-search" role="search" onSubmit={submitSearch}>
-            <input type="search" maxLength="120" value={searchTerm} onChange={(event) => { setSearchTerm(event.target.value); setSearchError(''); }} placeholder={t('searchAll')} aria-label={t('searchAll')} />
-            <button type="submit">{t('search')}</button>
-          </form>
-          {searchError && <p className="hero-search-error" role="alert">{searchError}</p>}
-          <div className="chip-row">
-            {categoryChips.map((item) => <button key={item.name} type="button" className="chip" onClick={() => onNavigate(item.path)}>{item.name}</button>)}
-          </div>
-        </div>
-
-        <div className="hero-visual reveal reveal-right is-visible">
-          <div className="hero-visual-card hero-card-main" role="group" aria-label={t('publicVenueInspiration')}>
-            <HomepageImage className="hero-venue-image" src="https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=1200&q=80" alt={t('publicHomeVenueImageAlt')} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', t('publicVenueInspiration'))} loading="eager" />
-            <div className="hero-overlay-card">
-              <span>{t('publicVenueEyebrow')}</span>
-              <strong>{t('publicExploreVenues')}</strong>
-              <small>{t('publicVerifiedVenueDescription')}</small>
-              <button type="button" className="button small" onClick={() => onNavigate('/vendors?search=venue')}>{t('publicBrowseVenues')}</button>
-            </div>
+            <button className="button" type="button" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button>
+            <button className="button homepage-hero-outline" type="button" onClick={() => onNavigate('/vendors')}>{t('findVendorsNav')}</button>
           </div>
         </div>
       </section>
+
+      <div className="homepage-search-panel">
+        <HomepageSearch api={api} onNavigate={onNavigate} />
+        {categories.length > 0 && <div className="homepage-quick-categories" aria-label={t('publicHomeQuickCategories')}>
+          <span>{t('publicHomeQuickCategories')}</span>
+          {categories.slice(0, 5).map((category) => <button key={category.id} type="button" onClick={() => onNavigate(`/search?category=${encodeURIComponent(category.name)}`)}>{translateCategoryName(category.name)}</button>)}
+        </div>}
+      </div>
 
       <Reveal className="stat-strip" direction="up">
         {loading ? <div className="home-stat-skeletons" role="status" aria-label={t('publicHomeStatisticsLoading')}><span/><span/><span/><span/></div>
           : loadErrors.statistics ? <div className="home-data-error" role="alert"><span>{t('publicStatisticsUnavailable')}</span><button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>
             : stats.map(({ label, value, rating }) => <div key={label} className="stat-pill"><strong>{rating ? `${value.toLocaleString(language === 'am' ? 'am-ET' : 'en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}/5` : value.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}</strong><span>{t(label)}</span></div>)}
       </Reveal>
+
+      {!loading && <HomepageTrustStrip summary={summary} />}
 
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
@@ -1478,72 +1661,56 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
       </Reveal>
 
       <Reveal className="section-block" direction="up">
+        <HomepageEventsSection title={t('publicHomeFeaturedEvents')} events={featuredEvents} loading={loading} error={loadErrors.featuredEvents} onRetry={() => setRetryKey((value) => value + 1)} onNavigate={onNavigate}/>
+      </Reveal>
+
+      {user && recommendedVendors.length > 0 && <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-              <p className="eyebrow">{t('publicEventInspiration')}</p>
-            <h2>{t('eventInspiration')}</h2>
+            <p className="eyebrow">{t('featuredVendors')}</p>
+            <h2>{t('publicHomeRecommendations')}</h2>
           </div>
-          <button className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewAll')}</button>
+          <button className="button secondary small" type="button" onClick={() => onNavigate('/vendors')}>{t('seeAllVendors')}</button>
         </div>
-
-        <div className="carousel-shell" onMouseEnter={() => setCarouselPaused(true)} onMouseLeave={() => setCarouselPaused(false)} onFocusCapture={() => setCarouselPaused(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setCarouselPaused(false); }} onTouchStart={(event) => { touchStartX.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={(event) => {
-          if (touchStartX.current === null) return;
-          const delta = event.changedTouches[0]?.clientX - touchStartX.current;
-          if (Math.abs(delta) > 40) moveSlide(delta < 0 ? 1 : -1);
-          touchStartX.current = null;
-        }} onKeyDown={(event) => {
-          if (event.key === 'ArrowLeft') { event.preventDefault(); moveSlide(-1); }
-          if (event.key === 'ArrowRight') { event.preventDefault(); moveSlide(1); }
-        }} tabIndex="0" aria-label={t('publicHomeCarouselLabel')}>
-          <button type="button" className="carousel-control" aria-label={t('publicHomePreviousSlide')} onClick={() => moveSlide(-1)}>{'‹'}</button>
-          <div className="carousel-stage" aria-live="polite">
-            {featureSlides.map((slide, index) => (
-              <article
-                key={slide.title}
-                className={[
-                  'slideshow-card',
-                  !slideTransition && index === activeSlide ? 'active' : '',
-                  slideTransition?.from === index ? `is-exiting ${slideTransition.phase === 'prepare' ? 'is-preparing' : ''} ${slideTransition.direction > 0 ? 'is-exiting-left' : 'is-exiting-right'}` : '',
-                  slideTransition?.to === index ? `is-incoming ${slideTransition.phase === 'prepare' ? 'is-preparing' : 'is-moving'} ${slideTransition.direction > 0 ? 'is-entering-from-right' : 'is-entering-from-left'}` : '',
-                ].filter(Boolean).join(' ')}
-                aria-hidden={slideTransition ? index !== slideTransition.from && index !== slideTransition.to : index !== activeSlide}
-              >
-                <HomepageImage className="slide-image" src={slide.image} alt={slide.title} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', slide.title)} loading={index === activeSlide ? 'eager' : 'lazy'} />
-                <div className="slideshow-content">
-                  <p>{slide.title}</p>
-                  <span>{slide.description}</span>
-                  {index === activeSlide && <button type="button" className="button small" onClick={() => onNavigate('/events')}>{t('publicHomeExplorePublishedEvents')}</button>}
-                </div>
-              </article>
-            ))}
-          </div>
-          <button type="button" className="carousel-control" aria-label={t('publicHomeNextSlide')} onClick={() => moveSlide(1)}>{'›'}</button>
+        <div className="card-grid">
+          {recommendedVendors.slice(0, 4).map((vendor) => {
+            const vendorName = vendor.business_name || vendor.name || t('publicHomeVendorFallback');
+            return <article className="vendor-card" key={`recommended-${vendor.id}`}>
+              <HomepageImage className="card-media-image" src={vendor.coverImageUrl || vendor.logoUrl || vendor.image || vendor.logo} alt={translateText(vendorName, language)} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', translateText(vendorName, language))}/>
+              <div className="card-body">
+                <div className="meta-row"><span>{vendor.category ? translateCategoryName(vendor.category) : t('publicHomeEventServices')}</span>{vendor.reviewCount > 0 && Number.isFinite(Number(vendor.rating)) && <span>★ {Number(vendor.rating).toFixed(1)}</span>}</div>
+                <h3>{vendorName}</h3>
+                <p>{vendor.description || vendor.city || vendor.location || t('publicHomeServiceAreaAvailable')}</p>
+                <button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${encodeURIComponent(vendor.id)}`)}>{t('viewProfile')}</button>
+              </div>
+            </article>;
+          })}
         </div>
-        <div className="carousel-dots" aria-label={t('publicHomeSlideNavigation')}>
-          {featureSlides.map((slide, index) => <button key={slide.title} type="button" className={index === activeSlide ? 'dot active' : 'dot'} aria-label={t('publicHomeGoToSlide').replace('{number}', String(index + 1))} aria-pressed={index === activeSlide} onClick={() => selectSlide(index)} />)}
-        </div>
-      </Reveal>
+      </Reveal>}
 
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
             <p className="eyebrow">{t('featuredVendors')}</p>
-            <h2>{t('trustedProfessionals')}</h2>
+            <h2>{t('publicHomePopularVendors')}</h2>
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/vendors')}>{t('seeAllVendors')}</button>
         </div>
         {loadErrors.vendors && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
+        {favoriteError && <p className="alert error" role="alert">{translateText(favoriteError, language)}</p>}
+        {favoriteMessage && <p className="alert success" role="status">{favoriteMessage}</p>}
         <div className="card-grid">
           {loading ? <div className="home-card-skeletons" role="status" aria-label={t('publicHomeVendorsLoading')}><span/><span/><span/><span/></div>
             : displayVendors.length ? displayVendors.map((vendor) => {
               const vendorName = vendor.business_name || vendor.name || t('publicHomeVendorFallback');
               const vendorImage = vendor.coverImageUrl || vendor.logoUrl || vendor.image || vendor.logo;
               const quoteService = Array.isArray(vendor.services) ? vendor.services.find((service) => service && service.published !== false && service.visibility !== 'private') : null;
+              const isVerified = vendor.verified === true || vendor.verificationStatus === 'verified' || vendor.verification_status === 'verified';
               return (
-            <article key={vendor.id} className="vendor-card">
-              <div className="card-image-wrap">
-                <HomepageImage className="card-media-image" src={vendorImage} alt={translateText(vendorName, language)} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', translateText(vendorName, language))} />
-                {vendor.verified && <span className="verify-badge">{t('verified')}</span>}
+              <article key={vendor.id} className="vendor-card">
+                <div className="card-image-wrap">
+                  <HomepageImage className="card-media-image" src={vendorImage} alt={translateText(vendorName, language)} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', translateText(vendorName, language))} />
+                  {isVerified && <span className="verify-badge">{t('verified')}</span>}
               </div>
               <div className="card-body">
                 <div className="meta-row"><span>{vendor.category ? translateCategoryName(vendor.category) : t('publicHomeEventServices')}</span>{vendor.reviewCount > 0 && Number.isFinite(Number(vendor.rating)) && <span>★ {Number(vendor.rating).toFixed(1)} ({vendor.reviewCount})</span>}</div>
@@ -1553,6 +1720,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
                 <div className="card-actions">
                   <button className="button secondary small" type="button" onClick={() => onNavigate(vendor.id ? `/vendors/${encodeURIComponent(vendor.id)}` : '/vendors')}>{t('viewProfile')}</button>
                   <button className="button small" type="button" onClick={() => quoteService ? setRequestService(quoteService) : onNavigate(vendor.id ? `/vendors/${encodeURIComponent(vendor.id)}` : '/vendors')}>{t('publicRequestQuoteButton')}</button>
+                  {(!user || ['customer', 'organizer'].includes(user.role)) && <button className="icon-button homepage-favorite-button" type="button" aria-label={`${t(savedVendorIds.includes(Number(vendor.id)) ? 'publicHomeRemoveSavedVendor' : 'publicHomeSaveVendor')}: ${vendorName}`} title={t(savedVendorIds.includes(Number(vendor.id)) ? 'publicHomeRemoveSavedVendor' : 'publicHomeSaveVendor')} aria-pressed={savedVendorIds.includes(Number(vendor.id))} disabled={favoriteBusyId === Number(vendor.id)} onClick={() => toggleVendorFavorite(vendor)}><Heart size={17} fill={savedVendorIds.includes(Number(vendor.id)) ? 'currentColor' : 'none'} aria-hidden="true"/></button>}
                 </div>
               </div>
             </article>
@@ -1563,8 +1731,8 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
       <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-            <p className="eyebrow">{t('popularServices')}</p>
-            <h2>{t('smoothPackages')}</h2>
+            <p className="eyebrow">{t('publicHomeEventServices')}</p>
+            <h2>{t('popularServices')}</h2>
           </div>
           <button className="button secondary small" onClick={() => onNavigate('/services')}>{t('browseServices')}</button>
         </div>
@@ -1583,7 +1751,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
                 <h3>{service.title}</h3>
                 <p>{service.description || service.vendorName || t('publicHomeServiceDetailsAvailable')}</p>
                 <div className="pricing-row">
-                  <strong>{service.price !== null && service.price !== undefined && service.price !== '' && Number.isFinite(Number(service.price)) && Number(service.price) >= 0 ? `${service.currency || 'ETB'} ${Number(service.price).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}` : t('requestQuote')}</strong>
+                  <strong>{service.price !== null && service.price !== undefined && service.price !== '' && Number.isFinite(Number(service.price)) && Number(service.price) >= 0 ? formatEventBudget(service.price, language) : t('requestQuote')}</strong>
                   <button type="button" className="button small" onClick={() => setRequestService(service)}>{t('publicRequestService')}</button>
                 </div>
                 <button type="button" className="button secondary small" onClick={() => onNavigate(`/services/${encodeURIComponent(service.id)}`)}>{t('publicHomeViewDetails')}</button>
@@ -1593,33 +1761,33 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
         </div>
       </Reveal>
 
-      <Reveal className="section-block" direction="up">
+      {!loading && servicePackages.length > 0 && <Reveal className="section-block" direction="up">
         <div className="section-header compact-header">
           <div>
-            <p className="eyebrow">{t('publicEventDiscovery')}</p>
-            <h2>{t('eventsNextMoment')}</h2>
+            <p className="eyebrow">{t('publicHomeEventServices')}</p>
+            <h2>{t('publicHomeServicePackages')}</h2>
           </div>
-          <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('viewAll')}</button>
         </div>
-        {loadErrors.events && <div className="home-data-error" role="alert">{t('publicHomeDataUnavailable')}<button type="button" onClick={() => setRetryKey((value) => value + 1)}>{t('publicHomeRetry')}</button></div>}
-        <div className="event-grid">
-          {loading ? <div className="home-card-skeletons" role="status" aria-label={t('publicHomeEventsLoading')}><span/><span/><span/><span/></div>
-            : displayEvents.length ? displayEvents.map((event) => (
-            <article key={event.id} className="event-card">
-              <HomepageImage className="event-card-image" src={event.coverImage || event.image} alt={event.title} fallbackLabel={t('publicHomeImageUnavailable').replace('{name}', event.title || t('publicHomeEventService'))} />
-              <div className="event-content">
-                <span className="event-tag">{event.type ? translateText(event.type, language) : t('publicHomeEventType')}</span>
-                <h3>{event.title}</h3>
-                <p>{formatEventDate(event.startDate || event.date, language) || t('dateTbd')}</p>
-                <small>{[event.venue, event.location || event.city].filter(Boolean).join(' · ') || t('locationAvailable')}</small>
-                <div className="card-actions">
-                  <button type="button" className="button secondary small" onClick={() => onNavigate(`/events/${encodeURIComponent(event.id)}`)}>{t('viewDetails')}</button>
-                  <button type="button" className="button small" onClick={() => onNavigate(`/events/${encodeURIComponent(event.id)}`)}>{t('publicHomeBookNow')}</button>
-                </div>
-              </div>
-            </article>
-          )) : loadErrors.events ? null : <div className="empty-card">{t('noPublicEvents')} <button type="button" className="button secondary small" onClick={() => onNavigate('/events')}>{t('exploreEvents')}</button></div>}
+        <div className="card-grid homepage-package-grid">
+          {servicePackages.slice(0, 4).map((item, index) => {
+            const features = Array.isArray(item.includedFeatures) ? item.includedFeatures.filter((feature) => typeof feature === 'string' && feature.trim()) : [];
+            const extras = Array.isArray(item.extras) ? item.extras.filter((extra) => extra && typeof extra.name === 'string') : [];
+            return <article className="info-card homepage-package-card" key={item.id || `${item.serviceId}-${index}`}>
+              <p className="eyebrow">{item.serviceTitle}</p>
+              <h3>{item.name}</h3>
+              {item.description && <p>{item.description}</p>}
+              <strong className="homepage-event-price">{formatEventBudget(item.price, language) || t('requestQuote')}</strong>
+              {item.minimumBooking !== undefined && item.minimumBooking !== null && <small>{t('publicHomeMinimumBooking')}: {Number(item.minimumBooking).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}</small>}
+              <div><strong>{t('publicHomePackageIncludes')}</strong>{features.length ? <ul>{features.map((feature) => <li key={feature}>{feature}</li>)}</ul> : <p>{t('publicHomePackageNoFeatures')}</p>}</div>
+              {extras.length > 0 && <div><strong>{t('publicHomePackageExtras')}</strong>{extras.map((extra) => <p key={extra.name}>{extra.name}{extra.price !== undefined ? ` · ${formatEventBudget(extra.price, language) || ''}` : ''}</p>)}</div>}
+              <button type="button" className="button secondary small" onClick={() => onNavigate(`/services/${encodeURIComponent(item.serviceId)}`)}>{t('publicHomeViewDetails')}</button>
+            </article>;
+          })}
         </div>
+      </Reveal>}
+
+      <Reveal className="section-block" direction="up">
+        <HomepageEventsSection title={t('publicHomeLatestEvents')} events={latestEvents} loading={loading} error={loadErrors.latestEvents} onRetry={() => setRetryKey((value) => value + 1)} onNavigate={onNavigate}/>
       </Reveal>
 
       <Reveal className="section-block" direction="up">
@@ -1662,13 +1830,14 @@ function PublicPageLayout({ currentPath, user, onNavigate, onLogout, children })
   return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />{children}<AppFooter /></>;
 }
 
-function EventsPage({ onNavigate }) {
+function EventsPage({ onNavigate, user, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const initialQuery = new URLSearchParams(window.location.search);
+  const initialQuery = getListingFiltersFromPath(currentPath);
   const [events, setEvents] = useState([]);
   const [categories, setCategories] = useState([]);
   const [featured, setFeatured] = useState(null);
+  const [featuredEventCount, setFeaturedEventCount] = useState(0);
   const [featuredLoading, setFeaturedLoading] = useState(true);
   const [featuredError, setFeaturedError] = useState('');
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -1677,23 +1846,46 @@ function EventsPage({ onNavigate }) {
   const [reloadKey, setReloadKey] = useState(0);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [detailsError, setDetailsError] = useState('');
-  const [search, setSearch] = useState(initialQuery.get('search') || '');
-  const [location, setLocation] = useState(initialQuery.get('location') || '');
-  const [category, setCategory] = useState(initialQuery.get('category') || '');
-  const [startDate, setStartDate] = useState(initialQuery.get('startDate') || '');
-  const [endDate, setEndDate] = useState(initialQuery.get('endDate') || '');
-  const [minPrice, setMinPrice] = useState(initialQuery.get('minPrice') || '');
-  const [maxPrice, setMaxPrice] = useState(initialQuery.get('maxPrice') || '');
-  const [eventStatus, setEventStatus] = useState(initialQuery.get('status') || '');
-  const [sort, setSort] = useState(initialQuery.get('sort') || 'upcoming');
-  const [page, setPage] = useState(Math.max(1, Number(initialQuery.get('page')) || 1));
+  const [search, setSearch] = useState(initialQuery.search);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [suggestionIndex, setSuggestionIndex] = useState(-1);
+  const [location, setLocation] = useState(initialQuery.location);
+  const [category, setCategory] = useState(initialQuery.category);
+  const [startDate, setStartDate] = useState(initialQuery.startDate);
+  const [endDate, setEndDate] = useState(initialQuery.endDate);
+  const [minPrice, setMinPrice] = useState(initialQuery.minPrice);
+  const [maxPrice, setMaxPrice] = useState(initialQuery.maxPrice);
+  const [eventStatus, setEventStatus] = useState(initialQuery.status);
+  const [sort, setSort] = useState(initialQuery.sort);
+  const [page, setPage] = useState(initialQuery.page);
+  const [pageSize, setPageSize] = useState(initialQuery.limit);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [pagination, setPagination] = useState({ total: 0, page: 1, totalPages: 1, limit: 6 });
+  const [eventCategoryTotal, setEventCategoryTotal] = useState(0);
   const [requestEvent, setRequestEvent] = useState(null);
   const [requestForm, setRequestForm] = useState({ event_title: '', event_type: '', requested_date: '', requested_location: '', requester_name: '', requester_email: '', service_category: '', guest_count: '', budget: '', notes: '' });
   const [requestBusy, setRequestBusy] = useState(false);
   const [requestError, setRequestError] = useState('');
   const [requestSuccess, setRequestSuccess] = useState('');
+  const [eventShareMessage, setEventShareMessage] = useState('');
+  const lastRoutePath = useRef(currentPath);
+
+  useEffect(() => {
+    if (lastRoutePath.current === currentPath) return;
+    lastRoutePath.current = currentPath;
+    const filters = getListingFiltersFromPath(currentPath);
+    setSearch(filters.search);
+    setLocation(filters.location);
+    setCategory(filters.category);
+    setStartDate(filters.startDate);
+    setEndDate(filters.endDate);
+    setMinPrice(filters.minPrice);
+    setMaxPrice(filters.maxPrice);
+    setEventStatus(filters.status);
+    setSort(filters.sort);
+    setPage(filters.page);
+    setPageSize(filters.limit);
+  }, [currentPath]);
 
   useEffect(() => {
     let active = true;
@@ -1701,7 +1893,7 @@ function EventsPage({ onNavigate }) {
       setLoading(true);
       setError('');
       try {
-        const params = new URLSearchParams({ page: String(page), limit: '6', sort });
+        const params = new URLSearchParams({ page: String(page), limit: String(pageSize), sort });
         if (search.trim()) params.set('search', search.trim());
         if (category) params.set('category', category);
         if (location) params.set('location', location);
@@ -1724,7 +1916,7 @@ function EventsPage({ onNavigate }) {
       }
     }, 250);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page, reloadKey]);
+  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page, pageSize, reloadKey]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -1735,25 +1927,33 @@ function EventsPage({ onNavigate }) {
     }
     if (sort !== 'upcoming') params.set('sort', sort);
     if (page > 1) params.set('page', String(page));
+    if (pageSize !== 6) params.set('limit', String(pageSize));
     const query = params.toString();
     window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
-  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page]);
+  }, [search, location, category, startDate, endDate, minPrice, maxPrice, eventStatus, sort, page, pageSize]);
 
   useEffect(() => {
     let active = true;
     api('/platform/events/categories').then((response) => {
-      if (active) setCategories(Array.isArray(response?.data) ? response.data : []);
+      if (active) {
+        const availableCategories = Array.isArray(response?.data) ? response.data : [];
+        setCategories(availableCategories);
+        setEventCategoryTotal(availableCategories.reduce((total, item) => total + Number(item.total || 0), 0));
+      }
     }).catch(() => {
       if (active) setCategories([]);
     });
     api('/platform/events/featured').then((response) => {
       if (active) {
-        setFeatured(response?.data || null);
+        const featuredEvents = Array.isArray(response?.data) ? response.data : [];
+        setFeatured(featuredEvents[0] || null);
+        setFeaturedEventCount(featuredEvents.length);
         setFeaturedError('');
       }
     }).catch(() => {
       if (active) {
         setFeatured(null);
+        setFeaturedEventCount(0);
         setFeaturedError(t('featuredError'));
       }
     }).finally(() => {
@@ -1764,6 +1964,19 @@ function EventsPage({ onNavigate }) {
 
   async function viewDetails(eventId) {
     onNavigate(`/events/${encodeURIComponent(eventId)}`);
+  }
+
+  async function shareEvent(event) {
+    const url = `${window.location.origin}/events/${encodeURIComponent(event.id)}`;
+    try {
+      if (navigator.share) await navigator.share({ title: event.title, url });
+      else {
+        await navigator.clipboard.writeText(url);
+        setEventShareMessage(t('eventLinkCopied'));
+      }
+    } catch (issue) {
+      if (issue.name !== 'AbortError') setEventShareMessage(t('eventShareFailed'));
+    }
   }
 
   function openPackageRequest(event) {
@@ -1812,7 +2025,21 @@ function EventsPage({ onNavigate }) {
     openPackageRequest({ id: null, title: '', type: '', location: null, startDate: null });
   }
 
-  const categoryOptions = [...new Map(['wedding', 'conference', 'social', 'exhibition', ...categories.map((value) => String(value).trim()).filter(Boolean)].map((value) => [value.toLowerCase(), value])).values()];
+  const categoryOptions = [...new Set(categories.map((value) => String(value?.name || '').trim()).filter(Boolean))];
+  const locationOptions = [...new Set([...getHomepageLocationOptions(events), location].filter(Boolean))].sort((left, right) => left.localeCompare(right));
+  const suggestions = search.trim()
+    ? [
+      ...events.map((event) => ({ key: `event-${event.id}`, label: event.title, hint: event.type || 'Event', value: event.title })),
+      ...categoryOptions.filter((value) => value.toLowerCase().includes(search.trim().toLowerCase()))
+        .map((value) => ({ key: `category-${value}`, label: value, hint: 'Category', value })),
+    ].slice(0, 6)
+    : [];
+  function chooseSuggestion(suggestion) {
+    setSearch(suggestion.value);
+    setSearchFocused(false);
+    setSuggestionIndex(-1);
+    setPage(1);
+  }
 
   function resetFilters() {
     setSearch('');
@@ -1825,6 +2052,7 @@ function EventsPage({ onNavigate }) {
     setEventStatus('');
     setSort('upcoming');
     setPage(1);
+    setPageSize(6);
   }
 
   const activeFilters = [
@@ -1838,27 +2066,37 @@ function EventsPage({ onNavigate }) {
     eventStatus && `Status: ${eventStatus}`,
   ].filter(Boolean);
 
-  return <main className="page-shell"><div className="content-stack"><nav className="event-breadcrumb" aria-label="Breadcrumb"><button type="button" onClick={() => onNavigate('/')}>{t('homeNav')}</button><span>/</span><strong>Events</strong></nav><div className="section-header"><div><p className="eyebrow">EVENTS</p><h2>{t('upcomingExperiences')}</h2><p className="muted">{t('pageDescription')}</p></div><button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button></div>
+  return <main className="page-shell"><div className="content-stack"><nav className="event-breadcrumb" aria-label="Breadcrumb"><button type="button" onClick={() => onNavigate('/')}>{t('homeNav')}</button><span>/</span><strong>Events</strong></nav><section className="events-discovery-hero"><div className="section-header"><div><p className="eyebrow">EVENTHUB · EVENTS</p><h1>{t('upcomingExperiences')}</h1><p className="muted">{t('pageDescription')}</p></div><div className="events-hero-actions">{user?.role === 'organizer' && <button className="button" type="button" onClick={() => onNavigate('/organizer/dashboard?view=events')}>{t('createEvent')}</button>}<button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button></div></div><div className="events-discovery-stats"><div><strong>{eventCategoryTotal.toLocaleString()}</strong><span>{t('eventsListedCount')}</span></div><div><strong>{categoryOptions.length.toLocaleString()}</strong><span>{t('eventCategoriesCount')}</span></div><div><strong>{featuredEventCount.toLocaleString()}</strong><span>{t('featuredEventsCount')}</span></div></div></section>
     <div className="panel event-filter-panel">
       <button className="button secondary event-filter-toggle" type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>Filters {filtersOpen ? '−' : '+'}</button>
       <div className={`toolbar stacked-toolbar ${filtersOpen ? 'is-open' : ''}`}>
-        <input className="field-input" aria-label={t('searchEvents')} maxLength={120} value={search} onChange={(event) => { setPage(1); setSearch(event.target.value); }} placeholder={t('searchEvents')} />
-        <select className="filter-select" aria-label={t('allLocations')} value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }}>
-          <option value="">{t('allLocations')}</option><option value="Addis Ababa">Addis Ababa</option><option value="Bahir Dar">Bahir Dar</option><option value="Hawassa">Hawassa</option><option value="Dire Dawa">Dire Dawa</option>
-        </select>
+        <div className="event-search-control">
+          <div className="event-search-input-row"><input className="field-input" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded={searchFocused && suggestions.length > 0} aria-controls="event-search-suggestions" aria-activedescendant={suggestionIndex >= 0 ? `event-search-option-${suggestions[suggestionIndex]?.key}` : undefined} aria-label={t('searchEvents')} maxLength={120} value={search} onFocus={() => setSearchFocused(true)} onBlur={() => window.setTimeout(() => setSearchFocused(false), 120)} onChange={(event) => { setPage(1); setSuggestionIndex(-1); setSearch(event.target.value); }} onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' && suggestions.length) { event.preventDefault(); setSearchFocused(true); setSuggestionIndex((index) => (index + 1) % suggestions.length); }
+            if (event.key === 'ArrowUp' && suggestions.length) { event.preventDefault(); setSuggestionIndex((index) => (index - 1 + suggestions.length) % suggestions.length); }
+            if (event.key === 'Enter' && suggestionIndex >= 0) { event.preventDefault(); chooseSuggestion(suggestions[suggestionIndex]); }
+            if (event.key === 'Escape') { setSearchFocused(false); setSuggestionIndex(-1); }
+          }} placeholder={t('searchEvents')} /><button type="button" className="button small" onClick={() => { setPage(1); setSearchFocused(false); }}>{t('search')}</button>{search && <button type="button" className="button secondary small" aria-label={t('clearSearch')} onClick={() => { setSearch(''); setPage(1); setSearchFocused(false); }}>{t('clearSearch')}</button>}</div>
+          {searchFocused && suggestions.length > 0 && <ul className="event-search-suggestions" id="event-search-suggestions" role="listbox" aria-label={t('eventSearchSuggestions')}>{suggestions.map((suggestion, index) => <li key={suggestion.key}><button id={`event-search-option-${suggestion.key}`} type="button" role="option" aria-selected={index === suggestionIndex} onMouseDown={(event) => event.preventDefault()} onClick={() => chooseSuggestion(suggestion)}><strong>{suggestion.label}</strong><small>{suggestion.hint}</small></button></li>)}</ul>}
+        </div>
+        <input className="filter-select" aria-label={t('allLocations')} list="event-locations" maxLength={120} value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }} placeholder={t('allLocations')} />
+        <datalist id="event-locations">{locationOptions.map((item) => <option key={item} value={item} />)}</datalist>
         <select className="filter-select" aria-label={t('allCategories')} value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
           <option value="">{t('allCategories')}</option>
           {categoryOptions.map((value) => <option key={value} value={value.toLowerCase()}>{t(value.toLowerCase()) === value.toLowerCase() ? value : t(value.toLowerCase())}</option>)}
         </select>
         <select className="filter-select" aria-label={t('upcoming')} value={sort} onChange={(event) => { setPage(1); setSort(event.target.value); }}>
-          <option value="upcoming">{t('upcoming')}</option><option value="latest">{t('latest')}</option><option value="recent">Newest first</option><option value="price_asc">Price: Low to High</option><option value="price_desc">Price: High to Low</option><option value="alphabetical">{t('alphabetical')}</option>
+          <option value="upcoming">{t('upcomingFirst')}</option><option value="earliest">{t('oldestFirst')}</option><option value="latest">{t('latestDateFirst')}</option><option value="recent">{t('newestFirst')}</option><option value="price_asc">{t('priceLowToHigh')}</option><option value="price_desc">{t('priceHighToLow')}</option><option value="alphabetical">{t('alphabetical')}</option>
         </select>
         <input className="filter-select" aria-label="Start date" type="date" value={startDate} onChange={(event) => { setPage(1); setStartDate(event.target.value); }} />
         <input className="filter-select" aria-label="End date" type="date" value={endDate} onChange={(event) => { setPage(1); setEndDate(event.target.value); }} />
         <input className="filter-select" aria-label="Minimum ticket price" type="number" min="0" placeholder="Min price" value={minPrice} onChange={(event) => { setPage(1); setMinPrice(event.target.value); }} />
         <input className="filter-select" aria-label="Maximum ticket price" type="number" min="0" placeholder="Max price" value={maxPrice} onChange={(event) => { setPage(1); setMaxPrice(event.target.value); }} />
-        <select className="filter-select" aria-label="Event availability" value={eventStatus} onChange={(event) => { setPage(1); setEventStatus(event.target.value); }}>
-          <option value="">All availability</option><option value="upcoming">Upcoming</option><option value="available">Available</option><option value="free">Free</option><option value="paid">Paid</option>
+        <select className="filter-select" aria-label={t('eventAvailability')} value={eventStatus} onChange={(event) => { setPage(1); setEventStatus(event.target.value); }}>
+          <option value="">{t('allAvailability')}</option><option value="upcoming">{t('upcoming')}</option><option value="available">{t('available')}</option><option value="free">{t('eventsFree')}</option><option value="paid">{t('eventsPaid')}</option>
+        </select>
+        <select className="filter-select" aria-label={t('pageSize')} value={pageSize} onChange={(event) => { setPage(1); setPageSize(Number(event.target.value)); }}>
+          {[6, 12, 24].map((size) => <option key={size} value={size}>{size} {t('perPage')}</option>)}
         </select>
         <button type="button" className="button secondary small" onClick={resetFilters}>Clear Filters</button>
       </div>
@@ -1872,15 +2110,18 @@ function EventsPage({ onNavigate }) {
       {events.length ? <>
         <div className="card-grid event-list-grid">
           {events.map((event) => <article key={event.id} className="info-card event-tile">
-            <div className="event-thumb" aria-hidden="true">{event.coverImage && <img src={event.coverImage} alt="" loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />}<span>{event.type || 'Event'}</span></div>
+            <div className="event-thumb">{event.coverImage && <img src={event.coverImage} alt={event.title} width="960" height="540" loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />}<span>{event.type || 'Event'}</span></div>
             <div className="event-tile-body">
               <span className="event-tag">{event.type || 'Event'}</span><h3>{event.title}</h3>
+              <p className="event-card-description">{event.description || t('eventDescriptionUnavailable')}</p>
               <p>{[event.venue, event.location].filter(Boolean).join(', ') || t('locationTbd')}</p>
-              <small>{formatEventDate(event.startDate, language) || t('dateTbd')}</small>
-              <div className="pricing-row compact-row"><strong>{event.startingPrice === null || event.startingPrice === undefined ? 'Tickets unavailable' : Number(event.startingPrice) === 0 ? 'Free' : formatEventBudget(event.startingPrice, language)}</strong><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button><button type="button" className="button small" onClick={() => viewDetails(event.id)}>Book Now</button></div>
+              <small>{formatEventDate(event.startDate, language) || t('dateTbd')}{event.organizerName ? ` · ${t('eventsOrganizedBy')}: ${event.organizerName}` : ''}</small>
+              <div className="event-card-status"><span>{event.status || t('upcoming')}</span><span>{Number(event.availableQuantity || 0) > 0 ? `${Number(event.availableQuantity).toLocaleString()} ${t('ticketsAvailable')}` : t('ticketsUnavailable')}</span></div>
+              <div className="pricing-row compact-row"><strong>{event.startingPrice === null || event.startingPrice === undefined ? t('ticketsUnavailable') : Number(event.startingPrice) === 0 ? t('eventsFree') : formatEventBudget(event.startingPrice, language)}</strong><button type="button" className="button secondary small" onClick={() => shareEvent(event)}>{t('eventsShare')}</button><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button>{Number(event.availableQuantity || 0) > 0 && <button type="button" className="button small" onClick={() => viewDetails(event.id)}>{t('publicHomeBookNow')}</button>}</div>
             </div>
           </article>)}
         </div>
+        {eventShareMessage && <p className="event-inline-message" role="status">{eventShareMessage}</p>}
       </> : <div className="empty panel"><strong>{t('emptyTitle')}</strong><span>{t('emptyMessage')}</span><button className="button secondary small" type="button" onClick={resetFilters}>{t('reset')}</button></div>}
       <div className="pagination-row" aria-label="Event pages">
         <button className="button secondary small" type="button" disabled={pagination.page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>{t('previous')}</button>
@@ -2251,16 +2492,17 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
   {previewImage && <div className="overlay vendor-image-preview" role="dialog" aria-modal="true" aria-label="Vendor image preview" onMouseDown={(event) => event.target === event.currentTarget && setPreviewImage(null)}><button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="Close image preview"><X size={18}/></button><VendorMedia src={previewImage.url} alt={previewImage.name || 'Vendor portfolio'} loading="eager" /></div>}</main>;
 }
 
-function VendorsPage({ onNavigate, user }) {
+function VendorsPage({ onNavigate, user, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [vendors, setVendors] = useState([]);
   const [categoryOptions, setCategoryOptions] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchInput, setSearchInput] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
-  const [search, setSearch] = useState(() => new URLSearchParams(window.location.search).get('search') || '');
-  const [category, setCategory] = useState(() => new URLSearchParams(window.location.search).get('category') || 'all');
-  const [location, setLocation] = useState(() => new URLSearchParams(window.location.search).get('location') || '');
+  const initialFilters = getListingFiltersFromPath(currentPath);
+  const [searchInput, setSearchInput] = useState(initialFilters.search);
+  const [search, setSearch] = useState(initialFilters.search);
+  const [category, setCategory] = useState(initialFilters.category || 'all');
+  const [location, setLocation] = useState(initialFilters.location);
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [minRating, setMinRating] = useState('');
@@ -2274,6 +2516,24 @@ function VendorsPage({ onNavigate, user }) {
   const [filterError, setFilterError] = useState('');
   const [requestVendor, setRequestVendor] = useState(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const [comparisonSelection] = useState(() => {
+    try { return { ids: getComparedVendorIds(), error: '' }; }
+    catch (issue) { return { ids: [], error: issue.message || 'Saved comparison data could not be read.' }; }
+  });
+  const [comparedVendorIds, setComparedVendorIds] = useState(comparisonSelection.ids);
+  const [compareNotice, setCompareNotice] = useState(comparisonSelection.error);
+  const lastRoutePath = useRef(currentPath);
+
+  useEffect(() => {
+    if (lastRoutePath.current === currentPath) return;
+    lastRoutePath.current = currentPath;
+    const filters = getListingFiltersFromPath(currentPath);
+    setSearchInput(filters.search);
+    setSearch(filters.search);
+    setCategory(filters.category || 'all');
+    setLocation(filters.location);
+    setPage(filters.page);
+  }, [currentPath]);
 
   const fetchVendors = useCallback(async (nextPage, nextFilters, signal) => {
     setLoading(true);
@@ -2344,8 +2604,6 @@ function VendorsPage({ onNavigate, user }) {
     return () => window.clearTimeout(timer);
   }, [searchInput]);
 
-  const categories = Array.from(new Set(vendors.map((vendor) => vendor.category).filter(Boolean))).sort();
-
   const handleQuoteRequest = (vendorRecord) => {
     const services = Array.isArray(vendorRecord?.services) ? vendorRecord.services.filter((service) => service && service.published !== false && service.visibility !== 'private') : [];
     if (services.length) setRequestVendor(vendorRecord);
@@ -2356,7 +2614,21 @@ function VendorsPage({ onNavigate, user }) {
     onNavigate(`/contact?vendor=${encodeURIComponent(vendorName)}`);
   };
 
-  return <main className="page-shell vendor-directory-page"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div></div>
+  const toggleComparison = (vendorId) => {
+    try {
+      const result = toggleComparedVendor(vendorId);
+      setComparedVendorIds(result.ids);
+      setCompareNotice(result.limitReached ? t('navigationCompareLimit') : '');
+    } catch (issue) {
+      setCompareNotice(issue.message || t('navigationCompareLoadFailed'));
+    }
+  };
+
+  return <main className="page-shell vendor-directory-page"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{t('vendorsEyebrow')}</p><h2>{t('vendorsHeading')}</h2></div>
+    <div className="vendor-compare-actions">{comparedVendorIds.length > 0 && <span>{t('navigationCompareSelected').replace('{count}', String(comparedVendorIds.length))}</span>}
+      <button className="button secondary small" type="button" disabled={comparedVendorIds.length < 2} onClick={() => onNavigate('/compare')}>{t('navigationCompareSelectedAction')}</button>
+    </div></div>
+    {compareNotice && <p className="alert" role="status">{compareNotice}</p>}
     {categoryError && <div className="alert error" role="alert">{categoryError}</div>}
     {filterError && <div className="alert error" role="alert">{filterError}</div>}
     <div className="panel" style={{ padding: '18px 20px' }}>
@@ -2364,7 +2636,7 @@ function VendorsPage({ onNavigate, user }) {
         <div className="search-box"><Search size={16}/><input aria-label={t('searchVendors')} value={searchInput} onChange={(event) => { setPage(1); setSearchInput(event.target.value); }} placeholder={t('searchVendors')} /></div>
         <select className="filter-select" aria-label={t('allCategories')} value={category} onChange={(event) => { setPage(1); setCategory(event.target.value); }}>
           <option value="all">{t('allCategories')}</option>
-          {(categoryOptions.length ? categoryOptions.map((item) => item.name) : categories).map((item) => <option key={item} value={item}>{item}</option>)}
+          {categoryOptions.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
         </select>
         <input className="filter-select" aria-label="Vendor city or location" value={location} onChange={(event) => { setPage(1); setLocation(event.target.value); }} placeholder={t('allLocations')} />
         <input className="filter-select" aria-label="Minimum vendor price" type="number" min="0" value={minPrice} onChange={(event) => { setPage(1); setMinPrice(event.target.value); }} placeholder="Min price" />
@@ -2399,6 +2671,9 @@ function VendorsPage({ onNavigate, user }) {
             <div className="pricing-row"><strong>{vendor.priceFrom !== null && vendor.priceFrom !== undefined ? `${vendor.currency || 'ETB'} ${Number(vendor.priceFrom).toLocaleString()}` : t('requestQuote')}</strong><span>{vendor.reviewCount > 0 ? `★ ${Number(vendor.rating).toFixed(1)} · ` : ''}{vendor.reviewCount} {t('vendorReviews')}</span></div>
             <div className="card-actions">
               <button className="button secondary small" type="button" onClick={() => onNavigate(`/vendors/${vendor.id}`)}>{t('viewProfile')}</button>
+              <button className="button secondary small" type="button" aria-pressed={comparedVendorIds.includes(Number(vendor.id))} onClick={() => toggleComparison(vendor.id)}>
+                {t(comparedVendorIds.includes(Number(vendor.id)) ? 'navigationRemoveFromCompare' : 'navigationAddToCompare')}
+              </button>
               <button className="button small" type="button" disabled={!vendor.services?.some((service) => service && service.published !== false && service.visibility !== 'private')} onClick={() => handleQuoteRequest(vendor)}>Request Quote</button>
             </div>
           </div>
@@ -2418,21 +2693,32 @@ function VendorsPage({ onNavigate, user }) {
   </div>{requestVendor && <QuoteRequestModal service={requestVendor.services?.find((service) => service && service.published !== false && service.visibility !== 'private')} services={requestVendor.services} vendorId={requestVendor.id} user={user} onNavigate={onNavigate} onClose={() => setRequestVendor(null)}/>}</main>;
 }
 
-function ServicesPage({ onNavigate, user }) {
+function ServicesPage({ onNavigate, user, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [services, setServices] = useState([]);
   const [categories, setCategories] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const serviceRequestController = useRef(null);
-  const [filters, setFilters] = useState(() => {
-    const params = new URLSearchParams(window.location.search);
-    return { search: params.get('search') || '', category: params.get('category') || 'all', location: params.get('location') || '', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', sort: 'recommended' };
+  const initialFilters = getListingFiltersFromPath(currentPath);
+  const [filters, setFilters] = useState({
+    search: initialFilters.search, category: initialFilters.category || 'all', location: initialFilters.location,
+    minPrice: initialFilters.minPrice, maxPrice: initialFilters.maxPrice, minRating: '', availableOnly: '', sort: 'recommended',
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [categoryError, setCategoryError] = useState('');
   const [requestService, setRequestService] = useState(null);
+  const lastRoutePath = useRef(currentPath);
+
+  useEffect(() => {
+    if (lastRoutePath.current === currentPath) return;
+    lastRoutePath.current = currentPath;
+    const query = getListingFiltersFromPath(currentPath);
+    const nextFilters = { ...filters, search: query.search, category: query.category || 'all', location: query.location, minPrice: query.minPrice, maxPrice: query.maxPrice };
+    setFilters(nextFilters);
+    void loadServices(nextFilters, query.page);
+  }, [currentPath]);
 
   async function loadServices(nextFilters = filters, page = 1) {
     serviceRequestController.current?.abort();
@@ -2477,6 +2763,7 @@ function ServicesPage({ onNavigate, user }) {
       } catch (issue) {
         if (active) {
           setCategories([]);
+          setEventCategoryTotal(0);
           setCategoryError(issue.message || 'Unable to load service category filters.');
         }
       }
@@ -3319,7 +3606,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
   const vendorMenu = [
     ['overview', 'Dashboard Overview'], ['profile', 'Business Profile'], ['verification', 'Vendor Verification'], ['services', 'My Services'], ['add-edit-services', 'Add and Edit Services'], ['categories', 'Service Categories'], ['pricing', 'Pricing and Packages'], ['availability', 'Availability Calendar'], ['requests', 'Booking Requests'], ['confirmed', 'Confirmed Bookings'], ['history', 'Booking History'], ['coordination', 'Event Coordination'], ['quotations', 'Quotations'], ['payments', 'Payments and Earnings'], ['messages', 'Customer Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['reports', 'Reports'], ['settings', 'Business Settings'], ['account', 'Profile']
   ];
-  const [slug, setSlug] = useState('overview');
+  const [slug, setSlug] = useState(() => new URLSearchParams(window.location.search).get('view') === 'account' ? 'account' : 'overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data, setData] = useState({});
@@ -3463,7 +3750,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
     ['overview', 'Dashboard Overview'], ['vendors', 'Browse Vendors'], ['services', 'Search Services'], ['categories', 'Service Categories'], ['bookings', 'My Bookings'], ['history', 'Booking History'], ['events', 'My Events'], ['favorites', 'Wishlist'], ['quotations', 'Request Quotations'], ['payments', 'Payments and Transactions'], ['messages', 'Messages'], ['reviews', 'Reviews and Ratings'], ['notifications', 'Notifications'], ['profile', 'Profile']
   ];
 
-  const [slug, setSlug] = useState('overview');
+  const [slug, setSlug] = useState(() => new URLSearchParams(window.location.search).get('view') === 'profile' ? 'profile' : 'overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data, setData] = useState({});
@@ -3483,6 +3770,16 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
     guestCount: '',
     notes: '',
   });
+
+  useEffect(() => {
+    const syncDashboardView = () => {
+      const requestedView = new URLSearchParams(window.location.search).get('view');
+      if (requestedView && customerMenu.some(([view]) => view === requestedView)) setSlug(requestedView);
+    };
+    syncDashboardView();
+    window.addEventListener('popstate', syncDashboardView);
+    return () => window.removeEventListener('popstate', syncDashboardView);
+  }, []);
 
   async function createEvent(event) {
     event.preventDefault();
@@ -3616,7 +3913,7 @@ function OrganizerLogin({ onLogin }) {
 function OrganizerDashboard({ user, onLogout, onUserChange }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [dashboardView, setDashboardView] = useState('overview');
+  const [dashboardView, setDashboardView] = useState(() => new URLSearchParams(window.location.search).get('view') === 'profile' ? 'profile' : 'overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [overview, setOverview] = useState(null);
@@ -3861,6 +4158,7 @@ function AdminServiceCategories() {
   const [imagePreview, setImagePreview] = useState('');
   const [removeImage, setRemoveImage] = useState(false);
   const [fileError, setFileError] = useState('');
+  const [formError, setFormError] = useState('');
   const [history, setHistory] = useState([]);
   const [historyError, setHistoryError] = useState('');
 
@@ -3898,6 +4196,7 @@ function AdminServiceCategories() {
     setImagePreview('');
     setRemoveImage(false);
     setFileError('');
+    setFormError('');
   }
 
   function startCreate() {
@@ -3906,6 +4205,7 @@ function AdminServiceCategories() {
     setImagePreview('');
     setRemoveImage(false);
     setFileError('');
+    setFormError('');
     setModal({ kind: 'create' });
   }
 
@@ -3919,6 +4219,7 @@ function AdminServiceCategories() {
     setImagePreview('');
     setRemoveImage(false);
     setFileError('');
+    setFormError('');
     setModal({ kind: 'edit', row: category });
   }
 
@@ -3946,9 +4247,15 @@ function AdminServiceCategories() {
 
   async function submitCategory(event) {
     event.preventDefault();
+    const categoryNameError = validateCategoryName(form.name);
+    if (categoryNameError) {
+      setFormError(categoryNameError);
+      return;
+    }
     if (fileError) return;
     setBusy(true);
     setError('');
+    setFormError('');
     setNotice('');
     let savedId;
     try {
@@ -3986,7 +4293,9 @@ function AdminServiceCategories() {
       closeModal();
       await load(page);
     } catch (issue) {
-      setError(issue.message);
+      setFormError(issue.response?.data?.details?.find((detail) => detail.field === 'name')?.message
+        || issue.response?.data?.error
+        || issue.message);
     } finally {
       setBusy(false);
     }
@@ -4121,7 +4430,8 @@ function AdminServiceCategories() {
         </div>
       ) : modal && (
         <Modal title={title} onClose={closeModal} onSubmit={submitCategory} busy={busy}>
-          <label className="field"><span>Category name</span><input required maxLength={120} value={form.name || ''} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} /></label>
+          {formError && <div className="alert error" id="category-name-error" role="alert">{formError}</div>}
+          <label className="field"><span>Category name</span><input required minLength={3} maxLength={60} aria-invalid={Boolean(formError)} aria-describedby={formError ? 'category-name-error' : undefined} value={form.name || ''} onChange={(event) => { setForm((current) => ({ ...current, name: event.target.value })); setFormError(validateCategoryName(event.target.value)); }} /></label>
           <label className="field"><span>Description</span><textarea maxLength={500} value={form.description || ''} onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))} /></label>
           <label className="field"><span>Display order</span><input type="number" min="0" max="100000" step="1" required value={form.display_order ?? '0'} onChange={(event) => setForm((current) => ({ ...current, display_order: event.target.value }))} /></label>
           <div className="field">
@@ -5310,7 +5620,7 @@ export default function App(){
       await login(email, password);
       const continuation = sessionStorage.getItem('eventhub_after_login');
       const demoProfile = readDemoSession();
-      if (continuation && (/^\/events\/\d+$/.test(continuation) || continuation === '/vendor-application' && ['customer', 'organizer'].includes(demoProfile?.role))) {
+      if (continuation && (continuation === '/' && ['customer', 'organizer'].includes(demoProfile?.role) || /^\/events\/\d+$/.test(continuation) || continuation === '/vendor-application' && ['customer', 'organizer'].includes(demoProfile?.role))) {
         sessionStorage.removeItem('eventhub_after_login');
         navigatePublic(continuation);
       }
@@ -5335,7 +5645,8 @@ export default function App(){
     const rolePath = role === 'admin' ? '/admin' : role === 'organizer' ? '/organizer/dashboard' : role === 'vendor' ? '/vendor/dashboard' : '/customer/dashboard';
     const continuation = sessionStorage.getItem('eventhub_after_login');
     const canContinue = continuation && (
-      role === 'customer' && (/^\/events\/\d+$/.test(continuation) || continuation === '/my-bookings' || continuation === '/vendor-application')
+      ['customer', 'organizer'].includes(role) && continuation === '/'
+      || role === 'customer' && (/^\/events\/\d+$/.test(continuation) || continuation === '/my-bookings' || continuation === '/vendor-application')
       || role === 'organizer' && continuation === '/vendor-application'
     );
     if (canContinue) sessionStorage.removeItem('eventhub_after_login');
@@ -5409,9 +5720,9 @@ export default function App(){
 
   const publicRoutes = {
     '/': <PublicOverview user={user} currentPath={currentPath} onNavigate={navigatePublic} onLogout={logout} />,
-    '/events': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} /></PublicPageLayout>,
-    '/vendors': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} /></PublicPageLayout>,
-    '/services': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage onNavigate={navigatePublic} /></PublicPageLayout>,
+    '/events': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>,
+    '/vendors': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>,
+    '/services': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>,
     '/categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/about': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/contact': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>,
@@ -5447,10 +5758,10 @@ export default function App(){
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorApplicationPage user={user} onNavigate={navigatePublic}/></PublicPageLayout>;
   }
   if (eventRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventDetailsPage eventId={eventRoute[1]} user={user} api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
-  if (routePath === '/events') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} /></PublicPageLayout>;
-  if (routePath === '/vendors' || routePath.startsWith('/vendors?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/events') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>;
+  if (routePath === '/vendors' || routePath.startsWith('/vendors?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if (vendorRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorDetailPage vendorId={vendorRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
-  if (routePath === '/services') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/services') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if (serviceRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceDetailPage serviceId={serviceRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/categories' || routePath.startsWith('/categories?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath.startsWith('/categories/')) {
@@ -5460,6 +5771,17 @@ export default function App(){
   if (routePath === '/about') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/contact') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>;
   if (routePath === '/') return publicRoutes['/'];
+  if (routePath === '/calendar') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventCalendarPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/compare') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CompareVendorsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/recently-viewed') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><RecentlyViewedPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/my-favorites' || routePath === '/recommendations') {
+    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
+    if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('navigationCustomerOnly', language)}</div></main></PublicPageLayout>;
+    const page = routePath === '/my-favorites'
+      ? <MyFavoritesPage api={api} onNavigate={navigatePublic} />
+      : <RecommendationsPage api={api} onNavigate={navigatePublic} />;
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}>{page}</PublicPageLayout>;
+  }
   if (routePath === '/my-bookings') {
     if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
     if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="alert error">My Event Bookings is available to customer accounts.</div></main></PublicPageLayout>;
@@ -5477,7 +5799,7 @@ export default function App(){
     if (currentPath === '/privacy') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>;
     if (currentPath === '/terms') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><TermsPage /></PublicPageLayout>;
     if (currentPath === '/help') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>;
-    if (currentPath === '/events') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} /></PublicPageLayout>;
+    if (currentPath.split('?')[0] === '/events') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={null} currentPath={currentPath} /></PublicPageLayout>;
     if (publicRoutes[routePath]) return publicRoutes[routePath];
     return <NotFoundPage onNavigate={navigatePublic}/>;
   }
@@ -5485,6 +5807,6 @@ export default function App(){
   if (portal === 'customer') return <><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser} onNavigatePublic={navigatePublic}/></>;
   if (portal === 'organizer') return <><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
   if (portal === 'vendor') return <><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
-  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={navigate} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={navigate} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translate('securePlatform',language)}</footer></main></div></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={navigate} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={navigate} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translate('securePlatform',language)}</footer></main></div></>;
 }

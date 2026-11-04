@@ -12,6 +12,7 @@ const adminSessions = new Set([hashToken(initialToken)]);
 let passwordHash;
 let emailChangeChallenge = null;
 let emailChangeEmail;
+let emailDeliveryFailure = false;
 const registeredEmails = new Set(['taken@example.test']);
 const testEmailOtp = '123456';
 let profile = {
@@ -185,7 +186,10 @@ const database = {
 const app = createApp({
   database,
   emailChangeEmailConfigured: () => true,
-  emailChangeEmailSender: async (message) => { emailChangeEmail = message.email; },
+  emailChangeEmailSender: async (message) => {
+    emailChangeEmail = message.email;
+    if (emailDeliveryFailure) throw new Error('test delivery failure');
+  },
   emailChangeOtpGenerator: () => testEmailOtp,
   emailChangeOtpHasher: async () => ({ hash: 'a'.repeat(128), salt: 'b'.repeat(32) }),
   emailChangeOtpVerifier: async (otp) => otp === testEmailOtp,
@@ -400,6 +404,7 @@ test('administrator email changes stay pending until OTP verification and then u
     body: JSON.stringify({ email: ' NEW@example.test ', currentPassword: 'NewAdminPass123' }),
   });
   assert.equal(requested.status, 202);
+  assert.doesNotMatch(JSON.stringify(await requested.json()), /123456/);
   assert.equal(profile.email, 'admin@example.test');
   assert.equal(emailChangeEmail, 'new@example.test');
   assert.notEqual(emailChangeChallenge.otp_hash, testEmailOtp);
@@ -438,4 +443,31 @@ test('administrator email changes stay pending until OTP verification and then u
   });
   assert.equal(oldLogin.status, 401);
   assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.profile_email_changed'));
+
+  emailDeliveryFailure = true;
+  const undelivered = await adminRequest('/api/admin/profile/email-change', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'undelivered@example.test', currentPassword: 'NewAdminPass123' }),
+  });
+  assert.equal(undelivered.status, 503);
+  assert.equal(emailChangeChallenge, null);
+  assert.equal(profile.email, 'new@example.test');
+
+  emailDeliveryFailure = false;
+  const expiredRequest = await adminRequest('/api/admin/profile/email-change', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'expired@example.test', currentPassword: 'NewAdminPass123' }),
+  });
+  assert.equal(expiredRequest.status, 202);
+  emailChangeChallenge.expired = true;
+  const expiredOtp = await adminRequest('/api/admin/profile/email-change/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp: testEmailOtp }),
+  });
+  assert.equal(expiredOtp.status, 400);
+  assert.equal(profile.email, 'new@example.test');
+  assert.equal(emailChangeChallenge, null);
 });

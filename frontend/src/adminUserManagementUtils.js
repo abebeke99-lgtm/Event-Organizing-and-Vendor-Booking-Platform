@@ -1,9 +1,3 @@
-export function generateSecurePassword() {
-  const bytes = new Uint8Array(24);
-  globalThis.crypto.getRandomValues(bytes);
-  return `Aa9!${Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')}`;
-}
-
 export function validateCreateUserForm(form, translate) {
   const errors = {};
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

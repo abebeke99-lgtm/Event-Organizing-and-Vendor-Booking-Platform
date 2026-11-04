@@ -74,6 +74,7 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 - Blueprint: repository `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
 - Set these environment variable names in Render: `NODE_ENV`, `WEB_ORIGIN`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL`, `DB_SSL_CA`, `COOKIE_SECURE`, and `COOKIE_SAME_SITE`. Production requires TLS and a verified CA, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Keep credentials and CA material only in secure dashboard settings.
+- Hero slide files are stored under `backend/uploads/hero-slides`. Configure persistent shared storage for this directory in production (especially across deploys or multiple API instances); the database stores only generated filenames and the API serves the image bytes.
 - `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and checks `SELECT DATABASE()` against `DB_NAME`; readiness failures return a safe reason code. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
 - Run `npm run db:check` only in an environment configured with the real DB credentials and CA. It performs read-only checks and no schema/data changes.
 - Confirm deploy version at `/api/version`. To rebuild without cached artifacts, use **Clear build cache & deploy** in Render.
@@ -82,6 +83,8 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
 - Set `VITE_API_URL` in Netlify to the Render API origin only (no `/api` suffix or trailing slash). It is a public build-time setting, not a secret. The client appends `/api` and sends credentialed requests.
+- Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to the official profile URLs in Netlify, Vercel, or your frontend host's build environment. These are public build-time values. Redeploy after setting or changing them; do not enter credentials in profile URLs.
+- Optionally set `VITE_CONTACT_PHONE` and `VITE_CONTACT_ADDRESS` in the frontend build environment to show phone and location in the top contact bar. The phone is rendered as a `tel:` link and the address as plain text; leave either value empty to hide that item. For local development, set them in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
 - After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.
 
@@ -221,7 +224,16 @@ The public contact form submits to `POST /api/contact`; `GET /api/contact` retur
 
 Apply `007_contact_inquiry_types.sql` with `npm run migrate` to enable the full inquiry type list and resolved status. Configure actual support contact details in `system_settings` (`support_email`, `support_phone`, `support_address`, `support_hours`, and `social_links`); unconfigured details are not shown publicly.
 
-The public footer displays the contact email `abebeke99@gmail.com` and Telegram, YouTube, Facebook, and LinkedIn icons in the Contact Us column. An icon is clickable only when its matching `VITE_EVENTHUB_TELEGRAM_URL`, `VITE_EVENTHUB_YOUTUBE_URL`, `VITE_EVENTHUB_FACEBOOK_URL`, or `VITE_EVENTHUB_LINKEDIN_URL` variable is set to a confirmed, non-root EventHub profile URL; otherwise it is shown as unconfigured with no link. Configure the URLs in `frontend/.env.example` only after verifying the official accounts. URLs must use HTTPS and the matching platform host. These URLs are public and included in the frontend bundle, so do not put credentials in them.
+The public footer displays the contact email `abebeke99@gmail.com` as a mail link. Telegram, YouTube, Facebook, and LinkedIn icons appear only for configured profile URLs; if none are configured, the footer displays a setup notice. Set the following Vite environment variables in `frontend/.env.development` for local work or in the frontend host's build environment for deployment. The empty values in `frontend/.env.example` are placeholders:
+
+```env
+VITE_TELEGRAM_URL=https://t.me/<channel>
+VITE_YOUTUBE_URL=https://youtube.com/@<channel>
+VITE_FACEBOOK_URL=https://facebook.com/<page>
+VITE_LINKEDIN_URL=https://linkedin.com/company/<page>
+```
+
+Use only confirmed official EventHub profile URLs. Values must use HTTPS and the matching platform host; profile root URLs are ignored. These URLs are public and included in the frontend bundle, so do not put credentials in them.
 
 ### Payment and refund management
 
@@ -254,6 +266,12 @@ Audit entries are generated server-side by the existing audit writer. Requests r
 ### Administrator profile and security
 
 The Administrator > Profile screen reads profile and recent account activity from the authenticated administrator session. Name and phone changes, validated profile-image uploads/removals, and password changes are persisted and audited; role, status, and email are displayed read-only. Password changes require the current password and the existing 12–16 character password policy, rotate the current administrator session, and invalidate other administrator and platform sessions for that account. The profile endpoints accept no client-supplied user ID.
+
+### Home hero image slides
+
+The Administrator > Hero Images page manages up to five slides. Before using it, review and back up the target database, then apply pending migrations from the repository root with `npm --workspace backend run migrate`. The additive `030_hero_slides.sql` migration creates the slide table; it does not seed images or alter existing tables. Uploads accept JPG, PNG, or WebP up to 5 MB and are saved as generated filenames under `backend/uploads/hero-slides`; production must provide persistent shared storage for that directory.
+
+Public routes are `GET /api/hero-slides` and `GET /api/hero-slides/:id/image`. Admin-only routes are `GET /api/admin/hero-slides`, `GET /api/admin/hero-slides/:id/image`, `POST /api/admin/hero-slides`, `PUT /api/admin/hero-slides/:id`, `DELETE /api/admin/hero-slides/:id`, and `PATCH /api/admin/hero-slides/reorder`.
 
 ## 12. Deployment Considerations
 
@@ -451,6 +469,14 @@ This codebase provides a working foundation for the Event Organizing and Vendor 
 
 ### Admin APIs
 
+- GET /api/hero-slides
+- GET /api/hero-slides/:id/image
+- GET /api/admin/hero-slides
+- GET /api/admin/hero-slides/:id/image
+- POST /api/admin/hero-slides
+- PUT /api/admin/hero-slides/:id
+- DELETE /api/admin/hero-slides/:id
+- PATCH /api/admin/hero-slides/reorder
 - GET /api/admin/users
 - PATCH /api/admin/vendors/:id/verify
 - GET /api/admin/reports/summary

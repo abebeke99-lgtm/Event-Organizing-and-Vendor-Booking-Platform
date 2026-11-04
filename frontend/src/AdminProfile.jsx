@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Camera, KeyRound, ShieldCheck, UserRound } from 'lucide-react';
 import apiClient from './api/axios.js';
+import { translateText } from './language.js';
 import './adminProfile.css';
 
 const passwordInitial = { currentPassword: '', newPassword: '', confirmPassword: '' };
 
 function errorText(error) {
-  return error.response?.data?.error || error.message || 'The request could not be completed.';
+  return translateText(error.response?.data?.error || error.message || 'The request could not be completed.');
 }
 
 function formatDate(value) {
@@ -128,15 +129,15 @@ export default function AdminProfile({ user, onUserChange }) {
     setNotice('');
     const normalizedEmail = emailDraft.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-      setEmailError('Enter a valid email address.');
+      setEmailError(translateText('Enter a valid email address.'));
       return;
     }
     if (normalizedEmail === String(profile.email || '').toLowerCase()) {
-      setEmailError('Enter an email address different from your current address.');
+      setEmailError(translateText('Enter an email address different from your current address.'));
       return;
     }
     if (!emailCurrentPassword) {
-      setEmailError('Enter your current password to verify this change.');
+      setEmailError(translateText('Enter your current password to verify this change.'));
       return;
     }
 
@@ -150,7 +151,7 @@ export default function AdminProfile({ user, onUserChange }) {
       setPendingEmail(normalizedEmail);
       setEmailVerificationSent(true);
       setEmailOtp('');
-      setNotice(response.data.message || 'A verification code was sent to your new email address.');
+      setNotice(translateText(response.data.message || 'A verification code was sent to your new email address.'));
     } catch (issue) {
       setEmailError(errorText(issue));
     } finally {
@@ -164,7 +165,7 @@ export default function AdminProfile({ user, onUserChange }) {
     setError('');
     setNotice('');
     if (!/^\d{6}$/.test(emailOtp)) {
-      setEmailError('Enter the six-digit verification code.');
+      setEmailError(translateText('Enter the six-digit verification code.'));
       return;
     }
 
@@ -179,7 +180,7 @@ export default function AdminProfile({ user, onUserChange }) {
       setPendingEmail('');
       setEmailVerificationSent(false);
       onUserChange?.((current) => ({ ...current, email: updatedEmail }));
-      setNotice('Your email address has been verified and updated.');
+      setNotice(translateText('Your email address has been verified and updated.'));
     } catch (issue) {
       setEmailError(errorText(issue));
     } finally {
@@ -311,7 +312,7 @@ export default function AdminProfile({ user, onUserChange }) {
               <div className="admin-profile-email-section">
                 <label className="field admin-profile-email-address">
                   <span>Email address</span>
-                  <input type="email" maxLength={254} autoComplete="email" value={emailDraft} disabled={changingEmail || verifyingEmail} onChange={(event) => {
+                  <input type="email" maxLength={254} autoComplete="email" value={emailDraft} disabled={emailVerificationSent || changingEmail || verifyingEmail} onChange={(event) => {
                     setEmailDraft(event.target.value);
                     setEmailError('');
                     if (emailVerificationSent) {
