@@ -8,6 +8,7 @@ import {
   createDefaultAdminSystemSettings, loadAdminSystemSettings, saveAdminSystemSettings,
   SYSTEM_SETTINGS_SECTIONS, validateAdminSetting,
 } from './adminSystemSettingsData.js';
+import { translate, useLanguage } from './language.js';
 import './adminSystemSettings.css';
 
 const sectionIcons = {
@@ -147,6 +148,7 @@ function Card({ title, description, children, className = '' }) {
 }
 
 export default function AdminSystemSettings() {
+  const language = useLanguage();
   const [initial] = useState(() => {
     try {
       return loadAdminSystemSettings(window.localStorage);
@@ -645,7 +647,7 @@ export default function AdminSystemSettings() {
 
   return <section className="page admin-system-settings">
     <header className="as-page-header">
-      <div><div className="as-breadcrumb"><span>Dashboard</span><span>/</span><strong>System Settings</strong></div><h1>System Settings</h1><p>Manage and configure your event management platform.</p></div>
+      <div><div className="as-breadcrumb"><span>{translate('nav.dashboard.groupOverview', language)}</span><span>/</span><strong>{translate('nav.dashboard.systemSettings', language)}</strong></div><h1>System Settings</h1><p>Manage and configure your event management platform.</p></div>
       <div className="as-header-actions"><button className="as-button as-button-quiet" type="button" onClick={resetAll}><RotateCcw size={15} /> Reset to Default</button><button className="as-button as-button-primary" type="button" onClick={saveAll} disabled={!dirty}><Save size={15} /> Save All Settings</button></div>
     </header>
     <div className="as-statusline"><span className={dirty ? 'as-dirty-indicator' : 'as-clean-indicator'}>{dirty ? 'Unsaved changes' : 'All changes saved'}</span><span>Last saved: {lastSaved ? new Date(lastSaved).toLocaleString() : 'Not saved yet'}</span><span className="as-demo-note">Browser demonstration only</span></div>
@@ -654,9 +656,9 @@ export default function AdminSystemSettings() {
     <div className="as-settings-layout">
       <aside className="as-settings-nav">
         <label className="as-search"><Search size={16} /><input placeholder="Search settings" value={search} onChange={(event) => setSearch(event.target.value)} /></label>
-        <nav aria-label="System settings sections">{visibleSections.map((item) => {
+        <nav aria-label={translate('nav.dashboard.sections', language)}>{visibleSections.map((item) => {
           const Icon = sectionIcons[item.id] || SlidersHorizontal;
-          return <button key={item.id} type="button" className={`as-nav-item ${activeSection === item.id ? 'active' : ''}`} onClick={() => { setActiveSection(item.id); setError(''); setToast(''); }}><Icon size={16} /><span>{item.label}</span>{JSON.stringify(settings[item.id]) !== JSON.stringify(savedSettings[item.id]) && <i aria-label="Unsaved changes" />}</button>;
+          return <button key={item.id} type="button" className={`as-nav-item ${activeSection === item.id ? 'active' : ''}`} onClick={() => { setActiveSection(item.id); setError(''); setToast(''); }}><Icon size={16} /><span>{translate(item.translationKey, language)}</span>{JSON.stringify(settings[item.id]) !== JSON.stringify(savedSettings[item.id]) && <i aria-label="Unsaved changes" />}</button>;
         })}{visibleSections.length === 0 && <p className="as-nav-empty">No settings sections found.</p>}</nav>
       </aside>
       <main className="as-settings-main">

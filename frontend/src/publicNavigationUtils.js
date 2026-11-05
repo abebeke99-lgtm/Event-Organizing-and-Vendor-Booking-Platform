@@ -1,8 +1,63 @@
+const serviceCategoryTranslationKeys = Object.freeze({
+  'catering-services': 'nav.services.cateringServices',
+  catering: 'nav.vendorCategories.catering',
+  'photography-videography': 'nav.services.photographyVideography',
+  'photography-and-videography': 'nav.services.photographyVideography',
+  photography: 'nav.vendorCategories.photography',
+  'decoration-florists': 'nav.services.decorationFlorists',
+  'decoration-and-florists': 'nav.services.decorationFlorists',
+  decoration: 'nav.vendorCategories.decoration',
+  'wedding-planning': 'nav.services.weddingPlanning',
+  'venue-event-spaces': 'nav.services.venueEventSpaces',
+  'venue-and-event-spaces': 'nav.services.venueEventSpaces',
+  'wedding-venues': 'nav.services.venueEventSpaces',
+  'music-entertainment': 'nav.services.musicEntertainment',
+  'music-and-entertainment': 'nav.services.musicEntertainment',
+  entertainment: 'nav.services.musicEntertainment',
+  'sound-lighting': 'nav.services.soundLighting',
+  transportation: 'nav.services.transportation',
+  'makeup-beauty': 'nav.services.makeupBeauty',
+  'rental-equipment': 'nav.services.rentalEquipment',
+  'cakes-bakery': 'nav.services.cakesBakery',
+  'cakes-and-bakery': 'nav.services.cakesBakery',
+  'printing-invitations': 'nav.services.printingInvitations',
+  'printing-and-invitations': 'nav.services.printingInvitations',
+  'security-services': 'nav.services.securityServices',
+  'other-services': 'nav.services.otherServices',
+});
+
+const eventCategoryTranslationKeys = Object.freeze({
+  wedding: 'nav.eventCategories.wedding',
+  weddings: 'nav.eventCategories.wedding',
+  birthday: 'nav.eventCategories.birthday',
+  birthdays: 'nav.eventCategories.birthday',
+  graduation: 'nav.eventCategories.graduation',
+  graduations: 'nav.eventCategories.graduation',
+  conference: 'nav.eventCategories.conference',
+  conferences: 'nav.eventCategories.conference',
+  'corporate-events': 'nav.eventCategories.corporateEvents',
+  'concerts-music': 'nav.eventCategories.concertsMusic',
+  festivals: 'nav.eventCategories.festivals',
+  'religious-events': 'nav.eventCategories.religiousEvents',
+  'cultural-events': 'nav.eventCategories.culturalEvents',
+  'workshops-training': 'nav.eventCategories.workshopsTraining',
+  'sports-events': 'nav.eventCategories.sportsEvents',
+  exhibitions: 'nav.eventCategories.exhibitions',
+});
+
+function categoryTranslationKey(pathPrefix, slug) {
+  const normalizedSlug = String(slug || '').trim().toLowerCase();
+  return pathPrefix === 'service' || pathPrefix === 'vendor'
+    ? serviceCategoryTranslationKeys[normalizedSlug]
+    : eventCategoryTranslationKeys[normalizedSlug];
+}
+
 function categoryLink(category, pathPrefix, countField) {
   const slug = category.slug || category.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const item = {
     key: `${pathPrefix}-${category.id || slug}`,
     label: category.name,
+    translationKey: categoryTranslationKey(pathPrefix, slug),
     slug,
     path: pathPrefix === 'category'
       ? `/categories/${encodeURIComponent(slug)}`
@@ -23,6 +78,7 @@ function categoryLink(category, pathPrefix, countField) {
     key: `${pathPrefix}-child-${child.id || child.slug}`,
     label: child.name,
     title: child.name,
+    translationKey: categoryTranslationKey(pathPrefix, child.slug || child.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')),
     path: pathPrefix === 'category'
       ? `/categories/${encodeURIComponent(child.slug || child.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'))}`
       : pathPrefix === 'event'
@@ -35,7 +91,7 @@ function categoryLink(category, pathPrefix, countField) {
 }
 
 function buildServiceNavigationItems(categories = []) {
-  const allServices = { key: 'all-services', label: 'All Services', path: '/services', fixed: true };
+  const allServices = { key: 'all-services', label: 'All Services', translationKey: 'nav.services.all', path: '/services', fixed: true };
   const seen = new Set();
   const serviceItems = categories
     .filter((category) => category?.isActive !== false)
@@ -75,63 +131,64 @@ export function buildPublicNavigationMenu(categories = [], eventCategories = [],
     .sort((left, right) => String(left.name).localeCompare(String(right.name)))
     .map((item) => categoryLink(item, 'vendor', 'vendorCount'));
   const menu = [
-    { key: 'home', label: 'Home', path: '/' },
-    { key: 'events', label: 'Events', path: '/events', children: [
-      { key: 'browse-events', label: 'Browse Events', path: '/events', fixed: true },
-      { key: 'upcoming-events', label: 'Upcoming Events', path: '/events?filter=upcoming' },
-      { key: 'free-events', label: 'Free Events', path: '/events?filter=free' },
-      { key: 'featured-events', label: 'Featured Events', path: '/events?filter=featured' },
-      { key: 'popular-events', label: 'Popular Events', path: '/events?sort=popular' },
-      { key: 'recent-events', label: 'Recently Added Events', path: '/events?sort=newest' },
+    { key: 'home', label: 'Home', translationKey: 'nav.home', path: '/' },
+    { key: 'events', label: 'Events', translationKey: 'nav.events', path: '/events', children: [
+      { key: 'browse-events', label: 'Browse Events', translationKey: 'nav.events.browse', path: '/events', fixed: true },
+      { key: 'upcoming-events', label: 'Upcoming Events', translationKey: 'nav.events.upcoming', path: '/events?filter=upcoming' },
+      { key: 'free-events', label: 'Free Events', translationKey: 'nav.events.free', path: '/events?filter=free' },
+      { key: 'featured-events', label: 'Featured Events', translationKey: 'nav.events.featured', path: '/events?filter=featured' },
+      { key: 'popular-events', label: 'Popular Events', translationKey: 'nav.events.popular', path: '/events?sort=popular' },
+      { key: 'recent-events', label: 'Recently Added Events', translationKey: 'nav.events.recent', path: '/events?sort=newest' },
     ] },
-    { key: 'vendors', label: 'Find Vendors', path: '/vendors', children: [
-      { key: 'browse-vendors', label: 'Browse All Vendors', path: '/vendors', fixed: true },
-      { key: 'verified-vendors', label: 'Verified Vendors', path: '/vendors?verified=true' },
-      { key: 'popular-vendors', label: 'Popular Vendors', path: '/vendors?sort=popular' },
-      { key: 'featured-vendors', label: 'Featured Vendors', path: '/vendors?filter=featured' },
-      { key: 'recent-vendors', label: 'Newly Registered Vendors', path: '/vendors?sort=recently-added' },
+    { key: 'vendors', label: 'Find Vendors', translationKey: 'nav.vendors', path: '/vendors', children: [
+      { key: 'browse-vendors', label: 'Browse All Vendors', translationKey: 'nav.vendors.browseAll', path: '/vendors', fixed: true },
+      { key: 'verified-vendors', label: 'Verified Vendors', translationKey: 'nav.vendors.verified', path: '/vendors?verified=true' },
+      { key: 'popular-vendors', label: 'Popular Vendors', translationKey: 'nav.vendors.popular', path: '/vendors?sort=popular' },
+      { key: 'featured-vendors', label: 'Featured Vendors', translationKey: 'nav.vendors.featured', path: '/vendors?filter=featured' },
+      { key: 'recent-vendors', label: 'Newly Registered Vendors', translationKey: 'nav.vendors.newlyRegistered', path: '/vendors?sort=recently-added' },
       {
         key: 'vendor-categories',
         label: 'Vendor Categories',
+        translationKey: 'nav.vendors.categories',
         path: '/vendors',
         expandable: true,
         children: vendorItems.map((item) => ({ ...item, database: true })),
       },
     ] },
-    { key: 'services', label: 'Services', path: '/services', children: [
+    { key: 'services', label: 'Services', translationKey: 'nav.services', path: '/services', children: [
       ...serviceItems,
     ] },
-    { key: 'categories', label: 'Categories', path: '/categories', children: [
+    { key: 'categories', label: 'Categories', translationKey: 'nav.categories', path: '/categories', children: [
       ...eventItems.map((item) => ({ ...item, database: true })),
     ] },
-    { key: 'discover', label: 'Discover', path: '/calendar', icon: 'compass', children: [
-      { key: 'discover-popular-events', label: 'Popular Events', path: '/events?sort=popular', icon: 'trending-up' },
-      { key: 'discover-featured-events', label: 'Featured Events', path: '/events?filter=featured', icon: 'star' },
-      { key: 'discover-popular-vendors', label: 'Popular Vendors', path: '/vendors?sort=popular', icon: 'store' },
-      { key: 'discover-featured-vendors', label: 'Featured Vendors', path: '/vendors?filter=featured', icon: 'star' },
-      { key: 'discover-popular-services', label: 'Popular Services', path: '/services?sort=popular', icon: 'trending-up' },
-      { key: 'discover-popular-venues', label: 'Popular Venues', path: '/venues', icon: 'building' },
-      { key: 'discover-event-calendar', label: 'Event Calendar', description: 'Explore events by date', path: '/calendar', icon: 'calendar-days' },
-      { key: 'discover-recent-events', label: 'Recently Added Events', path: '/events?sort=newest', icon: 'clock' },
-      { key: 'discover-recommended-events', label: 'Recommended Events', path: '/recommendations', icon: 'sparkles' },
-      { key: 'discover-explore-all', label: 'Explore All', path: '/events', icon: 'compass' },
+    { key: 'discover', label: 'Discover', translationKey: 'nav.discover', path: '/calendar', icon: 'compass', children: [
+      { key: 'discover-popular-events', label: 'Popular Events', translationKey: 'nav.discover.popularEvents', path: '/events?sort=popular', icon: 'trending-up' },
+      { key: 'discover-featured-events', label: 'Featured Events', translationKey: 'nav.discover.featuredEvents', path: '/events?filter=featured', icon: 'star' },
+      { key: 'discover-popular-vendors', label: 'Popular Vendors', translationKey: 'nav.discover.popularVendors', path: '/vendors?sort=popular', icon: 'store' },
+      { key: 'discover-featured-vendors', label: 'Featured Vendors', translationKey: 'nav.discover.featuredVendors', path: '/vendors?filter=featured', icon: 'star' },
+      { key: 'discover-popular-services', label: 'Popular Services', translationKey: 'nav.discover.popularServices', path: '/services?sort=popular', icon: 'trending-up' },
+      { key: 'discover-popular-venues', label: 'Popular Venues', translationKey: 'nav.discover.popularVenues', path: '/venues', icon: 'building' },
+      { key: 'discover-event-calendar', label: 'Event Calendar', translationKey: 'nav.discover.eventCalendar', description: 'Explore events by date', path: '/calendar', icon: 'calendar-days' },
+      { key: 'discover-recent-events', label: 'Recently Added Events', translationKey: 'nav.discover.recentEvents', path: '/events?sort=newest', icon: 'clock' },
+      { key: 'discover-recommended-events', label: 'Recommended Events', translationKey: 'nav.discover.recommendedEvents', path: '/recommendations', icon: 'sparkles' },
+      { key: 'discover-explore-all', label: 'Explore All', translationKey: 'nav.discover.exploreAll', path: '/events', icon: 'compass' },
     ] },
     {
       key: 'about',
       label: 'About Us',
+      translationKey: 'nav.aboutUs',
       path: '/about',
       children: [
-        { key: 'about-eventhub', label: 'About EventHub', path: '/about' },
-        { key: 'about-mission-vision', label: 'Our Mission & Vision', path: '/about?section=mission-vision' },
-        { key: 'about-how-it-works', label: 'How EventHub Works', path: '/about?section=how-it-works' },
-        { key: 'about-why-choose', label: 'Why Choose EventHub', path: '/about?section=why-choose-eventhub' },
-        { key: 'about-our-team', label: 'Our Team', path: '/about?section=our-team' },
-        { key: 'about-our-partners', label: 'Our Partners', path: '/about?section=our-partners' },
-        { key: 'about-success-stories', label: 'Success Stories', path: '/about?section=success-stories' },
-        { key: 'about-faqs', label: 'FAQs', path: '/about?section=faqs' },
+        { key: 'about-mission-vision', label: 'Our Mission & Vision', translationKey: 'nav.about.missionVision', path: '/about/mission-vision' },
+        { key: 'about-how-it-works', label: 'How EventHub Works', translationKey: 'nav.about.howItWorks', path: '/about/how-it-works' },
+        { key: 'about-why-choose', label: 'Why Choose EventHub', translationKey: 'nav.about.whyChoose', path: '/about/why-choose' },
+        { key: 'about-our-team', label: 'Our Team', translationKey: 'nav.about.team', path: '/about/team' },
+        { key: 'about-our-partners', label: 'Our Partners', translationKey: 'nav.about.partners', path: '/about/partners' },
+        { key: 'about-success-stories', label: 'Success Stories', translationKey: 'nav.about.successStories', path: '/about/success-stories' },
+        { key: 'about-faqs', label: 'FAQs', translationKey: 'nav.about.faqs', path: '/about/faqs' },
       ],
     },
-    { key: 'contact', label: 'Contact Us', path: '/contact' },
+    { key: 'contact', label: 'Contact Us', translationKey: 'nav.contactUs', path: '/contact' },
   ];
   return menu;
 }

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageSectionState, getHomepageStatistics, getHomepageTestimonials } from '../src/homepageUtils.js';
+import { getHomepageVenueCards, homepageInspirationImages, homepageVenueImagePaths } from '../src/homepageVenueUtils.js';
 
 test('homepage statistics include only valid values supplied by the API', () => {
   assert.deepEqual(getHomepageStatistics({
@@ -78,4 +79,34 @@ test('homepage testimonials include only real public reviews with valid ratings 
     vendorName: 'Bright Events',
   }]);
   assert.deepEqual(getHomepageTestimonials(null), []);
+});
+
+test('homepage venue cards use real venue records and matching published event images', () => {
+  assert.deepEqual(getHomepageVenueCards([
+    { name: 'Grand Hall', city: 'Addis Ababa', eventCount: 2 },
+    { name: 'Venue without a photo', city: 'Hawassa', eventCount: 1 },
+    { name: '', city: 'Unknown', eventCount: 5 },
+  ], [
+    { venue: ' grand hall ', location: 'Addis Ababa', coverImage: '/api/events/1/image' },
+    { venue: 'Grand Hall', location: 'Other City', coverImage: '/api/events/2/image' },
+  ]), [
+    { name: 'Grand Hall', city: 'Addis Ababa', eventCount: 2, image: '/api/events/1/image' },
+    { name: 'Venue without a photo', city: 'Hawassa', eventCount: 1, image: null },
+  ]);
+  assert.deepEqual(getHomepageVenueCards(null, []), []);
+});
+
+test('homepage venue gallery uses the uploaded image assets', () => {
+  assert.equal(homepageVenueImagePaths.length, 9);
+  assert.equal(new Set(homepageVenueImagePaths).size, homepageVenueImagePaths.length);
+  assert.ok(homepageVenueImagePaths.every((path) => path.startsWith('/')));
+  assert.deepEqual(homepageInspirationImages.map(({ src }) => src), [
+    '/images.jfif',
+    '/images%20(1).jfif',
+    '/images%20(2).jfif',
+    '/images%20(3).jfif',
+    '/images%20(4).jfif',
+  ]);
+  assert.equal(new Set(homepageInspirationImages.map(({ src }) => src)).size, 5);
+  assert.ok(homepageInspirationImages.every(({ categoryKey }) => categoryKey.startsWith('publicHomeCategory')));
 });

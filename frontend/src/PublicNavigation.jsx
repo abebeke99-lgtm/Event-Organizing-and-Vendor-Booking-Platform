@@ -4,7 +4,7 @@ import {
   Flower, GraduationCap, HeartHandshake, Image, Lightbulb, Music, Palette, PartyPopper,
   Presentation, ShieldCheck, Sparkles, Star, Store, Tags, Tent, Ticket, TrendingUp, Trophy, Utensils, BookOpen,
 } from 'lucide-react';
-import { translate, translateText, useLanguage } from './language.js';
+import { translate, translateNavigationLabel, useLanguage } from './language.js';
 import { buildPublicNavigationMenu, navigateAndCloseMenu, routeIsActive, updateOpenMenuPath } from './publicNavigationUtils.js';
 import { recordRecentlyViewed } from './navigationFeatureUtils.js';
 import VendorsMenu from './VendorsMenu.jsx';
@@ -68,7 +68,7 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
         }}>
         {ChildIcon ? <ChildIcon className="public-nav-category-icon" aria-hidden="true" /> :
           typeof child.icon === 'string' && <img className="public-nav-category-icon" src={child.icon} alt="" aria-hidden="true" loading="lazy" />}
-        <span className="public-nav-label">{translateText(child.label, language)}</span>
+        <span className="public-nav-label">{translateNavigationLabel(child, language)}</span>
         {Number.isFinite(child.count) && <span className="public-nav-category-count">{child.count.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}</span>}
       </a>
     </li>;
@@ -128,13 +128,13 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
       }}>
       {hasChildren ? <>
         {item.labelLink ? <div className={`public-nav-top-link-group ${active ? 'active' : ''} ${isOpen ? 'is-open' : ''}`}>
-          <a title={translateText(item.label, language)} className="public-nav-top-item public-nav-top-link-label" href={item.path}
+          <a title={translateNavigationLabel(item, language)} className="public-nav-top-item public-nav-top-link-label" href={item.path}
             aria-current={active ? 'page' : undefined}
             onClick={(event) => {
               event.preventDefault();
               if (event.detail > 0) clearPointerNavigationFocus();
               navigateAndCloseMenu(item.path, close, onNavigate);
-            }}>{translateText(item.label, language)}</a>
+            }}>{translateNavigationLabel(item, language)}</a>
           <button type="button" title={translate('aboutUsMenu', language)} aria-label={translate('aboutUsMenu', language)}
             className="public-nav-menu-trigger public-nav-top-item public-nav-top-link-chevron"
             aria-haspopup="menu" aria-expanded={isOpen} aria-current={active ? 'page' : undefined}
@@ -154,7 +154,7 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
             }}>
             <ChevronDown size={15} aria-hidden="true" />
           </button>
-        </div> :         <button type="button" role={level > 0 ? 'menuitem' : undefined} title={translateText(item.label, language)} className={`public-nav-menu-trigger public-nav-top-item level-${level} ${active ? 'active' : ''}`}
+        </div> :         <button type="button" role={level > 0 ? 'menuitem' : undefined} title={translateNavigationLabel(item, language)} className={`public-nav-menu-trigger public-nav-top-item level-${level} ${active ? 'active' : ''}`}
           aria-haspopup="menu" aria-expanded={isOpen} aria-current={active ? 'page' : undefined} aria-controls={`public-menu-${itemKey.replace(/[^a-z0-9_-]/gi, '-')}`}
           onClick={(event) => {
             if (event.detail > 0 && level === 0) clearPointerNavigationFocus();
@@ -171,7 +171,7 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
             }
           }}>
           {ItemIcon && <ItemIcon className="public-nav-category-icon" aria-hidden="true" />}
-          <span className="public-nav-label">{translateText(item.label, language)}</span>{level === 0 ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
+          <span className="public-nav-label">{translateNavigationLabel(item, language)}</span>{level === 0 ? <ChevronDown size={15} aria-hidden="true" /> : <ChevronRight size={15} aria-hidden="true" />}
         </button>}
         <ul id={`public-menu-${itemKey.replace(/[^a-z0-9_-]/gi, '-')}`} role="menu" ref={(node) => registerMenu(itemKey, node)}
           className={`public-nav-dropdown level-${level + 1} ${isOpen ? 'is-open' : ''} ${item.submenuSide === 'left' ? 'opens-left' : ''}`}
@@ -212,13 +212,13 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
                 {item.emptyMessage && !item.children.some((child) => child.database) && <li className="public-nav-state" role="none">{translate(item.emptyMessage, language)}</li>}
               </>}
         </ul>
-      </> : <a title={translateText(item.label, language)} className={`nav-link public-nav-top-item ${active ? 'active' : ''}`} href={item.path}
+      </> : <a title={translateNavigationLabel(item, language)} className={`nav-link public-nav-top-item ${active ? 'active' : ''}`} href={item.path}
         aria-current={active ? 'page' : undefined}
         onClick={(event) => {
           event.preventDefault();
           if (event.detail > 0) clearPointerNavigationFocus();
           navigateAndCloseMenu(item.path, close, onNavigate);
-        }}><span className="public-nav-label">{translateText(item.label, language)}</span></a>}
+        }}><span className="public-nav-label">{translateNavigationLabel(item, language)}</span></a>}
     </li>;
   });
 }
@@ -526,7 +526,7 @@ export default function PublicNavigation({ currentPath, mobileOpen, onCloseMobil
     });
   }, [categories, categoriesError, categoriesLoading, eventCategories, eventCategoriesError, eventCategoriesLoading, serviceCategories, serviceCategoriesError, serviceCategoriesLoading, user]);
 
-  return <nav ref={rootRef} className={`site-nav ${mobileOpen ? 'open' : ''}`} aria-label={translateText('mainNavigation', language)}
+  return <nav ref={rootRef} className={`site-nav ${mobileOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpenPathState([]); }}>
     {historyError && <p className="public-nav-history-error" role="status">{historyError}</p>}
     <ul className={`public-nav-list ${mobileOpen ? 'mobile-open' : ''}`}>

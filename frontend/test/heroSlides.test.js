@@ -52,16 +52,19 @@ test('hero image labels are translated in English and Amharic', () => {
 
 test('Home slider and Admin page expose the expected accessible controls and management actions', async () => {
   const sliderSource = await readFile(new URL('../src/HomeHeroSlider.jsx', import.meta.url), 'utf8');
+  const venueUtilsSource = await readFile(new URL('../src/homepageVenueUtils.js', import.meta.url), 'utf8');
   const adminSource = await readFile(new URL('../src/AdminHeroImages.jsx', import.meta.url), 'utf8');
   const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
   const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
 
   assert.match(sliderSource, /aria-roledescription="carousel"/);
   assert.match(sliderSource, /aria-live=\{autoplaying \? 'off' : 'polite'\}/);
-  assert.match(sliderSource, /fetchPriority=\{index === 0 \? 'high' : 'auto'\}/);
-  assert.match(sliderSource, /loading=\{index === 0 \? 'eager' : 'lazy'\}/);
+  assert.match(sliderSource, /fetchpriority=\{index === 0 \? 'high' : 'auto'\}/);
+  assert.match(sliderSource, /loading=\{index === 0 \|\| slide\.isLocalVenueImage \? 'eager' : 'lazy'\}/);
   assert.match(sliderSource, /onClick=\{\(\) => scrollToSlide/);
-  assert.match(sliderSource, /if \(!slides\.length \|\| failedIds\.size > 0\) return null/);
+  assert.match(sliderSource, /setSlides\(activeSlides\.length \? activeSlides : getLocalVenueSlides\(\)\)/);
+  assert.match(sliderSource, /if \(!slides\.length\) return null/);
+  assert.match(venueUtilsSource, /\/images%20\(7\)\.jfif/);
   assert.match(sliderSource, /window\.setInterval\(/);
   assert.match(sliderSource, /onMouseEnter=/);
   assert.match(sliderSource, /onFocus=/);

@@ -9,6 +9,7 @@ import {
   updateOpenMenuPath,
   validateCategoryName,
 } from '../src/publicNavigationUtils.js';
+import { translateNavigationLabel } from '../src/language.js';
 
 test('builds public navigation with database-backed categories and supported feature routes', () => {
   const menu = buildPublicNavigationMenu(
@@ -74,20 +75,55 @@ test('builds public navigation with database-backed categories and supported fea
   assert.equal(about.labelLink, undefined);
   assert.equal(about.path, '/about');
   assert.deepEqual(about.children.map((item) => [item.label, item.path]), [
-    ['About EventHub', '/about'],
-    ['Our Mission & Vision', '/about?section=mission-vision'],
-    ['How EventHub Works', '/about?section=how-it-works'],
-    ['Why Choose EventHub', '/about?section=why-choose-eventhub'],
-    ['Our Team', '/about?section=our-team'],
-    ['Our Partners', '/about?section=our-partners'],
-    ['Success Stories', '/about?section=success-stories'],
-    ['FAQs', '/about?section=faqs'],
+    ['Our Mission & Vision', '/about/mission-vision'],
+    ['How EventHub Works', '/about/how-it-works'],
+    ['Why Choose EventHub', '/about/why-choose'],
+    ['Our Team', '/about/team'],
+    ['Our Partners', '/about/partners'],
+    ['Success Stories', '/about/success-stories'],
+    ['FAQs', '/about/faqs'],
   ]);
   assert.deepEqual(menu.map((item) => item.path), [
     '/', '/events', '/vendors', '/services', '/categories', '/calendar', '/about', '/contact',
   ]);
   assert.equal(menu.find((item) => item.key === 'contact').children, undefined);
   assert.equal(menu.find((item) => item.key === 'home').children, undefined);
+});
+
+test('navigation labels use bilingual keys and category slugs with original-name fallbacks', () => {
+  const menu = buildPublicNavigationMenu(
+    [{ id: 1, name: 'Catering Services', slug: 'catering-services' }],
+    [{ id: 2, name: 'Weddings', slug: 'weddings' }],
+    null,
+    [
+      { id: 3, name: 'Catering Services', slug: 'catering-services' },
+      { id: 4, name: 'Local Specialty', slug: 'local-specialty' },
+    ],
+  );
+  const label = (item, language) => translateNavigationLabel(item, language);
+  assert.equal(label(menu[0], 'en'), 'Home');
+  assert.equal(label(menu[0], 'am'), 'መነሻ');
+  assert.equal(label(menu[1].children.find((item) => item.key === 'upcoming-events'), 'am'), 'መጪ ዝግጅቶች');
+  assert.equal(label(menu.find((item) => item.key === 'discover').children.find((item) => item.key === 'discover-event-calendar'), 'am'), 'የዝግጅት ቀን መቁጠሪያ');
+  assert.equal(label(menu.find((item) => item.key === 'categories').children[0], 'am'), 'ሠርግ');
+  assert.equal(label(menu.find((item) => item.key === 'vendors').children.find((item) => item.key === 'vendor-categories').children[0], 'am'), 'ምግብ አቅርቦት');
+  const services = menu.find((item) => item.key === 'services').children;
+  assert.equal(label(services.find((item) => item.slug === 'catering-services'), 'am'), 'ምግብ አቅርቦት');
+  assert.equal(label(services.find((item) => item.slug === 'local-specialty'), 'am'), 'Local Specialty');
+});
+
+test('every fixed public navigation destination has a registered bilingual key', () => {
+  const menu = buildPublicNavigationMenu();
+  const visit = (items) => items.flatMap((item) => [
+    item,
+    ...(item.children ? visit(item.children) : []),
+  ]);
+  const staticItems = visit(menu).filter((item) => !item.database);
+  for (const item of staticItems) {
+    assert.match(item.translationKey || '', /^nav\./, `missing navigation translation key for ${item.label}`);
+    assert.notEqual(translateNavigationLabel(item, 'en'), item.translationKey);
+    assert.notEqual(translateNavigationLabel(item, 'am'), item.translationKey);
+  }
 });
 
 test('keeps exactly eight top-level navigation items for guests and every signed-in role', () => {
@@ -367,17 +403,24 @@ test('keeps the twelve configured event categories in backend order with their c
   assert.deepEqual(nested.map((item) => item.path), categories.map((item) => `/events?category=${item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`));
 });
 
-test('About menu shows only its requested entries without duplicate support/legal destinations', () => {
+test('About menu links directly to its seven dedicated views', () => {
   const about = buildPublicNavigationMenu().find((item) => item.key === 'about');
   assert.deepEqual(about.children.map((item) => item.label), [
-    'About EventHub', 'Our Mission & Vision', 'How EventHub Works', 'Why Choose EventHub',
+    'Our Mission & Vision', 'How EventHub Works', 'Why Choose EventHub',
     'Our Team', 'Our Partners', 'Success Stories', 'FAQs',
   ]);
   assert.deepEqual(about.children.map((item) => item.path), [
-    '/about', '/about?section=mission-vision', '/about?section=how-it-works',
-    '/about?section=why-choose-eventhub', '/about?section=our-team',
-    '/about?section=our-partners', '/about?section=success-stories', '/about?section=faqs',
+    '/about/mission-vision', '/about/how-it-works', '/about/why-choose',
+    '/about/team', '/about/partners', '/about/success-stories', '/about/faqs',
   ]);
+  assert.equal(about.children.some((item) => item.label === 'About EventHub'), false);
+  for (const item of about.children) {
+    assert.equal(
+      about.children.filter((candidate) => routeIsActive(candidate.path, item.path)).length,
+      1,
+      `expected exactly one active About Us entry for ${item.path}`,
+    );
+  }
 });
 
 test('marks parent routes active and matches child filters precisely', () => {
@@ -426,9 +469,13 @@ test('opening About replaces the Events menu and its route descendants stay acti
   const events = updateOpenMenuPath([], '0:events');
   assert.deepEqual(updateOpenMenuPath(events, '0:about'), ['0:about']);
   const about = buildPublicNavigationMenu().find((item) => item.key === 'about');
-  assert.ok(about.children.some((item) => routeIsActive(item.path, '/about?section=faqs')));
-  assert.ok(about.children.some((item) => routeIsActive(item.path, '/about?section=mission-vision')));
+  const faqsActive = about.children.filter((item) => routeIsActive(item.path, '/about/faqs'));
+  const missionActive = about.children.filter((item) => routeIsActive(item.path, '/about/mission-vision'));
+  assert.deepEqual(faqsActive.map((item) => item.key), ['about-faqs']);
+  assert.deepEqual(missionActive.map((item) => item.key), ['about-mission-vision']);
+  assert.deepEqual(about.children.filter((item) => routeIsActive(item.path, '/about')).map((item) => item.key), []);
   assert.equal(about.children.some((item) => routeIsActive(item.path, '/contact')), false);
+  assert.equal(routeIsActive(about.path, '/about/faqs'), true);
 });
 
 test('reads category links into listing filters and validates category names', () => {

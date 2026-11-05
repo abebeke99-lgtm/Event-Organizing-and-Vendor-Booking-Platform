@@ -3,9 +3,20 @@ import { ChevronLeft, ChevronRight, Pause, Play } from 'lucide-react';
 import apiClient from './api/axios.js';
 import { translate, useLanguage } from './language.js';
 import { getNextHeroSlideIndex, normalizeHeroSlides } from './heroSlidesUtils.js';
+import { homepageVenueImagePaths } from './homepageVenueUtils.js';
+
+function getLocalVenueSlides() {
+  return homepageVenueImagePaths.map((imageUrl, index) => ({
+    id: `local-venue-${index + 1}`,
+    imageUrl,
+    altText: '',
+    isLocalVenueImage: true,
+  }));
+}
 
 function resolveImageUrl(path) {
-  if (!path?.startsWith('/api/')) return '';
+  if (typeof path !== 'string') return '';
+  if (!path.startsWith('/api/')) return path.startsWith('/') ? path : '';
   const baseUrl = apiClient.defaults.baseURL;
   return !baseUrl || baseUrl.startsWith('/') ? path : new URL(path, baseUrl).toString();
 }
@@ -27,10 +38,10 @@ export default function HomeHeroSlider({ onNavigate }) {
     const controller = new AbortController();
     apiClient.get('/hero-slides', { signal: controller.signal }).then(({ data }) => {
       const activeSlides = normalizeHeroSlides(data?.data);
-      setSlides(activeSlides);
+      setSlides(activeSlides.length ? activeSlides : getLocalVenueSlides());
       setActiveIndex(0);
     }).catch((error) => {
-      if (error.name !== 'AbortError' && !controller.signal.aborted) setSlides([]);
+      if (error.name !== 'AbortError' && !controller.signal.aborted) setSlides(getLocalVenueSlides());
     });
     return () => controller.abort();
   }, []);
@@ -103,7 +114,7 @@ export default function HomeHeroSlider({ onNavigate }) {
     if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
   }
 
-  if (!slides.length || failedIds.size > 0) return null;
+  if (!slides.length) return null;
 
   return <div
     className="home-hero-carousel"
@@ -133,11 +144,11 @@ export default function HomeHeroSlider({ onNavigate }) {
         const image = !failedIds.has(slide.id) && <img
           className="home-hero-slide-image"
           src={resolveImageUrl(slide.imageUrl)}
-          alt={slide.altText}
+          alt={slide.isLocalVenueImage ? translate('publicHomeVenueImageAlt', language) : slide.altText}
           width="1920"
           height="900"
-          loading={index === 0 ? 'eager' : 'lazy'}
-          fetchPriority={index === 0 ? 'high' : 'auto'}
+          loading={index === 0 || slide.isLocalVenueImage ? 'eager' : 'lazy'}
+          fetchpriority={index === 0 ? 'high' : 'auto'}
           draggable="false"
           onError={() => setFailedIds((current) => new Set(current).add(slide.id))}
         />;

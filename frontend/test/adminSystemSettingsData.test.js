@@ -4,6 +4,7 @@ import {
   ADMIN_SYSTEM_SETTINGS_STORAGE_KEY, createDefaultAdminSystemSettings, loadAdminSystemSettings,
   saveAdminSystemSettings, SYSTEM_SETTINGS_SECTIONS, validateAdminSetting,
 } from '../src/adminSystemSettingsData.js';
+import { translate } from '../src/language.js';
 
 function createStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -21,6 +22,14 @@ test('default settings include all 19 sections and use ETB as the currency', () 
   assert.deepEqual(defaults.roles.roles.map((role) => role.name), [
     'Administrator', 'Event Organizer', 'Vendor', 'Customer', 'Visitor / Guest',
   ]);
+});
+
+test('settings navigation labels have English and Amharic translations', () => {
+  for (const section of SYSTEM_SETTINGS_SECTIONS) {
+    assert.match(section.translationKey, /^nav\./);
+    assert.equal(translate(section.translationKey, 'en'), section.label);
+    assert.notEqual(translate(section.translationKey, 'am'), section.translationKey);
+  }
 });
 
 test('settings save and reload from the browser storage adapter', () => {

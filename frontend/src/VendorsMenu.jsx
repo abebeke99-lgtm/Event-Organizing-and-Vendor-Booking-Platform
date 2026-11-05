@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { ChevronDown, ChevronRight, Star, Store, Tags } from 'lucide-react';
-import { translate, translateText, useLanguage } from './language.js';
+import { translate, translateNavigationLabel, useLanguage } from './language.js';
 import { navigateAndCloseMenu, routeIsActive } from './publicNavigationUtils.js';
 
 function focusMenuItem(menu, direction = 1) {
@@ -52,7 +52,7 @@ export default function VendorsMenu({
         closeTimer.current = window.setTimeout(() => setOpenPath(''), 150);
       }
     }}>
-    <button type="button" title={translateText(item.label, language)}
+    <button type="button" title={translateNavigationLabel(item, language)}
       className={`public-nav-menu-trigger public-nav-top-item level-0 ${active ? 'active' : ''}`}
       aria-haspopup="menu" aria-expanded={isOpen} aria-current={active ? 'page' : undefined}
       aria-controls="public-menu-vendors"
@@ -69,7 +69,7 @@ export default function VendorsMenu({
           requestAnimationFrame(() => focusMenuItem(trigger.parentElement?.querySelector('[role="menu"]')));
         }
       }}>
-      <span className="public-nav-label">{translateText(item.label, language)}</span>
+      <span className="public-nav-label">{translateNavigationLabel(item, language)}</span>
       <ChevronDown size={15} aria-hidden="true" />
     </button>
     <ul id="public-menu-vendors" role="menu" ref={(node) => registerMenu(itemKey, node)}
@@ -98,12 +98,12 @@ export default function VendorsMenu({
         const Icon = child.icon || (child.key === 'popular-vendors' ? Star : Store);
         const selected = routeIsActive(child.path, routePath);
         return <li role="none" key={child.key}>
-          <a role="menuitem" href={child.path} title={child.title || child.label}
+          <a role="menuitem" href={child.path} title={translateNavigationLabel(child, language)}
             className={selected || (child.key === 'browse-vendors' && browseActive) ? 'active' : ''}
             aria-current={selected || (child.key === 'browse-vendors' && browseActive) ? 'page' : undefined}
             onClick={(event) => { event.preventDefault(); navigate(child.path); }}>
             <Icon className="public-nav-category-icon" aria-hidden="true" />
-            <span className="public-nav-label">{translateText(child.label, language)}</span>
+            <span className="public-nav-label">{translateNavigationLabel(child, language)}</span>
           </a>
         </li>;
       })}
@@ -137,7 +137,7 @@ export default function VendorsMenu({
             }
           }}>
           <Tags className="public-nav-category-icon" aria-hidden="true" />
-          <span className="public-nav-label">{translateText(categoryGroup.label, language)}</span>
+          <span className="public-nav-label">{translateNavigationLabel(categoryGroup, language)}</span>
           <ChevronRight size={15} aria-hidden="true" />
         </button>
         <ul id="public-menu-vendor-categories" role="menu"
@@ -162,12 +162,12 @@ export default function VendorsMenu({
             const Icon = child.icon || Tags;
             const selected = routeIsActive(child.path, routePath);
             return <li role="none" key={child.key}>
-              <a role="menuitem" href={child.path} title={child.title || child.label}
+              <a role="menuitem" href={child.path} title={translateNavigationLabel(child, language)}
                 className={selected ? 'active' : ''}
                 aria-current={selected ? 'page' : undefined}
                 onClick={(event) => { event.preventDefault(); navigate(child.path); }}>
                 <Icon className="public-nav-category-icon" aria-hidden="true" />
-                <span className="public-nav-label">{translateText(child.label, language)}</span>
+                <span className="public-nav-label">{translateNavigationLabel(child, language)}</span>
                 {Number.isFinite(child.count) && <span className="public-nav-category-count">
                   {child.count.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}
                 </span>}

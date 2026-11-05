@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChevronDown, Store, Tags } from 'lucide-react';
-import { translate, translateText, useLanguage } from './language.js';
+import { translate, translateNavigationLabel, useLanguage } from './language.js';
 import { navigateAndCloseMenu, routeIsActive } from './publicNavigationUtils.js';
 
 function focusMenuItem(menu, direction = 1) {
@@ -44,7 +44,7 @@ export default function ServicesMenu({
         closeTimer.current = window.setTimeout(() => setOpenPath(''), 150);
       }
     }}>
-    <button type="button" title={translateText(item.label, language)}
+    <button type="button" title={translateNavigationLabel(item, language)}
       className={`public-nav-menu-trigger public-nav-top-item level-0 ${active ? 'active' : ''}`}
       aria-haspopup="menu" aria-expanded={isOpen} aria-current={active ? 'page' : undefined}
       aria-controls="public-menu-services"
@@ -61,7 +61,7 @@ export default function ServicesMenu({
           requestAnimationFrame(() => focusMenuItem(trigger.parentElement?.querySelector('[role="menu"]')));
         }
       }}>
-      <span className="public-nav-label">{translateText(item.label, language)}</span>
+      <span className="public-nav-label">{translateNavigationLabel(item, language)}</span>
       <ChevronDown size={15} aria-hidden="true" />
     </button>
     <ul id="public-menu-services" role="menu" ref={(node) => registerMenu(itemKey, node)}
@@ -80,7 +80,7 @@ export default function ServicesMenu({
       {item.children.filter((child) => !child.database).map((child) => {
         const ChildIcon = child.icon || Store;
         return <li role="none" key={child.key}>
-          <a role="menuitem" href={child.path} title={child.title || child.label}
+          <a role="menuitem" href={child.path} title={translateNavigationLabel(child, language)}
             className={browseActive ? 'active' : ''}
             aria-current={browseActive ? 'page' : undefined}
             onClick={(event) => {
@@ -88,7 +88,7 @@ export default function ServicesMenu({
               navigateAndCloseMenu(child.path, close, onNavigate);
             }}>
             <ChildIcon className="public-nav-category-icon" aria-hidden="true" />
-            <span className="public-nav-label">{translateText(child.label, language)}</span>
+            <span className="public-nav-label">{translateNavigationLabel(child, language)}</span>
           </a>
         </li>;
       })}
@@ -103,7 +103,7 @@ export default function ServicesMenu({
         const ChildIcon = child.icon || Tags;
         const selected = routeIsActive(child.path, routePath);
         return <li role="none" key={child.key}>
-          <a role="menuitem" href={child.path} title={child.title || child.label}
+          <a role="menuitem" href={child.path} title={translateNavigationLabel(child, language)}
             className={selected ? 'active' : ''}
             aria-current={selected ? 'page' : undefined}
             onClick={(event) => {
@@ -111,7 +111,7 @@ export default function ServicesMenu({
               navigateAndCloseMenu(child.path, close, onNavigate);
             }}>
             <ChildIcon className="public-nav-category-icon" aria-hidden="true" />
-            <span className="public-nav-label">{translateText(child.label, language)}</span>
+            <span className="public-nav-label">{translateNavigationLabel(child, language)}</span>
             {Number.isFinite(child.count) && <span className="public-nav-category-count">
               {child.count.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}
             </span>}

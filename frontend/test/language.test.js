@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-import { getLanguage, getMissingTranslationKeys, setLanguage, translate, translateText } from '../src/language.js';
+import { getLanguage, getMissingTranslationKeys, getTranslationKeyDifferences, setLanguage, translate, translateText } from '../src/language.js';
 import { jsxDEV } from '../src/i18n/jsx-dev-runtime.js';
 import { jsxs } from '../src/i18n/jsx-runtime.js';
 
@@ -39,6 +39,17 @@ test('footer attribution is translated without a copyright symbol or design cred
   assert.equal(translate('footerDeveloper', 'am'), 'በBekele Abebe የተሰራ');
 });
 
+test('About page values are translated in English and Amharic', () => {
+  assert.deepEqual(
+    ['trustTransparency', 'qualityService', 'customerSatisfaction'].map((key) => translate(key, 'en')),
+    ['Trust and Transparency', 'Quality Service', 'Customer Satisfaction'],
+  );
+  assert.deepEqual(
+    ['trustTransparency', 'qualityService', 'customerSatisfaction'].map((key) => translate(key, 'am')),
+    ['እምነት እና ግልጽነት', 'ጥራት ያለው አገልግሎት', 'የደንበኛ እርካታ'],
+  );
+});
+
 test('translates exact interface phrases and falls back for missing keys', () => {
   assert.equal(translateText('Find Vendors', 'am'), 'አገልግሎት ሰጪዎችን ፈልግ');
   assert.equal(translate('adminUserFullName', 'en'), 'Full Name');
@@ -70,6 +81,28 @@ test('ignores unsupported language changes and preserves the active preference',
 
 test('English and Amharic resources contain the same translation keys', () => {
   assert.deepEqual(getMissingTranslationKeys('am'), []);
+});
+
+test('all navigation translation keys are present in both languages', () => {
+  const { missingInSelected, missingInEnglish } = getTranslationKeyDifferences('am');
+  assert.deepEqual(missingInSelected.filter((key) => key.startsWith('nav.')), []);
+  assert.deepEqual(missingInEnglish.filter((key) => key.startsWith('nav.')), []);
+});
+
+test('navigation keys used by public and dashboard code resolve in both languages', async () => {
+  const [publicNavigationSource, appSource] = await Promise.all([
+    readFile(new URL('../src/publicNavigationUtils.js', import.meta.url), 'utf8'),
+    readFile(new URL('../src/App.jsx', import.meta.url), 'utf8'),
+  ]);
+  const keys = new Set(
+    [...`${publicNavigationSource}\n${appSource}`.matchAll(/'((?:nav)\.[A-Za-z0-9.]+)'/g)]
+      .map((match) => match[1]),
+  );
+  assert.ok(keys.size > 0);
+  for (const key of keys) {
+    assert.notEqual(translate(key, 'en'), key, `missing English navigation label: ${key}`);
+    assert.notEqual(translate(key, 'am'), key, `missing Amharic navigation label: ${key}`);
+  }
 });
 
 test('JSX runtime translates dynamic child text and interpolated labels', () => {
