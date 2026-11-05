@@ -43,7 +43,8 @@ implementation.
 | Menu item label | Route and query parameters | Static or loaded from the database (and API endpoint) | File and line where it is defined | Translation key(s) | Route exists? | Target applies URL filter? |
 |---|---|---|---|---|---|---|
 | Browse Services | `/services` | Static | `frontend/src/publicNavigationUtils.js:57` | `publicNavBrowseServices` | Yes | Not applicable; no filter |
-| Service category (up to 6 with services) | `/services?category=<category-name>` | Database-backed via `/api/platform/categories`; filters `serviceCount > 0`, count shown, empty categories omitted | `frontend/src/publicNavigationUtils.js:31-34, 58`; path built by `categoryLink` at `:1-27` | API name passed through `translateText`; known category names resolve to existing keys | Yes | Yes; Services page reads the category and queries `/api/platform/services` |
+| Service category | `/services?category=<category-name>` | Database-backed via `/api/platform/categories`; active categories retain their database counts | `frontend/src/publicNavigationUtils.js`; path built by `categoryLink` at `:1-27` | API name passed through `translateText`; known category names resolve to existing keys | Yes | Yes; Services page applies category and search filters to `/api/platform/services` |
+| Service Categories | `/service-categories` | Static listing route backed by `/api/platform/categories`; supports server-side search and pagination, optional images, and published-service/vendor counts | `frontend/src/publicNavigationUtils.js` | `nav.services.categories` | Yes | Category cards link to filtered service and vendor listings |
 
 ### Categories
 
@@ -98,9 +99,7 @@ empty dynamic category section.
 - There is no separate service-type taxonomy endpoint. As confirmed for Phase 2,
   Services uses the available service categories from `/api/platform/categories`.
 - The categories API provides `vendorCount`, `serviceCount`, and an optional
-  `image`, but no category icon field or behavioral usage metric. Therefore
-  category popularity is ranked by combined vendor and service counts, and an
-  available category image is used as the small icon.
+  `image`; category names are never supplied from a static list.
 - Event categories come from `/api/platform/events/categories`; if the endpoint
   returns no categories, the menu shows no category section rather than an
   empty-state sentence.

@@ -257,12 +257,26 @@ router.get('/categories', asyncHandler(async (req, res) => {
   if (scope !== undefined && scope !== 'services') {
     return res.status(400).json({ error: 'Category scope must be services when provided.' });
   }
+  const paginationRequested = req.query.page !== undefined || req.query.limit !== undefined;
+  const parsedPagination = z.object({
+    page: z.coerce.number().int().min(1).max(100000).optional(),
+    limit: z.coerce.number().int().min(1).max(50).optional(),
+  }).safeParse({
+    page: req.query.page,
+    limit: req.query.limit,
+  });
+  if (!parsedPagination.success) {
+    return res.status(400).json({
+      error: 'Invalid category pagination.',
+      details: parsedPagination.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+    });
+  }
+  const serviceScope = scope === 'services';
   const search = sanitizeText(req.query.search, '').toLowerCase();
   const filters = search
-    ? 'AND (LOWER(COALESCE(sc.service_menu_name, sc.name)) LIKE ? OR LOWER(COALESCE(sc.description, \'\')) LIKE ?)'
+    ? `AND (LOWER(${serviceScope ? 'COALESCE(sc.service_menu_name, sc.name)' : 'sc.name'}) LIKE ? OR LOWER(COALESCE(sc.description, '')) LIKE ?)`
     : '';
   const values = search ? [`%${search}%`, `%${search}%`] : [];
-  const serviceScope = scope === 'services';
   const [rows] = await database.query(
     `SELECT sc.id, ${serviceScope ? 'COALESCE(sc.service_menu_name, sc.name)' : 'sc.name'} AS name,
             sc.name AS database_name, sc.description, sc.display_order, sc.image_mime,
@@ -302,7 +316,18 @@ router.get('/categories', asyncHandler(async (req, res) => {
       serviceMenuOrder: row.service_menu_order === undefined ? null : Number(row.service_menu_order),
     };
   });
-  return res.json({ categories, data: categories });
+  if (!paginationRequested) return res.json({ categories, data: categories });
+
+  const limit = parsedPagination.data.limit || 12;
+  const total = categories.length;
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+  const page = Math.min(parsedPagination.data.page || 1, totalPages);
+  const pagedCategories = categories.slice((page - 1) * limit, page * limit);
+  return res.json({
+    categories: pagedCategories,
+    data: pagedCategories,
+    pagination: { page, limit, total, totalPages },
+  });
 }));
 
 router.get('/categories/:id/image', async (req, res) => {

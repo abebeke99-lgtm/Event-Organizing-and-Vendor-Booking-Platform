@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildPublicNavigationMenu,
+  getEventCategoryTranslationKey,
   getListingFiltersFromPath,
   navigateAndCloseMenu,
   routeIsActive,
@@ -52,7 +53,7 @@ test('builds public navigation with database-backed categories and supported fea
   assert.equal(vendorCategories[0].label, 'Catering');
   assert.equal(vendorItems[2].path, '/vendors?sort=popular');
   assert.equal(menu.find((item) => item.key === 'services').children[0].path, '/services');
-  assert.equal(menu.find((item) => item.key === 'services').children.some((item) => item.label === 'Service Categories'), false);
+  assert.equal(menu.find((item) => item.key === 'services').children.some((item) => item.path === '/service-categories'), true);
   const discoverItems = menu.find((item) => item.key === 'discover').children;
   assert.deepEqual(discoverItems.map((item) => item.label), [
     'Popular Events', 'Featured Events', 'Popular Vendors', 'Featured Vendors', 'Popular Services',
@@ -88,6 +89,13 @@ test('builds public navigation with database-backed categories and supported fea
   ]);
   assert.equal(menu.find((item) => item.key === 'contact').children, undefined);
   assert.equal(menu.find((item) => item.key === 'home').children, undefined);
+});
+
+test('known public event categories map to the shared bilingual navigation translations', () => {
+  assert.equal(getEventCategoryTranslationKey('Wedding'), 'nav.eventCategories.wedding');
+  assert.equal(getEventCategoryTranslationKey('Corporate Events'), 'nav.eventCategories.corporateEvents');
+  assert.equal(getEventCategoryTranslationKey('Concerts & Music'), 'nav.eventCategories.concertsMusic');
+  assert.equal(getEventCategoryTranslationKey('Unlisted Event Type'), null);
 });
 
 test('navigation labels use bilingual keys and category slugs with original-name fallbacks', () => {
@@ -217,7 +225,7 @@ test('Find Vendors destinations appear once, in the requested order, and activat
   assert.equal(categoryItems[0].path, '/vendors?category=catering');
 });
 
-test('Services menu contains all 15 destinations in order and uses unique category slugs', () => {
+test('Services menu contains database categories and the category listing destination', () => {
   const names = [
     'Catering Services',
     'Photography & Videography',
@@ -244,13 +252,14 @@ test('Services menu contains all 15 destinations in order and uses unique catego
   categories.push({ ...categories[0], id: 100, serviceMenuOrder: 20 });
   const services = buildPublicNavigationMenu([], [], null, categories)
     .find((item) => item.key === 'services').children;
-  assert.deepEqual(services.map((item) => item.label), ['All Services', ...names]);
+  assert.deepEqual(services.map((item) => item.label), ['All Services', ...names, 'Service Categories']);
   assert.deepEqual(services.map((item) => item.path), [
     '/services',
     ...names.map((name) => `/services?category=${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`),
+    '/service-categories',
   ]);
   assert.equal(services[0].path, '/services');
-  for (const item of services.slice(1)) {
+  for (const item of services.slice(1, names.length + 1)) {
     assert.equal(item.database, true);
     assert.equal(routeIsActive(item.path, item.path), true, item.label);
   }
@@ -305,16 +314,23 @@ test('shows every vendor category and service-scoped database category independe
   const services = menu.find((item) => item.key === 'services').children;
   assert.equal(vendors.length, 6);
   assert.equal(vendors[5].children.length, 9);
-  assert.equal(services.length, 15);
+  assert.equal(services.length, 16);
   assert.ok(vendors[5].children.some((item) => item.label === 'Category 8' && item.count === 0));
   assert.ok(vendors[5].children.some((item) => item.label === 'Unused' && item.count === 0));
   assert.equal(services.some((item) => item.label === 'Category 1' || item.label === 'Unused'), false);
   assert.deepEqual(services.map((item) => item.label), [
     'All Services',
     ...serviceNames,
+    'Service Categories',
   ]);
   assert.equal(services[1].count, 0);
-  assert.ok(services.slice(1).every((item, index) => item.path === `/services?category=${serviceNames[index].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`));
+  assert.ok(services.slice(1, serviceNames.length + 1).every((item, index) => item.path === `/services?category=${serviceNames[index].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`));
+});
+
+test('service category listing is linked from the public services menu', () => {
+  const menu = buildPublicNavigationMenu();
+  const services = menu.find((item) => item.key === 'services').children;
+  assert.ok(services.some((item) => item.path === '/service-categories' && item.fixed));
 });
 
 test('uses stable category slugs and database counts for service category links', () => {

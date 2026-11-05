@@ -71,7 +71,7 @@ export function buildServiceFilters(raw = {}) {
     maxPrice,
     minRating,
     availableOnly,
-    sort: ['recommended', 'popular', 'newest', 'highest-rated', 'rating', 'price-low', 'price-high', 'alphabetical'].includes(sort) ? sort : 'recommended',
+    sort: ['recommended', 'relevance', 'popular', 'newest', 'highest-rated', 'rating', 'price-low', 'price-high', 'alphabetical'].includes(sort) ? sort : 'recommended',
     page,
     limit,
   };
@@ -105,6 +105,21 @@ export function listPublicServices(services = [], filters = {}) {
 
   const sorted = [...filtered].sort((a, b) => {
     switch (options.sort) {
+      case 'relevance': {
+        const score = (service) => {
+          if (!options.search) return 0;
+          const query = options.search;
+          return (service.title.toLowerCase().includes(query) ? 8 : 0)
+            + (service.category.toLowerCase().includes(query) ? 4 : 0)
+            + (service.vendorName.toLowerCase().includes(query) ? 3 : 0)
+            + (service.description.toLowerCase().includes(query) ? 2 : 0)
+            + (service.city.toLowerCase().includes(query) ? 1 : 0);
+        };
+        return score(b) - score(a)
+          || (b.rating || 0) - (a.rating || 0)
+          || (b.reviewCount || 0) - (a.reviewCount || 0)
+          || a.title.localeCompare(b.title);
+      }
       case 'popular':
         return (b.bookingCount || 0) - (a.bookingCount || 0)
           || (b.reviewCount || 0) - (a.reviewCount || 0)

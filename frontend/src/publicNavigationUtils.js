@@ -45,11 +45,16 @@ const eventCategoryTranslationKeys = Object.freeze({
   exhibitions: 'nav.eventCategories.exhibitions',
 });
 
+export function getEventCategoryTranslationKey(value) {
+  const slug = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return eventCategoryTranslationKeys[slug] || null;
+}
+
 function categoryTranslationKey(pathPrefix, slug) {
   const normalizedSlug = String(slug || '').trim().toLowerCase();
   return pathPrefix === 'service' || pathPrefix === 'vendor'
     ? serviceCategoryTranslationKeys[normalizedSlug]
-    : eventCategoryTranslationKeys[normalizedSlug];
+    : getEventCategoryTranslationKey(normalizedSlug);
 }
 
 function categoryLink(category, pathPrefix, countField) {
@@ -157,6 +162,7 @@ export function buildPublicNavigationMenu(categories = [], eventCategories = [],
     ] },
     { key: 'services', label: 'Services', translationKey: 'nav.services', path: '/services', children: [
       ...serviceItems,
+      { key: 'service-categories', label: 'Service Categories', translationKey: 'nav.services.categories', path: '/service-categories', fixed: true },
     ] },
     { key: 'categories', label: 'Categories', translationKey: 'nav.categories', path: '/categories', children: [
       ...eventItems.map((item) => ({ ...item, database: true })),

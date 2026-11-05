@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, CalendarDays, Check, ChevronLeft, ChevronRight, ExternalLink, Search, Trash2 } from 'lucide-react';
+import { ArrowUpRight, BadgeCheck, Bell, Building2, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, ExternalLink, FileClock, MessageSquare, Search, Sparkles, Star, Trash2, X } from 'lucide-react';
+import apiClient from './api/axios.js';
 import { translateText } from './language.js';
 import { formatCustomerMoney as money } from './customerMoney.js';
+import ServiceCategoriesPage from './ServiceCategoriesPage.jsx';
+import { CustomerBookingsList } from './CustomerBookings.jsx';
+import CustomerBookingHistory from './CustomerBookingHistory.jsx';
 import './customerWorkspace.css';
 
 const formatDate = (value) => {
@@ -11,9 +15,68 @@ const formatDate = (value) => {
 };
 const statusClass = (value) => String(value || '').toLowerCase().replaceAll('_', '-');
 const EMPTY_OBJECT = Object.freeze({});
+const SERVICE_SORTS = new Set(['relevance', 'price-low', 'price-high', 'highest-rated']);
 
-function PageHeading({ eyebrow, title, description, action }) {
-  return <div className="page-heading customer-workspace-heading"><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2><p className="muted">{description}</p></div>{action}</div>;
+function getCustomerCatalogUrlState() {
+  const params = new URLSearchParams(window.location.search);
+  const page = Number(params.get('page'));
+  return {
+    filters: {
+      search: params.get('q') || params.get('search') || '',
+      category: params.get('category') || '',
+      location: params.get('location') || '',
+      minPrice: params.get('minPrice') || '',
+      maxPrice: params.get('maxPrice') || '',
+      minRating: params.get('minRating') || '',
+      availableOnly: params.get('availableOnly') === 'true' ? 'true' : '',
+      verified: params.get('verified') === 'true' ? 'true' : '',
+      sort: params.get('sort') || (params.get('view') === 'services' ? 'relevance' : 'recommended'),
+    },
+    page: Number.isSafeInteger(page) && page > 0 ? page : 1,
+  };
+}
+
+function updateCustomerCatalogUrl(filters, page) {
+  const params = new URLSearchParams(window.location.search);
+  params.set('view', 'services');
+  const queryValues = {
+    q: filters.search.trim(),
+    category: filters.category,
+    location: filters.location.trim(),
+    minPrice: filters.minPrice,
+    maxPrice: filters.maxPrice,
+    minRating: filters.minRating,
+    availableOnly: filters.availableOnly,
+    sort: filters.sort,
+  };
+  for (const [key, value] of Object.entries(queryValues)) {
+    if (value) params.set(key, value);
+    else params.delete(key);
+  }
+  params.delete('search');
+  params.delete('verified');
+  if (page > 1) params.set('page', String(page));
+  else params.delete('page');
+  const query = params.toString();
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+}
+
+function VendorDirectoryImage({ vendor }) {
+  const [failed, setFailed] = useState(false);
+  const path = vendor.logoUrl || vendor.coverImageUrl;
+  const baseUrl = apiClient.defaults.baseURL;
+  const src = path?.startsWith('/api/') && baseUrl && !baseUrl.startsWith('/')
+    ? new URL(path, baseUrl).toString()
+    : path;
+
+  useEffect(() => setFailed(false), [src]);
+
+  if (!src || failed) return <div className="customer-vendor-image-empty" aria-label="Vendor image unavailable"><Building2 size={26}/><span>Image unavailable</span></div>;
+  return <img className="customer-vendor-image" src={src} alt={`${vendor.business_name || vendor.name} profile`} loading="lazy" onError={() => setFailed(true)} />;
+}
+
+function PageHeading({ eyebrow, title, description, action, className = '' }) {
+  return <div className={`page-heading customer-workspace-heading ${className}`}><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2><p className="muted">{description}</p></div>{action}</div>;
 }
 
 function EmptyState({ children }) {
@@ -46,11 +109,10 @@ function CustomerRequestModal({ item, events, api, mutate, onClose }) {
   </form></div>;
 }
 
-export default function CustomerWorkspace({ view, data = {}, api, user = {}, onNavigate, onRefresh, onUserChange }) {
+export default function CustomerWorkspace({ view, data = {}, api, user = {}, onNavigate, onNavigatePublic, onRefresh, onUserChange }) {
   const categories = Array.isArray(data?.categories) ? data.categories.filter(Boolean) : [];
   const services = Array.isArray(data?.services) ? data.services.filter(Boolean) : [];
   const bookings = Array.isArray(data?.bookings) ? data.bookings.filter(Boolean) : [];
-  const history = Array.isArray(data?.history) ? data.history.filter(Boolean) : [];
   const events = Array.isArray(data?.events) ? data.events.filter(Boolean) : [];
   const favorites = Array.isArray(data?.favorites) ? data.favorites.filter(Boolean) : [];
   const savedServices = Array.isArray(data?.['saved-services']) ? data['saved-services'].filter(Boolean) : [];
@@ -65,10 +127,11 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const [filters, setFilters] = useState({ search: '', category: '', location: '', minPrice: '', maxPrice: '', minRating: '', sort: 'recommended' });
+  const [filters, setFilters] = useState(() => getCustomerCatalogUrlState().filters);
   const [catalogRows, setCatalogRows] = useState([]);
-  const [catalogPage, setCatalogPage] = useState({ page: 1, total: 0, totalPages: 1, limit: 12 });
+  const [catalogPage, setCatalogPage] = useState(() => ({ ...getCustomerCatalogUrlState(), total: 0, totalPages: 1, limit: 12 }));
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [serviceSearchInput, setServiceSearchInput] = useState(() => getCustomerCatalogUrlState().filters.search);
   const [eventForm, setEventForm] = useState({ title: '', type: '', description: '', city: '', venue: '', startDate: '', endDate: '', guestCount: '', budget: '', capacity: '', notes: '', coverImageUrl: '' });
   const [editingEventId, setEditingEventId] = useState(null);
   const [eventFormOpen, setEventFormOpen] = useState(false);
@@ -76,16 +139,37 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   const [requestForm, setRequestForm] = useState({ eventId: '', guestCount: '', budget: '', notes: '' });
   const [quoteReasons, setQuoteReasons] = useState({});
   const [messageForm, setMessageForm] = useState({ bookingId: '', body: '' });
-  const [reviewForm, setReviewForm] = useState({ bookingId: '', rating: '5', comment: '' });
+  const [reviewForm, setReviewForm] = useState(() => ({
+    bookingId: new URLSearchParams(window.location.search).get('view') === 'reviews'
+      ? new URLSearchParams(window.location.search).get('bookingId') || ''
+      : '',
+    rating: '5',
+    comment: '',
+  }));
   const [refundForm, setRefundForm] = useState(null);
   const [profileForm, setProfileForm] = useState({ fullName: profile.fullName || user.full_name || user.name || '', phone: profile.phone || user.phone || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
-  const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
 
   useEffect(() => {
     setProfileForm({ fullName: profile.fullName || user.full_name || user.name || '', phone: profile.phone || user.phone || '' });
   }, [profile, user.full_name, user.name, user.phone]);
+
+  useEffect(() => {
+    if (view !== 'services') return undefined;
+    const syncServiceSearch = () => {
+      if (new URLSearchParams(window.location.search).get('view') !== 'services') return;
+      const state = getCustomerCatalogUrlState();
+      setFilters((current) => Object.keys(state.filters).every((key) => current[key] === state.filters[key])
+        ? current
+        : { ...current, ...state.filters });
+      setServiceSearchInput((current) => current === state.filters.search ? current : state.filters.search);
+      setCatalogPage((current) => current.page === state.page ? current : { ...current, page: state.page });
+    };
+    if (new URLSearchParams(window.location.search).get('view') === 'services') syncServiceSearch();
+    else updateCustomerCatalogUrl(filters, catalogPage.page);
+    window.addEventListener('popstate', syncServiceSearch);
+    return () => window.removeEventListener('popstate', syncServiceSearch);
+  }, [view]);
 
   useEffect(() => {
     if (!['vendors', 'services'].includes(view)) return undefined;
@@ -94,23 +178,32 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
       setCatalogLoading(true);
       setError('');
       try {
-        const params = new URLSearchParams({ page: String(catalogPage.page || 1), limit: '12', sort: filters.sort });
+        const sort = view === 'services' && !SERVICE_SORTS.has(filters.sort)
+          ? 'relevance'
+          : view === 'vendors' && !['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az'].includes(filters.sort)
+            ? 'recommended'
+            : filters.sort;
+        const params = new URLSearchParams({ page: String(catalogPage.page || 1), limit: '12', sort });
         if (filters.search.trim()) params.set('search', filters.search.trim());
         if (filters.category) params.set('category', filters.category);
         if (filters.location.trim()) params.set('location', filters.location.trim());
         if (filters.minPrice !== '') params.set('minPrice', filters.minPrice);
         if (filters.maxPrice !== '') params.set('maxPrice', filters.maxPrice);
         if (filters.minRating !== '') params.set('minRating', filters.minRating);
+        if (view === 'vendors' && filters.verified) params.set('verified', filters.verified);
+        if (view === 'services' && filters.availableOnly) params.set('availableOnly', filters.availableOnly);
         const response = await api(`/customer/${view}?${params}`);
         if (!active) return;
         setCatalogRows(Array.isArray(response?.data) ? response.data.filter(Boolean) : []);
         const pageInfo = response?.pagination && typeof response.pagination === 'object' ? response.pagination : {};
+        const resultPage = Number(pageInfo.page ?? 1) || 1;
         setCatalogPage({
-          page: Number(pageInfo.page ?? 1) || 1,
+          page: resultPage,
           total: Number(pageInfo.total ?? 0) || 0,
           totalPages: Number(pageInfo.totalPages ?? 1) || 1,
           limit: Number(pageInfo.limit ?? 12) || 12,
         });
+        if (view === 'services' && resultPage !== catalogPage.page) updateCustomerCatalogUrl(filters, resultPage);
       } catch (issue) {
         if (active) setError(issue.response?.data?.error || issue.message || 'The catalog could not be loaded.');
       } finally {
@@ -141,8 +234,31 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   const feedback = <>{error && <div className="alert error" role="alert">{error}</div>}{notice && <div className="alert success" role="status">{notice}</div>}</>;
   const changeFilter = (key, value) => {
     setCatalogPage((current) => ({ ...current, page: 1 }));
-    setFilters((current) => ({ ...current, [key]: value }));
+    const nextFilters = { ...filters, [key]: value };
+    setFilters(nextFilters);
+    if (view === 'services') updateCustomerCatalogUrl(nextFilters, 1);
   };
+
+  function submitServiceSearch(event) {
+    event.preventDefault();
+    const nextFilters = { ...filters, search: serviceSearchInput.trim() };
+    setFilters(nextFilters);
+    setCatalogPage((current) => ({ ...current, page: 1 }));
+    updateCustomerCatalogUrl(nextFilters, 1);
+  }
+
+  function clearServiceSearch() {
+    const nextFilters = { ...filters, search: '' };
+    setServiceSearchInput('');
+    setFilters(nextFilters);
+    setCatalogPage((current) => ({ ...current, page: 1 }));
+    updateCustomerCatalogUrl(nextFilters, 1);
+  }
+
+  function changeCatalogPage(page) {
+    setCatalogPage((current) => ({ ...current, page }));
+    if (view === 'services') updateCustomerCatalogUrl(filters, page);
+  }
 
   async function saveEvent(event) {
     event.preventDefault();
@@ -180,40 +296,95 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
     return mutate(() => api('/customer/favorites', { method: 'POST', body: JSON.stringify({ vendorId: Number(vendorId) }) }), 'Vendor added to wishlist.');
   }
 
-  if (view === 'overview') return <section className="customer-workspace">{feedback}
-    <PageHeading eyebrow="CUSTOMER HOME" title={`Welcome, ${user.full_name || user.name || 'Customer'}`} description="Your events, bookings, payments, and updates in one place." action={<button className="button" type="button" onClick={() => onNavigate('services')}>Browse services</button>} />
-    <div className="metric-grid"><article className="metric-card"><p>Total bookings</p><strong>{overview.totalBookings ?? 0}</strong><span>{overview.pendingBookings ?? 0} pending</span></article><article className="metric-card"><p>Confirmed</p><strong>{overview.confirmedBookings ?? 0}</strong><span>{overview.upcomingEvents ?? 0} upcoming events</span></article><article className="metric-card"><p>Payment balance</p><strong>{money(overview.outstandingPayments ?? 0)}</strong><span>{overview.pendingQuotations ?? 0} open quotations</span></article><article className="metric-card"><p>Unread updates</p><strong>{(overview.unreadMessages ?? 0) + (overview.unreadNotifications ?? 0)}</strong><span>{overview.unreadMessages ?? 0} messages · {overview.unreadNotifications ?? 0} notifications</span></article></div>
-    <div className="two-column-layout"><section className="panel"><div className="panel-header"><h3>Recent bookings</h3><button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>View bookings</button></div>{bookings.slice(0, 5).map((booking) => <article className="list-card" key={booking.id}><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} · {booking.eventTitle || 'Event'} · {formatDate(booking.eventDate)}</small></div><span className={`pill ${statusClass(booking.status)}`}>{booking.status}</span></article>)}{!bookings.length && <EmptyState>No bookings yet. Browse services to get started.</EmptyState>}</section><section className="panel"><div className="panel-header"><h3>Recent updates</h3><button className="button secondary small" type="button" onClick={() => onNavigate('notifications')}>View all</button></div>{notifications.slice(0, 5).map((item) => <article className="list-card" key={item.id}><div><strong>{item.title}</strong><small>{item.message}</small></div><span className={`pill ${item.read ? 'inactive' : 'active'}`}>{item.read ? 'Read' : 'New'}</span></article>)}{!notifications.length && <EmptyState>No notifications.</EmptyState>}</section></div>
-    <section className="panel"><div className="panel-header"><h3>Quick discovery</h3><button className="button secondary small" type="button" onClick={() => onNavigate('categories')}>Service categories</button></div><div className="customer-quick-services">{services.slice(0, 4).map((service) => <article className="customer-service-card" key={service.id}><strong>{service.title}</strong><small>{service.vendorName} · {service.category}</small><span>{money(service.price, service.currency)}</span><button className="button secondary small" type="button" onClick={() => onNavigate('services')}>View services</button></article>)}</div>{!services.length && <EmptyState>No published services are available.</EmptyState>}</section>
-  </section>;
+  if (view === 'overview') {
+    const upcomingEvents = events
+      .filter((event) => String(event.status || '').toLowerCase() !== 'cancelled')
+      .map((event) => ({ ...event, scheduledAt: new Date(String(event.startDate || event.date || '').replace(' ', 'T')) }))
+      .filter((event) => !Number.isNaN(event.scheduledAt.getTime()) && event.scheduledAt.getTime() >= Date.now())
+      .sort((first, second) => first.scheduledAt - second.scheduledAt)
+      .slice(0, 4);
+    const summaryCards = [
+      ['Total bookings', overview.totalBookings, ClipboardList, 'View all requests', 'bookings'],
+      ['Pending bookings', overview.pendingBookings, Clock3, 'Awaiting a decision', 'bookings'],
+      ['Confirmed bookings', overview.confirmedBookings, BadgeCheck, 'Accepted or in progress', 'bookings'],
+      ['Upcoming events', overview.upcomingEvents, CalendarDays, 'Your scheduled events', 'events'],
+      ['Pending quotations', overview.pendingQuotations, FileClock, 'Review vendor quotes', 'quotations'],
+    ];
+
+    return <section className="customer-workspace">{feedback}
+      <PageHeading className="customer-overview-heading" eyebrow="YOUR EVENT SPACE" title={`Welcome, ${user.full_name || user.name || 'Customer'}`} description="Everything you need to plan, book, and keep up with your events." action={<button className="button customer-overview-cta" type="button" onClick={() => onNavigate('services')}><Sparkles size={16}/>Discover services<ArrowUpRight size={15}/></button>} />
+      <div className="metric-grid customer-overview-metrics">{summaryCards.map(([label, value, Icon, description, target]) => <button className="metric-card customer-overview-stat" key={label} type="button" onClick={() => onNavigate(target)} aria-label={`${label}: ${value ?? 0}. ${description}`}><span className="customer-overview-stat-icon"><Icon size={18}/></span><span className="customer-overview-stat-copy"><span className="customer-overview-stat-label">{label}</span><strong>{value ?? 0}</strong><span className="customer-overview-stat-detail">{description}</span></span><ArrowUpRight className="customer-overview-stat-arrow" size={16}/></button>)}</div>
+      <div className="customer-overview-grid">
+        <section className="panel customer-overview-panel">
+          <div className="panel-header"><h3><CalendarDays size={17}/>Upcoming events</h3><button className="button secondary small" type="button" onClick={() => onNavigate('events')}>View events</button></div>
+          {upcomingEvents.length ? <div className="customer-overview-list">{upcomingEvents.map((event) => <article className="customer-overview-item" key={event.id}><span className="customer-overview-item-icon"><CalendarDays size={17}/></span><div><strong>{event.title}</strong><small>{[event.type, event.city || event.location].filter(Boolean).join(' · ') || 'Event'} · {formatDate(event.startDate || event.date)}</small></div><span className={`pill ${statusClass(event.status)}`}>{event.status}</span></article>)}</div> : <EmptyState>No upcoming events.</EmptyState>}
+        </section>
+        <section className="panel customer-overview-panel">
+          <div className="panel-header"><h3><ClipboardList size={17}/>Recent bookings</h3><button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>View bookings</button></div>
+          {bookings.length ? <div className="customer-overview-list">{bookings.slice(0, 5).map((booking) => <article className="customer-overview-item" key={booking.id}><span className="customer-overview-item-icon"><ClipboardList size={17}/></span><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} · {booking.eventTitle || 'Event'} · {formatDate(booking.eventDate)}</small></div><span className={`pill ${statusClass(booking.status)}`}>{booking.status}</span></article>)}</div> : <EmptyState>No bookings yet. Browse services to get started.</EmptyState>}
+        </section>
+        <section className="panel customer-overview-panel">
+          <div className="panel-header"><h3><MessageSquare size={17}/>Recent messages</h3><button className="button secondary small" type="button" onClick={() => onNavigate('messages')}>View messages</button></div>
+          {messages.length ? <div className="customer-overview-list">{messages.slice(0, 4).map((message) => <article className="customer-overview-item" key={message.id}><span className="customer-overview-item-icon"><MessageSquare size={17}/></span><div><strong>{message.vendor || message.sender || 'Message'}{message.event ? ` · ${message.event}` : ''}</strong><small>{message.subject || message.body}</small></div><span className={`pill ${message.read ? 'inactive' : 'active'}`}>{message.read ? 'Read' : 'Unread'}</span></article>)}</div> : <EmptyState>No recent messages.</EmptyState>}
+        </section>
+        <section className="panel customer-overview-panel">
+          <div className="panel-header"><h3><Sparkles size={17}/>Recommended vendors</h3><button className="button secondary small" type="button" onClick={() => onNavigate('vendors')}>Browse vendors</button></div>
+          {Array.isArray(data.vendors) && data.vendors.length ? <div className="customer-overview-list">{data.vendors.slice(0, 4).map((vendor) => <article className="customer-overview-item" key={vendor.id}><span className="customer-overview-item-icon customer-vendor-avatar">{String(vendor.business_name || vendor.name || 'V').trim().charAt(0).toUpperCase()}</span><div><strong>{vendor.business_name || vendor.name}</strong><small>{[vendor.category, vendor.city].filter(Boolean).join(' · ')}</small></div>{Number(vendor.rating) > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(vendor.rating).toFixed(1)}</span>}</article>)}</div> : <EmptyState>No recommended vendors are available.</EmptyState>}
+        </section>
+        <section className="panel customer-overview-panel">
+          <div className="panel-header"><h3><Bell size={17}/>Recent notifications</h3><button className="button secondary small" type="button" onClick={() => onNavigate('notifications')}>View all</button></div>
+          {notifications.length ? <div className="customer-overview-list">{notifications.slice(0, 5).map((item) => <article className="customer-overview-item" key={item.id}><span className="customer-overview-item-icon"><Bell size={17}/></span><div><strong>{item.title}</strong><small>{item.message}</small></div><span className={`pill ${item.read ? 'inactive' : 'active'}`}>{item.read ? 'Read' : 'New'}</span></article>)}</div> : <EmptyState>No notifications.</EmptyState>}
+        </section>
+      </div>
+      <section className="panel customer-overview-panel customer-discovery-panel"><div className="panel-header"><h3><Sparkles size={17}/>Quick discovery</h3><button className="button secondary small" type="button" onClick={() => onNavigate('categories')}>Service categories</button></div><div className="customer-quick-services">{services.slice(0, 4).map((service) => <article className="customer-service-card" key={service.id}><strong>{service.title}</strong><small>{service.vendorName} · {service.category}</small><span>{money(service.price, service.currency)}</span><button className="button secondary small" type="button" onClick={() => onNavigate('services')}>View services</button></article>)}</div>{!services.length && <EmptyState>No published services are available.</EmptyState>}</section>
+    </section>;
+  }
+
+  if (view === 'categories') {
+    return <ServiceCategoriesPage api={api} onNavigate={onNavigatePublic} />;
+  }
 
   if (view === 'vendors' || view === 'services') {
     const isVendors = view === 'vendors';
     const categoryOptions = categories;
     return <section className="customer-workspace">{feedback}<PageHeading eyebrow="DISCOVERY" title={isVendors ? 'Browse vendors' : 'Search services'} description="Search, compare, save, and request a service for one of your events." />
-      <div className="panel customer-catalog-filters"><label className="field"><span>Search</span><div className="customer-search"><Search size={16}/><input value={filters.search} onChange={(event) => changeFilter('search', event.target.value)} placeholder={isVendors ? 'Vendor name' : 'Service or description'} /></div></label><label className="field"><span>Category</span><select value={filters.category} onChange={(event) => changeFilter('category', event.target.value)}><option value="">All categories</option>{categoryOptions.map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}</select></label><label className="field"><span>Location</span><input value={filters.location} onChange={(event) => changeFilter('location', event.target.value)} placeholder="Any city" /></label><label className="field"><span>Minimum price</span><input type="number" min="0" value={filters.minPrice} onChange={(event) => changeFilter('minPrice', event.target.value)} /></label><label className="field"><span>Maximum price</span><input type="number" min="0" value={filters.maxPrice} onChange={(event) => changeFilter('maxPrice', event.target.value)} /></label><label className="field"><span>Minimum rating</span><select value={filters.minRating} onChange={(event) => changeFilter('minRating', event.target.value)}><option value="">Any rating</option><option value="4">4+</option><option value="4.5">4.5+</option></select></label><label className="field"><span>Sort</span><select value={filters.sort} onChange={(event) => changeFilter('sort', event.target.value)}><option value="recommended">Recommended</option><option value="highest-rated">Highest rated</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option>{!isVendors && <option value="alphabetical">Alphabetical</option>}</select></label></div>
-      {catalogLoading ? <div className="loading"><span className="spinner"/>Loading catalog...</div> : <div className="customer-catalog-grid">{catalogRows.map((item) => <article className="panel customer-catalog-card" key={item.id}>
-        {(item.coverImageUrl || item.logoUrl || item.images?.[0]?.url) && <img src={item.coverImageUrl || item.logoUrl || item.images?.[0]?.url} alt={item.name || item.title} loading="lazy"/>}
-        <div><span className={`pill ${item.verified ? 'verified' : 'active'}`}>{isVendors ? item.verified ? 'Verified' : 'Listing' : item.category}</span><h3>{isVendors ? item.name : item.title}</h3><p>{isVendors ? `${item.category} · ${item.city}` : `${item.vendorName} · ${item.city}`}</p><p>{item.description}</p><strong>{money(isVendors ? item.priceFrom : item.price, item.currency)}</strong>{item.rating > 0 && <small>{Number(item.rating).toFixed(1)} / 5 · {item.reviewCount || 0} reviews</small>}
+      <div className="panel customer-catalog-filters">
+        {isVendors
+          ? <label className="field"><span>Search</span><div className="customer-search"><Search size={16}/><input value={filters.search} onChange={(event) => changeFilter('search', event.target.value)} placeholder="Vendor name" /></div></label>
+          : <form className="customer-service-search" role="search" onSubmit={submitServiceSearch}>
+            <label className="field"><span>Search services</span><div className="customer-search"><Search size={16}/><input type="search" maxLength="120" value={serviceSearchInput} onChange={(event) => setServiceSearchInput(event.target.value)} placeholder="Name, category, vendor, description, or city" /></div></label>
+            <div className="customer-service-search-actions"><button className="button" type="submit" disabled={catalogLoading}>Search</button>{serviceSearchInput && <button className="button secondary" type="button" onClick={clearServiceSearch} aria-label="Clear search" title="Clear search"><X size={16}/>Clear</button>}</div>
+          </form>}
+        <label className="field"><span>Category</span><select value={filters.category} onChange={(event) => changeFilter('category', event.target.value)}><option value="">All categories</option>{categoryOptions.map((item) => <option value={item.name} key={item.id}>{item.name}</option>)}</select></label>
+        <label className="field"><span>Location</span><input value={filters.location} onChange={(event) => changeFilter('location', event.target.value)} placeholder="Any city" /></label>
+        <label className="field"><span>Minimum price</span><input type="number" min="0" value={filters.minPrice} onChange={(event) => changeFilter('minPrice', event.target.value)} /></label>
+        <label className="field"><span>Maximum price</span><input type="number" min="0" value={filters.maxPrice} onChange={(event) => changeFilter('maxPrice', event.target.value)} /></label>
+        <label className="field"><span>Minimum rating</span><select value={filters.minRating} onChange={(event) => changeFilter('minRating', event.target.value)}><option value="">Any rating</option><option value="3">3+ stars</option><option value="4">4+ stars</option><option value="4.5">4.5+ stars</option></select></label>
+        {isVendors && <label className="field"><span>Verification status</span><select value={filters.verified} onChange={(event) => changeFilter('verified', event.target.value)}><option value="true">Verified &amp; approved</option><option value="">All public vendors</option></select></label>}
+        {isVendors ? <label className="field"><span>Sort by</span><select value={filters.sort} onChange={(event) => changeFilter('sort', event.target.value)}><option value="recommended">Recommended</option><option value="highest-rated">Highest rated</option><option value="most-reviewed">Most reviewed</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label>
+          : <><label className="field"><span>Availability</span><select value={filters.availableOnly} onChange={(event) => changeFilter('availableOnly', event.target.value)}><option value="">Any availability</option><option value="true">Available only</option></select></label><label className="field"><span>Sort by</span><select value={filters.sort} onChange={(event) => changeFilter('sort', event.target.value)}><option value="relevance">Relevance</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option><option value="highest-rated">Highest rated</option></select></label></>}
+      </div>
+      {isVendors && <p className="customer-directory-scope"><BadgeCheck size={15}/>Only active vendors approved for public discovery are shown.</p>}
+      {catalogLoading ? <div className="loading"><span className="spinner"/>Loading catalog...</div> : <div className="customer-catalog-grid">{catalogRows.map((item) => {
+        const bookableService = isVendors ? item.services?.find((service) => Number(service.price) > 0) : null;
+        return <article className="panel customer-catalog-card" key={item.id}>
+        {isVendors ? <VendorDirectoryImage vendor={item}/> : (item.coverImageUrl || item.logoUrl || item.images?.[0]?.url) && <img src={item.coverImageUrl || item.logoUrl || item.images?.[0]?.url} alt={item.name || item.title} loading="lazy"/>}
+        <div className="customer-catalog-card-content"><div className="customer-vendor-card-badges"><span className={`pill ${item.verified ? 'verified' : 'active'}`}>{isVendors ? item.verified ? <><BadgeCheck size={12}/> Verified</> : 'Listing' : item.category}</span>{isVendors && item.reviewCount > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(item.rating).toFixed(1)} <small>({item.reviewCount})</small></span>}</div><h3>{isVendors ? item.business_name || item.name : item.title}</h3><p className="customer-vendor-category">{isVendors ? item.category || 'Category not listed' : `${item.vendorName} · ${item.category}`}</p><p className="customer-vendor-location">{isVendors ? item.city || 'Location not listed' : item.city}</p><p className="customer-vendor-description">{item.description || (isVendors ? 'No business description provided.' : 'No service description provided.')}</p>
+        <div className="customer-vendor-card-price"><small>Starting price</small><strong>{(isVendors ? item.priceFrom : item.price) === null || (isVendors ? item.priceFrom : item.price) === undefined ? 'Price on request' : money(isVendors ? item.priceFrom : item.price, item.currency)}</strong></div>
           {Array.isArray(item.packages) && item.packages.length > 0 && <div className="customer-package-preview">{item.packages.filter(Boolean).slice(0, 2).map((pkg) => <span key={pkg.id}>{pkg.name}: {money(pkg.price, pkg.currency)}</span>)}</div>}
-        </div><div className="customer-catalog-actions"><button className="button secondary small" type="button" onClick={() => isVendors ? onNavigate('favorites') : setRequestService({ kind: 'quote', service: item })}>{isVendors ? 'View profile' : 'Request quote'}</button>{isVendors ? <button className="button small" type="button" disabled={busy} onClick={() => requestVendorMutation(item.id)}>Save vendor</button> : <><button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'save-service', service: item })}>Save service</button><button className="button small" type="button" onClick={() => setRequestService({ kind: 'booking', service: item })}>Request booking</button></>}</div>
-      </article>)}{!catalogRows.length && <EmptyState>No matching records. Try changing the filters.</EmptyState>}</div>}
-      {!catalogLoading && catalogRows.length > 0 && <div className="pagination-row"><span>{catalogPage.total} results</span><button className="button secondary small" type="button" disabled={catalogPage.page <= 1} onClick={() => setCatalogPage((current) => ({ ...current, page: current.page - 1 }))}><ChevronLeft size={16}/> Previous</button><span>Page {catalogPage.page} of {catalogPage.totalPages}</span><button className="button secondary small" type="button" disabled={catalogPage.page >= catalogPage.totalPages} onClick={() => setCatalogPage((current) => ({ ...current, page: current.page + 1 }))}>Next <ChevronRight size={16}/></button></div>}
+        </div><div className="customer-catalog-actions">{isVendors ? <><button className="button secondary small" type="button" onClick={() => onNavigatePublic(`/vendors/${item.id}`)}>View details</button>{bookableService && <button className="button small" type="button" onClick={() => setRequestService({ kind: 'booking', service: bookableService })}>Request booking</button>}<button className="button secondary small" type="button" disabled={busy} onClick={() => requestVendorMutation(item.id)}>Save vendor</button></> : <><button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'quote', service: item })}>Request quote</button><button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'save-service', service: item })}>Save service</button><button className="button small" type="button" onClick={() => setRequestService({ kind: 'booking', service: item })}>Request booking</button></>}</div>
+      </article>;
+      })}{!catalogRows.length && <EmptyState>No matching records. Try changing the filters.</EmptyState>}</div>}
+      {!catalogLoading && catalogRows.length > 0 && <div className="pagination-row"><span>{catalogPage.total} results</span><button className="button secondary small" type="button" disabled={catalogPage.page <= 1} onClick={() => changeCatalogPage(catalogPage.page - 1)}><ChevronLeft size={16}/> Previous</button><span>Page {catalogPage.page} of {catalogPage.totalPages}</span><button className="button secondary small" type="button" disabled={catalogPage.page >= catalogPage.totalPages} onClick={() => changeCatalogPage(catalogPage.page + 1)}>Next <ChevronRight size={16}/></button></div>}
       {requestService && <CustomerRequestModal item={requestService} events={events} api={api} mutate={mutate} onClose={() => setRequestService(null)} />}
     </section>;
   }
 
-  if (view === 'categories') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="SERVICE DIRECTORY" title="Service categories" description="Browse active categories and open matching services." />{categories.map((category) => <article className="panel customer-category-row" key={category.id}><div><strong>{category.name}</strong><p>{category.description}</p><small>{category.vendorCount ?? 0} vendors · {category.serviceCount ?? 0} services</small></div><button className="button secondary small" type="button" onClick={() => { changeFilter('category', category.name); onNavigate('services'); }}>Browse services</button></article>)}{!categories.length && <EmptyState>No active categories available.</EmptyState>}</section>;
+  if (view === 'categories') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="SERVICE DIRECTORY" title="Service categories" description="Browse active categories and open matching services." />{categories.map((category) => <article className="panel customer-category-row" key={category.id}><div><strong>{category.name}</strong><p>{category.description}</p><small>{category.vendorCount ?? 0} vendors · {category.serviceCount ?? 0} services</small></div><button className="button secondary small" type="button" onClick={() => { const nextFilters = { ...filters, category: category.name }; setFilters(nextFilters); setCatalogPage((current) => ({ ...current, page: 1 })); updateCustomerCatalogUrl(nextFilters, 1); onNavigate('services'); }}>Browse services</button></article>)}{!categories.length && <EmptyState>No active categories available.</EmptyState>}</section>;
 
-  if (view === 'bookings' || view === 'history') {
-    const rows = view === 'bookings' ? bookings : history;
-    const filteredRows = rows.filter((booking) => `${booking.reference} ${booking.serviceTitle} ${booking.eventTitle} ${booking.status}`.toLowerCase().includes(query.trim().toLowerCase()))
-      .filter((booking) => !statusFilter || statusClass(booking.status) === statusFilter);
-    return <section className="customer-workspace">{feedback}<PageHeading eyebrow="RESERVATIONS" title={view === 'bookings' ? 'My bookings' : 'Booking history'} description="Track service dates, status, payment state, and actions available for each booking." action={view === 'bookings' ? <button className="button" type="button" onClick={() => onNavigate('services')}>Browse services</button> : null} />
-      <div className="customer-list-filters"><label className="field"><span>Search</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Reference, event, vendor, service" /></label><label className="field"><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="">All statuses</option>{[...new Set(rows.map((item) => statusClass(item.status)))].map((status) => <option value={status} key={status}>{status.replaceAll('-', ' ')}</option>)}</select></label></div>
-      <div className="customer-booking-list">{filteredRows.map((booking) => <article className="panel customer-booking-card" key={booking.id}><div><span className={`pill ${statusClass(booking.status)}`}>{booking.status}</span><h3>{booking.serviceTitle}</h3><p>{booking.eventTitle || 'Event'} · {formatDate(booking.eventDate)}</p><p>{booking.vendorName || 'Vendor'} · {money(booking.quotedAmount, booking.currency)}</p><small>Payment: {booking.paymentStatus || 'unpaid'}</small></div><div className="customer-actions">{view === 'bookings' && ['requested', 'under_review', 'quoted', 'accepted'].includes(statusClass(booking.status)) && <button className="button danger small" type="button" disabled={busy} onClick={() => window.confirm(translateText('Cancel this booking request?')) && mutate(() => api(`/platform/bookings/${booking.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }) }), 'Booking cancelled.')}>Cancel booking</button>}{view === 'history' && <button className="button secondary small" type="button" onClick={() => { changeFilter('search', booking.serviceTitle); onNavigate('services'); }}>Book similar service</button>}</div></article>)}{!filteredRows.length && <EmptyState>No bookings match the selected filters.</EmptyState>}</div>
-    </section>;
-  }
+  if (view === 'bookings') return <CustomerBookingsList api={api} onNavigate={onNavigatePublic} />;
+
+  if (view === 'history') return <CustomerBookingHistory api={api} onNavigate={onNavigatePublic} />;
 
   if (view === 'events') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="EVENT PLANNING" title="My events" description="Create events, track linked bookings, and update your own event details." action={<button className="button" type="button" onClick={() => { setEditingEventId(null); setEventForm({ title: '', type: '', description: '', city: '', venue: '', startDate: '', endDate: '', guestCount: '', budget: '', capacity: '', notes: '', coverImageUrl: '' }); setEventFormOpen((current) => !current); }}>New event</button>} />
     {eventFormOpen && <form className="panel customer-workspace-form" onSubmit={saveEvent}><h3>{editingEventId ? 'Edit event' : 'Create event'}</h3><div className="customer-form-grid"><label className="field"><span>Event name</span><input required minLength="2" maxLength="180" value={eventForm.title} onChange={(event) => setEventForm((current) => ({ ...current, title: event.target.value }))} /></label><label className="field"><span>Event type</span><input required minLength="2" maxLength="80" value={eventForm.type} onChange={(event) => setEventForm((current) => ({ ...current, type: event.target.value }))} /></label><label className="field"><span>Start date and time</span><input type="datetime-local" required value={eventForm.startDate} onChange={(event) => setEventForm((current) => ({ ...current, startDate: event.target.value }))} /></label><label className="field"><span>End date and time</span><input type="datetime-local" value={eventForm.endDate} onChange={(event) => setEventForm((current) => ({ ...current, endDate: event.target.value }))} /></label><label className="field"><span>Location / city</span><input maxLength="120" value={eventForm.city} onChange={(event) => setEventForm((current) => ({ ...current, city: event.target.value }))} /></label><label className="field"><span>Venue</span><input maxLength="180" value={eventForm.venue} onChange={(event) => setEventForm((current) => ({ ...current, venue: event.target.value }))} /></label><label className="field"><span>Expected guests</span><input type="number" min="1" max="100000" value={eventForm.guestCount} onChange={(event) => setEventForm((current) => ({ ...current, guestCount: event.target.value }))} /></label><label className="field"><span>Budget</span><input type="number" min="0" max="100000000" step="0.01" value={eventForm.budget} onChange={(event) => setEventForm((current) => ({ ...current, budget: event.target.value }))} /></label><label className="field customer-form-wide"><span>Description</span><textarea maxLength="10000" value={eventForm.description} onChange={(event) => setEventForm((current) => ({ ...current, description: event.target.value }))} /></label><label className="field customer-form-wide"><span>Planning notes</span><textarea maxLength="2000" value={eventForm.notes} onChange={(event) => setEventForm((current) => ({ ...current, notes: event.target.value }))} /></label></div><div className="customer-actions"><button className="button" disabled={busy}>{busy ? 'Saving...' : editingEventId ? 'Save changes' : 'Save draft'}</button><button className="button secondary" type="button" onClick={() => setEventFormOpen(false)}>Cancel</button></div></form>}
@@ -222,7 +393,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
 
   if (view === 'favorites') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="WISHLIST" title="Saved vendors and services" description="Keep preferred providers and packages for later comparison." />
     <h3>Vendors</h3>{favorites.map((vendor) => <article className="panel customer-saved-card" key={`vendor-${vendor.id}`}><div><h3>{vendor.name}</h3><p>{vendor.category} · {vendor.city}</p><small>{vendor.description}</small></div><div className="customer-actions"><button className="button secondary small" type="button" onClick={() => onNavigate('vendors')}>Browse vendors</button><button className="button danger small" type="button" disabled={busy} onClick={() => mutate(() => api(`/customer/favorites/${vendor.id}`, { method: 'DELETE' }), 'Vendor removed from wishlist.')}>Remove</button></div></article>)}{!favorites.length && <p className="muted">No saved vendors.</p>}
-    <h3>Services</h3>{savedServices.map((service) => <article className="panel customer-saved-card" key={`service-${service.id}`}><div><h3>{service.title}</h3><p>{service.vendorName} · {service.category} · {service.city}</p><strong>{money(service.price, service.currency)}</strong></div><div className="customer-actions"><button className="button secondary small" type="button" onClick={() => { changeFilter('search', service.title); onNavigate('services'); }}>Open service</button><button className="button danger small" type="button" disabled={busy} onClick={() => mutate(() => api(`/customer/saved-services/${service.id}`, { method: 'DELETE' }), 'Service removed from wishlist.')}>Remove</button></div></article>)}{!savedServices.length && <p className="muted">No saved services.</p>}
+    <h3>Services</h3>{savedServices.map((service) => <article className="panel customer-saved-card" key={`service-${service.id}`}><div><h3>{service.title}</h3><p>{service.vendorName} · {service.category} · {service.city}</p><strong>{money(service.price, service.currency)}</strong></div><div className="customer-actions"><button className="button secondary small" type="button" onClick={() => { const nextFilters = { ...filters, search: service.title }; setServiceSearchInput(service.title); setFilters(nextFilters); setCatalogPage((current) => ({ ...current, page: 1 })); updateCustomerCatalogUrl(nextFilters, 1); onNavigate('services'); }}>Open service</button><button className="button danger small" type="button" disabled={busy} onClick={() => mutate(() => api(`/customer/saved-services/${service.id}`, { method: 'DELETE' }), 'Service removed from wishlist.')}>Remove</button></div></article>)}{!savedServices.length && <p className="muted">No saved services.</p>}
   </section>;
 
   if (view === 'quotations') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="PRICE PROPOSALS" title="Quotations" description="Compare vendor offers and accept, decline, or request a revision." />

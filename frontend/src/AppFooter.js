@@ -26,7 +26,7 @@ export default function AppFooter({ socialEnvironment }) {
       h('a', { href: '/events' }, translate('browseEvents', language)),
       h('a', { href: '/vendors' }, translate('findVendorsNav', language)),
       h('a', { href: '/services' }, translate('browseServices', language)),
-      h('a', { href: '/categories' }, translate('serviceCategories', language))),
+      h('a', { href: '/service-categories' }, translate('serviceCategories', language))),
     h('div', { className: 'footer-column', key: 'support' },
       h('h4', null, translate('support', language)),
       h('a', { href: '/help' }, translate('helpCenter', language)),

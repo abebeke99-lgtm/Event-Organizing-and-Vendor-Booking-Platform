@@ -102,6 +102,11 @@ test('footer contact column is not rendered while SHOW_FOOTER_CONTACT is false',
   assert.doesNotMatch(markup, /Contact Us|abebeke99@gmail\.com|Official social profile links are not configured yet\./);
 });
 
+test('footer service categories link opens the service category listing', () => {
+  const markup = renderToStaticMarkup(React.createElement(AppFooter));
+  assert.match(markup, /href="\/service-categories">Service Categories<\/a>/);
+});
+
 test('footer places copyright and developer credit at the right of the Legal column', () => {
   const year = new Date().getFullYear();
   const markup = renderToStaticMarkup(React.createElement(AppFooter));

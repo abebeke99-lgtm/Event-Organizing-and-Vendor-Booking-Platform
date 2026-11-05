@@ -178,13 +178,18 @@ function createDatabase() {
     throw new Error(`Unexpected test SQL: ${sql}`);
   }
 
-  async function query(sql) {
-    statements.push({ sql, values: [] });
+  async function query(sql, values = []) {
+    statements.push({ sql, values });
     if (sql.includes('FROM services s')) return [[], []];
     if (sql.includes('FROM vendor_profiles vp')) return [[], []];
     if (sql.includes('FROM service_categories')) {
       const serviceScope = sql.includes('sc.service_menu_order IS NOT NULL');
-      return [categories.filter((category) => category.is_active && (!serviceScope || category.service_menu_order != null)).map((category) => ({
+      let rows = categories.filter((category) => category.is_active && (!serviceScope || category.service_menu_order != null));
+      if (sql.includes('LOWER(sc.name) LIKE ?')) {
+        const search = String(values[0] || '').slice(1, -1).toLowerCase();
+        rows = rows.filter((category) => `${category.service_menu_name || category.name} ${category.description || ''}`.toLowerCase().includes(search));
+      }
+      return [rows.map((category) => ({
         id: category.id,
         name: serviceScope ? category.service_menu_name : category.name,
         database_name: category.name,
@@ -273,6 +278,22 @@ test('service navigation categories are active, ordered, and retain database IDs
   ]);
   assert.match(database.statements.at(-1).sql, /sc\.service_menu_order IS NOT NULL/);
   assert.match(database.statements.at(-1).sql, /GROUP BY[\s\S]*sc\.service_menu_order/);
+});
+
+test('public service categories support database-backed search and pagination', async () => {
+  const { response, payload } = await request('/api/platform/categories?search=food&page=1&limit=1', { authenticated: false });
+  assert.equal(response.status, 200);
+  assert.deepEqual(payload.data.map((category) => category.name), ['Catering']);
+  assert.equal(payload.data[0].serviceCount, 1);
+  assert.deepEqual(payload.pagination, { page: 1, limit: 1, total: 1, totalPages: 1 });
+  assert.deepEqual(payload.categories, payload.data);
+  const listingQuery = database.statements.at(-1).sql;
+  assert.match(listingQuery, /LOWER\(sc\.name\) LIKE \?/);
+  assert.match(listingQuery, /vp\.verification_status = 'verified' AND u\.status = 'active'/);
+  assert.match(listingQuery, /s\.status = 'active' AND s\.category_id = sc\.id/);
+
+  const invalid = await request('/api/platform/categories?page=0', { authenticated: false });
+  assert.equal(invalid.response.status, 400);
 });
 
 test('public categories reject unsupported scope filters', async () => {

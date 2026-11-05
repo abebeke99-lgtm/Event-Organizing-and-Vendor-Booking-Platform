@@ -54,8 +54,17 @@ test('About routes render one dedicated view and retain a translated closing act
   assert.match(appSource, /history\.replaceState\(\{\}, '', destination\)/);
 });
 
-test('event listing omits its filter panel while preserving route-driven listing behavior', () => {
-  assert.doesNotMatch(eventsPageSource, /event-listing-filters|event-filter-toggle|resetFilters|stacked-toolbar/);
+test('event listing exposes search, filters, sorting, and pagination through the public API', () => {
+  assert.match(eventsPageSource, /className="panel event-filter-panel event-listing-filters"/);
+  assert.match(eventsPageSource, /value={search} onChange=/);
+  assert.match(eventsPageSource, /eventCategoryLabel/);
+  assert.match(eventsPageSource, /eventLocationLabel/);
+  assert.match(eventsPageSource, /datePreset/);
+  assert.match(eventsPageSource, /minimumPrice/);
+  assert.match(eventsPageSource, /sortEvents/);
+  assert.match(eventsPageSource, /const resetFilters = \(\) =>/);
+  assert.match(eventsPageSource, /setSort\('upcoming'\)/);
+  assert.match(eventsPageSource, /setPageSize\(6\)/);
   assert.match(eventsPageSource, /getListingFiltersFromPath\(currentPath\)/);
   assert.match(eventsPageSource, /api\(`\/platform\/events\?\$\{eventListingQuery\}`\)/);
   assert.match(eventsPageSource, /pagination\.total > 0/);

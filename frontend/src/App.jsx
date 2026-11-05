@@ -26,7 +26,7 @@ import HomepageTrustStrip from './HomepageTrustStrip.jsx';
 import ContactTopBar from './ContactTopBar.js';
 import AppFooter from './AppFooter.js';
 import PublicNavigation from './PublicNavigation.jsx';
-import { getListingFiltersFromPath, validateCategoryName } from './publicNavigationUtils.js';
+import { getEventCategoryTranslationKey, getListingFiltersFromPath, validateCategoryName } from './publicNavigationUtils.js';
 import { CompareVendorsPage, EventCalendarPage, MyFavoritesPage, PopularVenuesPage, RecentlyViewedPage, RecommendationsPage } from './NavigationFeatures.jsx';
 import { getComparedVendorIds, toggleComparedVendor } from './navigationFeatureUtils.js';
 import HorizontalCarousel from './HorizontalCarousel.jsx';
@@ -37,6 +37,8 @@ import { EventCountdown, EventDetailsPage, MyEventBookingsPage, OrganizerEventsM
 import OrganizerWorkspace from './OrganizerWorkspace.jsx';
 import VendorWorkspace from './VendorWorkspace.jsx';
 import CustomerWorkspace from './CustomerWorkspace.jsx';
+import { CustomerBookingDetailsPage } from './CustomerBookings.jsx';
+import ServiceCategoriesPage from './ServiceCategoriesPage.jsx';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import { formatCustomerMoney } from './customerMoney.js';
 import AdminUserManagement from './AdminUserManagement.jsx';
@@ -2014,9 +2016,8 @@ function EventsPage({ onNavigate, user, currentPath }) {
       params.set('filter', 'upcoming');
     } else if (isFreeView || isFeaturedView) {
       params.set('filter', isFreeView ? 'free' : 'featured');
-    } else if (eventStatus) {
-      params.set('status', eventStatus);
     }
+    if (eventStatus) params.set('status', eventStatus);
     if (search.trim()) params.set('search', search.trim());
     if (category) params.set('category', category);
     if (location) params.set('location', location);
@@ -2220,43 +2221,155 @@ function EventsPage({ onNavigate, user, currentPath }) {
   const selectedCategory = categories.find((value) => String(value?.id) === category
     || String(value?.slug || '').toLowerCase() === category.toLowerCase()
     || String(value?.name || '').toLowerCase() === category.toLowerCase());
+  const translateEventCategory = (value) => {
+    const key = getEventCategoryTranslationKey(value);
+    return key ? t(key) : value;
+  };
   const totalPages = Math.max(1, pagination.totalPages || 1);
   const pageWindowStart = Math.max(1, Math.min(page - 2, totalPages - 4));
   const pageNumbers = Array.from({ length: Math.min(5, totalPages) }, (_, index) => pageWindowStart + index);
+  const resetFilters = () => {
+    setSearch('');
+    setLocation('');
+    setCategory('');
+    setStartDate('');
+    setEndDate('');
+    setDatePreset('');
+    setPriceFilter('');
+    setMinPrice('');
+    setMaxPrice('');
+    setEventStatus(isFreeView ? 'free' : isUpcomingView ? 'upcoming' : '');
+    setSort('upcoming');
+    setPage(1);
+    setPageSize(6);
+  };
 
-  const categoryTitle = selectedCategory?.name || category;
+  const categoryTitle = selectedCategory?.name ? translateEventCategory(selectedCategory.name) : translateEventCategory(category);
   const routeSort = new URLSearchParams(String(currentPath).split('?')[1] || '').get('sort') || '';
   const pageTitle = category ? categoryTitle
     : isFreeView ? t('freePageTitle')
       : isUpcomingView ? t('upcomingPageTitle')
-        : isFeaturedView ? 'Featured Events'
-          : routeSort === 'popular' ? 'Popular Events'
-            : ['newest', 'recent'].includes(routeSort) ? 'Recently Added Events'
+        : isFeaturedView ? t('nav.events.featured')
+          : routeSort === 'popular' ? t('nav.events.popular')
+            : ['newest', 'recent'].includes(routeSort) ? t('nav.events.recent')
               : t('browseEventsTitle');
   const pageDescription = category
     ? selectedCategory?.description || `${t('pageDescription')} ${categoryTitle}.`
     : isFreeView ? t('freePageDescription')
       : isUpcomingView ? t('upcomingPageDescription')
-        : isFeaturedView ? 'Events selected by EventHub administrators.'
-          : routeSort === 'popular' ? 'Events ranked by confirmed ticket bookings.'
-            : ['newest', 'recent'].includes(routeSort) ? 'Published events ordered by creation date, newest first.'
+        : isFeaturedView ? t('featuredPageDescription')
+          : routeSort === 'popular' ? t('popularPageDescription')
+            : ['newest', 'recent'].includes(routeSort) ? t('recentPageDescription')
               : t('pageDescription');
   return <main className={`page-shell${isUpcomingView ? ' upcoming-events-page' : ''}${isFreeView ? ' free-events-page' : ''}`}><div className="content-stack"><section className="events-discovery-hero"><div className="section-header"><div><p className="eyebrow">EVENTHUB · EVENTS</p><h1>{pageTitle}</h1><p className="muted">{pageDescription}</p></div><div className="events-hero-actions">{user?.role === 'organizer' && <button className="button" type="button" onClick={() => onNavigate('/organizer/dashboard?view=events')}>{t('createEvent')}</button>}{!isUpcomingView && !isFreeView && <button className="button secondary" type="button" onClick={planEvent}>{t('planMyEvent')}</button>}</div></div><div className="events-discovery-stats">{category ? <div><strong>{selectedCategory?.total?.toLocaleString() || (loading ? '—' : '0')}</strong><span>published {categoryTitle} events</span></div> : isUpcomingView || isFreeView ? <div><strong>{upcomingTotal === null ? '—' : upcomingTotal.toLocaleString()}</strong><span>{isFreeView ? t('totalFreeEvents') : t('totalUpcomingEvents')}</span></div> : <><div><strong>{eventCategoryTotal.toLocaleString()}</strong><span>{t('eventsListedCount')}</span></div><div><strong>{categoryOptions.length.toLocaleString()}</strong><span>{t('eventCategoriesCount')}</span></div><div><strong>{featuredEventCount.toLocaleString()}</strong><span>{t('featuredEventsCount')}</span></div></>}</div>{!isUpcomingView && eventCategoryError && <p className="event-count-error" role="alert">{eventCategoryError}<button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></p>}{(isUpcomingView || isFreeView) && upcomingTotalError && <p className="event-count-error" role="alert">{upcomingTotalError}<button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></p>}</section>
 
-    {!loading && !error && <p className="event-results-count" role="status">{Number(pagination?.total || 0).toLocaleString()} {isFreeView ? t('freeEventsResult') : isUpcomingView ? t('upcomingEventsResult') : 'events found'}</p>}
+    <form className="panel event-filter-panel event-listing-filters" role="search" onSubmit={(submitEvent) => submitEvent.preventDefault()}>
+      <div className="event-filters-heading">
+        <div><SlidersHorizontal size={17} aria-hidden="true"/><h2>{t('filterEvents')}</h2></div>
+        <button type="button" className="button secondary small" onClick={resetFilters}>{t('reset')}</button>
+      </div>
+      <div className="event-filters-grid">
+        <label className="field event-filter-search">
+          <span>{t('searchEvents')}</span>
+          <span className="event-filter-input-wrap"><Search size={16} aria-hidden="true"/><input className="filter-select" type="search" maxLength={120} value={search} onChange={(changeEvent) => { setPage(1); setSearch(changeEvent.target.value); }} placeholder={t('searchEvents')}/></span>
+        </label>
+        <label className="field">
+          <span>{t('eventCategoryLabel')}</span>
+          <select className="filter-select" value={selectedCategory ? String(selectedCategory.id) : category} onChange={(changeEvent) => { setPage(1); setCategory(changeEvent.target.value); }}>
+            <option value="">{t('allEventCategories')}</option>
+            {categories.map((item) => <option key={item.id} value={String(item.id)}>{translateEventCategory(item.name)}</option>)}
+          </select>
+        </label>
+        <label className="field">
+          <span>{t('eventLocationLabel')}</span>
+          <input className="filter-select" type="search" maxLength={120} value={location} onChange={(changeEvent) => { setPage(1); setLocation(changeEvent.target.value); }} placeholder={t('allLocations')}/>
+        </label>
+        <label className="field">
+          <span>{t('eventAvailability')}</span>
+          <select className="filter-select" value={eventStatus || 'all'} disabled={isUpcomingView || isFreeView} onChange={(changeEvent) => { setPage(1); setEventStatus(changeEvent.target.value === 'all' ? '' : changeEvent.target.value); }}>
+            <option value="all">{t('allEvents')}</option>
+            <option value="upcoming">{t('upcomingEventsFilter')}</option>
+            <option value="ongoing">{t('ongoingEventsFilter')}</option>
+            <option value="past">{t('pastEventsFilter')}</option>
+            <option value="available">{t('availableEventsFilter')}</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>{t('upcomingDateFilter')}</span>
+          <select className="filter-select" value={datePreset} onChange={(changeEvent) => { setPage(1); setDatePreset(changeEvent.target.value); setStartDate(''); setEndDate(''); }}>
+            <option value="">{t('anyEventDate')}</option>
+            <option value="upcoming">{t('upcomingEventsFilter')}</option>
+            <option value="today">{t('today')}</option>
+            <option value="tomorrow">{t('tomorrow')}</option>
+            <option value="this_week">{t('thisWeek')}</option>
+            <option value="this_weekend">{t('thisWeekend')}</option>
+            <option value="this_month">{t('thisMonth')}</option>
+            <option value="next_month">{t('nextMonth')}</option>
+          </select>
+        </label>
+        <label className="field event-custom-date">
+          <span>{t('fromDate')}</span>
+          <input className="filter-select" type="date" value={startDate} max={endDate || undefined} onChange={(changeEvent) => { setPage(1); setStartDate(changeEvent.target.value); setDatePreset(''); }}/>
+        </label>
+        <label className="field event-custom-date">
+          <span>{t('toDate')}</span>
+          <input className="filter-select" type="date" value={endDate} min={startDate || undefined} onChange={(changeEvent) => { setPage(1); setEndDate(changeEvent.target.value); setDatePreset(''); }}/>
+        </label>
+        <label className="field">
+          <span>{t('anyTicketPrice')}</span>
+          <select className="filter-select" value={priceFilter} disabled={isFreeView} onChange={(changeEvent) => { setPage(1); setPriceFilter(changeEvent.target.value); }}>
+            <option value="">{t('anyTicketPrice')}</option>
+            <option value="free">{t('eventsFree')}</option>
+            <option value="paid">{t('eventsPaid')}</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>{t('minimumPrice')}</span>
+          <input className="filter-select" type="number" min="0" step="0.01" value={minPrice} disabled={isFreeView} onChange={(changeEvent) => { setPage(1); setMinPrice(changeEvent.target.value); }}/>
+        </label>
+        <label className="field">
+          <span>{t('maximumPrice')}</span>
+          <input className="filter-select" type="number" min="0" step="0.01" value={maxPrice} disabled={isFreeView} onChange={(changeEvent) => { setPage(1); setMaxPrice(changeEvent.target.value); }}/>
+        </label>
+        <label className="field">
+          <span>{t('sortEvents')}</span>
+          <select className="filter-select" value={sort} onChange={(changeEvent) => { setPage(1); setSort(changeEvent.target.value); }}>
+            <option value="upcoming">{t('sortSoonest')}</option>
+            <option value="date_earliest">{t('sortDateEarliest')}</option>
+            <option value="date_latest">{t('sortDateLatest')}</option>
+            <option value="newest">{t('sortNewest')}</option>
+            <option value="oldest">{t('sortOldest')}</option>
+            <option value="title_asc">{t('sortTitleAsc')}</option>
+            <option value="title_desc">{t('sortTitleDesc')}</option>
+            <option value="price_asc">{t('sortPriceAsc')}</option>
+            <option value="price_desc">{t('sortPriceDesc')}</option>
+            <option value="popular">{t('mostBooked')}</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>{t('resultsPerPage')}</span>
+          <select className="filter-select" value={pageSize} disabled={isUpcomingView} onChange={(changeEvent) => { setPage(1); setPageSize(Number(changeEvent.target.value)); }}>
+            {[6, 12, 24, 50].map((size) => <option key={size} value={size}>{size} {t('perPage')}</option>)}
+          </select>
+        </label>
+      </div>
+    </form>
+
+    {!loading && !error && <p className="event-results-count" role="status">{isFreeView ? `${Number(pagination?.total || 0).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')} ${t('freeEventsResult')}` : isUpcomingView ? `${Number(pagination?.total || 0).toLocaleString(language === 'am' ? 'am-ET' : 'en-US')} ${t('upcomingEventsResult')}` : t('eventsFoundCount').replace('{count}', Number(pagination?.total || 0).toLocaleString(language === 'am' ? 'am-ET' : 'en-US'))}</p>}
     {loading ? <div className="card-grid event-list-grid event-skeleton-grid" role="status" aria-label={t('loadingEvents')}>{Array.from({ length: 6 }, (_, index) => <div className="event-skeleton-card" key={index} aria-hidden="true"><span /><div><i /><i /><i /></div></div>)}</div> : error ? <div className="alert error" role="alert"><span>{error}</span><button type="button" className="button secondary small" onClick={() => setReloadKey((current) => current + 1)}>{t('retry')}</button></div> : <>
       {events.length ? <>
         <div className="card-grid event-list-grid">
           {events.map((event) => {
             const timingStatus = getBrowseEventStatus(event);
+            const timingStatusLabel = timingStatus === 'Upcoming' ? t('upcomingEventsFilter') : timingStatus === 'Ongoing' ? t('ongoingEventsFilter') : timingStatus === 'Past' ? t('pastEventsFilter') : translateText(timingStatus, language);
             const availableQuantity = Number(event.availableQuantity || 0);
             const freeAvailableQuantity = Number(event.freeAvailableQuantity ?? availableQuantity);
             const displayedAvailability = isFreeView ? freeAvailableQuantity : availableQuantity;
             const price = event.startingPrice === null || event.startingPrice === undefined ? null : Number(event.startingPrice);
             return <article key={event.id} className="info-card event-tile">
-              <div className="event-thumb">{event.coverImage && <img src={event.coverImage} alt={event.title} width="960" height="540" loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />}<span>{event.type || 'Event'}</span></div>
+              <div className="event-thumb">{event.coverImage && <img src={event.coverImage} alt={event.title} width="960" height="540" loading="lazy" onError={(imageEvent) => { imageEvent.currentTarget.style.display = 'none'; }} />}<span>{event.type ? translateEventCategory(event.type) : t('eventType')}</span></div>
               <div className="event-tile-body">
-                <span className="event-tag">{event.type || 'Event'}</span><h3>{event.title}</h3>
+                <span className="event-tag">{event.type ? translateEventCategory(event.type) : t('eventType')}</span><h3>{event.title}</h3>
                 <p className="event-card-description">{event.description || t('eventDescriptionUnavailable')}</p>
                 <div className="event-card-details">
                   <p><CalendarDays size={15} aria-hidden="true" /><span>{formatEventDateOnly(event.startDate, language) || t('dateTbd')}</span></p>
@@ -2265,7 +2378,7 @@ function EventsPage({ onNavigate, user, currentPath }) {
                   {event.organizerName && <p><Users size={15} aria-hidden="true" /><span>{t('eventsOrganizedBy')}: {event.organizerName}</span></p>}
                 </div>
                 {(isUpcomingView || isFreeView) && <EventCountdown startDate={event.startDate} />}
-                <div className="event-card-status"><span className={`event-listing-status status-${timingStatus.toLowerCase()}`}>{timingStatus}</span><span className="event-ticket-availability">{displayedAvailability > 0 ? `${displayedAvailability.toLocaleString()} ${t('ticketsAvailable')}` : t('ticketsUnavailable')}</span></div>
+                <div className="event-card-status"><span className={`event-listing-status status-${timingStatus.toLowerCase()}`}>{timingStatusLabel}</span><span className="event-ticket-availability">{displayedAvailability > 0 ? `${displayedAvailability.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')} ${t('ticketsAvailable')}` : t('ticketsUnavailable')}</span></div>
                 <div className="event-card-price"><strong>{isFreeView ? `${t('eventsFree')} · ETB 0` : price === null ? t('ticketsUnavailable') : price === 0 ? `${t('eventsFree')} · ETB 0` : formatEventBudget(price, language)}</strong><span className={isFreeView || price === 0 ? 'event-price-label free' : 'event-price-label'}>{isFreeView || price === 0 ? t('eventsFree') : price === null ? '' : t('eventsPaid')}</span></div>
                 <div className="pricing-row compact-row event-card-actions"><button type="button" className="button secondary small" onClick={() => shareEvent(event)}>{t('eventsShare')}</button><button type="button" className="button secondary small" onClick={() => viewDetails(event.id)}>{t('viewDetails')}</button>{displayedAvailability > 0 && price !== null && <button type="button" className="button small" onClick={() => viewDetails(event.id)}>{price === 0 ? t('registerFreeTicket') : t('eventsBookNow')}</button>}</div>
               </div>
@@ -2273,9 +2386,12 @@ function EventsPage({ onNavigate, user, currentPath }) {
           })}
         </div>
         {eventShareMessage && <p className="event-inline-message" role="status">{eventShareMessage}</p>}
-      </> : <div className="empty panel event-empty-state"><strong>{isUpcomingView ? 'No upcoming events at the moment' : t('emptyTitle')}</strong><span>{isUpcomingView ? 'Please check back soon or contact us to plan a new event.' : t('emptyMessage')}</span></div>}
-      {pagination.total > 0 && <div className="pagination-row" aria-label="Event pages">
-        <span className="event-page-count">Showing {Math.min(pagination.total, (pagination.page - 1) * pagination.limit + 1)}–{Math.min(pagination.total, pagination.page * pagination.limit)} of {pagination.total} events</span>
+      </> : <div className="empty panel event-empty-state"><strong>{t('emptyTitle')}</strong><span>{t('emptyMessage')}</span></div>}
+      {pagination.total > 0 && <div className="pagination-row" aria-label={t('eventPages')}>
+        <span className="event-page-count">{t('showingEventsRange')
+          .replace('{from}', Math.min(pagination.total, (pagination.page - 1) * pagination.limit + 1).toLocaleString(language === 'am' ? 'am-ET' : 'en-US'))
+          .replace('{to}', Math.min(pagination.total, pagination.page * pagination.limit).toLocaleString(language === 'am' ? 'am-ET' : 'en-US'))
+          .replace('{total}', pagination.total.toLocaleString(language === 'am' ? 'am-ET' : 'en-US'))}</span>
         <div className="event-page-controls">
           <button className="button secondary small" type="button" disabled={pagination.page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>{t('previous')}</button>
           {pageNumbers.map((pageNumber) => <button key={pageNumber} className={`button small event-page-number ${pageNumber === pagination.page ? 'active' : 'secondary'}`} type="button" aria-current={pageNumber === pagination.page ? 'page' : undefined} onClick={() => setPage(pageNumber)}>{pageNumber}</button>)}
@@ -2289,7 +2405,7 @@ function EventsPage({ onNavigate, user, currentPath }) {
         <div className="event-detail-header"><div><p className="eyebrow">{t('viewDetails')}</p><h3>{selectedEvent.title}</h3></div><button type="button" className="button secondary small" onClick={() => openPackageRequest(selectedEvent)}>{t('requestPackages')}</button></div>
         <p>{selectedEvent.description || t('detailsUnavailable')}</p>
         <div className="detail-meta-grid">
-          <div><span>{t('category')}</span><strong>{selectedEvent.type || '—'}</strong></div><div><span>{t('location')}</span><strong>{selectedEvent.location || t('locationTbd')}</strong></div>
+          <div><span>{t('category')}</span><strong>{selectedEvent.type ? translateEventCategory(selectedEvent.type) : '—'}</strong></div><div><span>{t('location')}</span><strong>{selectedEvent.location || t('locationTbd')}</strong></div>
           <div><span>{t('date')}</span><strong>{formatEventDate(selectedEvent.startDate, language) || t('dateTbd')}</strong></div><div><span>{t('budget')}</span><strong>{formatEventBudget(selectedEvent.budget, language) || '—'}</strong></div>
           <div><span>{t('status')}</span><strong>{selectedEvent.status || '—'}</strong></div>
         </div>
@@ -2297,7 +2413,7 @@ function EventsPage({ onNavigate, user, currentPath }) {
 
       <section className="event-highlight-section" aria-labelledby="event-highlight-title">
         <div className="event-highlight-heading"><p className="eyebrow">{t('eventHighlight')}</p></div>
-        {featured ? <article className="event-highlight-content"><div><h3 id="event-highlight-title">{featured.title}</h3><span>{featured.type || '—'}</span></div><dl className="detail-meta-grid"><div><dt>{t('category')}</dt><dd>{featured.type || '—'}</dd></div><div><dt>{t('location')}</dt><dd>{featured.location || t('locationTbd')}</dd></div><div><dt>{t('date')}</dt><dd>{formatEventDate(featured.startDate, language) || t('dateTbd')}</dd></div><div><dt>{t('budget')}</dt><dd>{formatEventBudget(featured.budget, language) || '—'}</dd></div></dl><button type="button" className="button" onClick={() => openPackageRequest(featured)}>{t('requestPackages')}</button></article> : featuredLoading ? <div className="loading" role="status"><span className="spinner" />{t('detailLoading')}</div> : featuredError ? <div className="alert error" role="alert">{featuredError}</div> : <p>{t('noFeatured')}</p>}
+        {featured ? <article className="event-highlight-content"><div><h3 id="event-highlight-title">{featured.title}</h3><span>{featured.type ? translateEventCategory(featured.type) : '—'}</span></div><dl className="detail-meta-grid"><div><dt>{t('category')}</dt><dd>{featured.type ? translateEventCategory(featured.type) : '—'}</dd></div><div><dt>{t('location')}</dt><dd>{featured.location || t('locationTbd')}</dd></div><div><dt>{t('date')}</dt><dd>{formatEventDate(featured.startDate, language) || t('dateTbd')}</dd></div><div><dt>{t('budget')}</dt><dd>{formatEventBudget(featured.budget, language) || '—'}</dd></div></dl><button type="button" className="button" onClick={() => openPackageRequest(featured)}>{t('requestPackages')}</button></article> : featuredLoading ? <div className="loading" role="status"><span className="spinner" />{t('detailLoading')}</div> : featuredError ? <div className="alert error" role="alert">{featuredError}</div> : <p>{t('noFeatured')}</p>}
       </section>
     </>}
   </div>
@@ -2561,6 +2677,68 @@ function VendorMedia({ src, alt, className = '', loading = 'lazy' }) {
   />;
 }
 
+function VendorBookingRequestModal({ service, onNavigate, onClose }) {
+  const [events, setEvents] = useState([]);
+  const [eventId, setEventId] = useState('');
+  const [notes, setNotes] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    api('/customer/events').then((response) => {
+      if (!active) return;
+      const availableEvents = (Array.isArray(response.data) ? response.data : []).filter((event) => (
+        ['active', 'published', 'upcoming', 'open'].includes(String(event.status || '').toLowerCase())
+        && new Date(String(event.startDate || event.date || '').replace(' ', 'T')).getTime() > Date.now()
+      ));
+      setEvents(availableEvents);
+    }).catch((issue) => {
+      if (active) setError(issue.message || 'Your events could not be loaded.');
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, []);
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api('/platform/bookings', {
+        method: 'POST',
+        body: JSON.stringify({ eventId: Number(eventId), serviceId: Number(service.id), notes }),
+      });
+      setSuccess(true);
+    } catch (issue) {
+      setError(issue.message || 'The booking request could not be sent.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && !busy && onClose()}>
+    <form className="modal" onSubmit={submit} role="dialog" aria-modal="true" aria-label="Request vendor booking">
+      <div className="modal-head"><h2>Request a booking</h2><button className="icon-button" type="button" aria-label="Close" disabled={busy} onClick={onClose}>×</button></div>
+      <div className="modal-body">
+        {success ? <p role="status">Your booking request was sent. You can track its status in your bookings.</p> : <>
+          <p>{service.title} · {service.vendorName}</p>
+          {loading ? <div className="loading" role="status"><span className="spinner"/>Loading your events…</div> : events.length ? <label className="field"><span>Event</span><select required value={eventId} onChange={(change) => setEventId(change.target.value)}><option value="">Choose an event</option>{events.map((item) => <option value={item.id} key={item.id}>{item.title} · {new Date(String(item.startDate || item.date).replace(' ', 'T')).toLocaleDateString()}</option>)}</select></label> : <div className="empty panel"><strong>No future events are open for booking.</strong><button className="text-action" type="button" onClick={() => onNavigate('/customer/dashboard?view=events')}>Create or update an event</button></div>}
+          {events.length > 0 && <label className="field"><span>Requirements (optional)</span><textarea maxLength={500} value={notes} onChange={(change) => setNotes(change.target.value)}/></label>}
+          {error && <div className="alert error" role="alert">{error}</div>}
+        </>}
+      </div>
+      <div className="modal-foot">{success
+        ? <><button className="button secondary" type="button" onClick={onClose}>Close</button><button className="button" type="button" onClick={() => onNavigate('/customer/dashboard?view=bookings')}>View bookings</button></>
+        : <><button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="button" type="submit" disabled={busy || loading || !eventId || !events.length}>{busy ? 'Sending…' : 'Send booking request'}</button></>}
+      </div>
+    </form>
+  </div>;
+}
+
 function VendorDetailPage({ vendorId, user, onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
@@ -2570,6 +2748,7 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
   const [notFound, setNotFound] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const [requestService, setRequestService] = useState(null);
+  const [bookingService, setBookingService] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
 
   useEffect(() => {
@@ -2644,13 +2823,14 @@ function VendorDetailPage({ vendorId, user, onNavigate }) {
       {Array.isArray(vendor.services) && vendor.services.length ? <div className="card-grid">{vendor.services.filter((service) => service && service.published !== false && service.visibility !== 'private').map((service) => <article key={service.id} className="info-card vendor-profile-service">
         {service.images?.[0] && <VendorMedia className="vendor-service-image" src={service.images[0].url} alt={`${service.title} portfolio`} />}
         <p className="eyebrow">{service.category || vendor.category}</p><h3>{service.title}</h3><p className="vendor-description">{service.description || 'No service description has been provided.'}</p>
-        <div className="pricing-row"><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}${service.packages?.length ? ' · starting price' : ''}` : t('priceOnRequest')}</strong><button className="button secondary small" type="button" onClick={() => setRequestService(service)}>Request Quote</button></div>
+        <div className="pricing-row"><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}${service.packages?.length ? ' · starting price' : ''}` : t('priceOnRequest')}</strong><div className="customer-actions"><button className="button secondary small" type="button" onClick={() => setRequestService(service)}>Request Quote</button>{user?.role === 'customer' && Number(service.price) > 0 && <button className="button small" type="button" onClick={() => setBookingService(service)}>Request booking</button>}</div></div>
         {service.packages?.length > 0 && <div className="vendor-package-list"><h4>Packages</h4>{service.packages.map((item) => <div className="vendor-package-detail" key={item.id}><strong>{item.name} · {item.currency} {Number(item.price).toLocaleString()}</strong>{item.description && <p>{item.description}</p>}{item.includedFeatures?.length > 0 && <ul>{item.includedFeatures.map((feature) => <li key={feature}>{feature}</li>)}</ul>}{item.extras?.length > 0 && <p>Extras: {item.extras.map((extra) => `${extra.name} (${item.currency} ${Number(extra.price).toLocaleString()})`).join(', ')}</p>}</div>)}</div>}
       </article>)}</div> : <div className="empty-card">{t('noPublishedServices')}</div>}
     </section>
     <section className="panel"><div className="panel-header"><div><h3>Customer reviews</h3><p>{vendor.reviewCount || 0} published reviews · {vendor.reviewCount > 0 ? `${Number(vendor.rating).toFixed(1)} / 5` : 'No rating yet'}</p></div></div><div className="vendor-rating-distribution">{[5, 4, 3, 2, 1].map((rating) => <div key={rating}><span>{rating} stars</span><meter min="0" max={Math.max(1, vendor.reviewCount || 0)} value={vendor.ratingDistribution?.[rating] || 0} /><span>{vendor.ratingDistribution?.[rating] || 0}</span></div>)}</div>{reviewItems.length > 0 ? <div className="list-stack">{reviewItems.map(({ item: review, key }) => <article className="list-card" key={key}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div> : <p>No published reviews are available yet.</p>}</section>
-    {availabilityItems.length > 0 && <section className="panel"><div className="panel-header"><h3>Availability</h3></div><div className="list-stack">{availabilityItems.map(({ item: entry, key }) => <div className="list-card" key={key}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div></section>}
+    <section className="panel"><div className="panel-header"><h3>Availability</h3></div>{availabilityItems.length > 0 ? <div className="list-stack">{availabilityItems.map(({ item: entry, key }) => <div className="list-card" key={key}><strong>{String(entry.date).slice(0, 10)}</strong><span>{entry.status}</span></div>)}</div> : <p>No upcoming availability dates have been published.</p>}</section>
   </div>{requestService && <QuoteRequestModal service={requestService} services={vendor.services} vendorId={vendor.id} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)}/>}
+  {bookingService && user?.role === 'customer' && <VendorBookingRequestModal service={bookingService} onNavigate={onNavigate} onClose={() => setBookingService(null)}/>}
   {previewImage && <div className="overlay vendor-image-preview" role="dialog" aria-modal="true" aria-label="Vendor image preview" onMouseDown={(event) => event.target === event.currentTarget && setPreviewImage(null)}><button className="icon-button" type="button" onClick={() => setPreviewImage(null)} aria-label="Close image preview"><X size={18}/></button><VendorMedia src={previewImage.url} alt={previewImage.name || 'Vendor portfolio'} loading="eager" /></div>}</main>;
 }
 
@@ -2899,8 +3079,10 @@ function readServicePage(path = '') {
   return Math.max(1, Number(params.get('page')) || 1);
 }
 
-function serviceListingPath(page = 1) {
+function serviceListingPath(page = 1, search = '', category = '') {
   const params = new URLSearchParams();
+  if (search.trim()) params.set('search', search.trim());
+  if (category) params.set('category', category);
   if (page > 1) params.set('page', String(page));
   const query = params.toString();
   return `/services${query ? `?${query}` : ''}`;
@@ -2909,12 +3091,19 @@ function serviceListingPath(page = 1) {
 function ServicesPage({ onNavigate, user, currentPath }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
+  const initialFilters = getListingFiltersFromPath(currentPath);
   const [services, setServices] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [pagination, setPagination] = useState({ page: 1, totalPages: 1, total: 0 });
   const serviceRequestController = useRef(null);
   const [page, setPage] = useState(() => readServicePage(currentPath));
+  const [searchInput, setSearchInput] = useState(initialFilters.search);
+  const [search, setSearch] = useState(initialFilters.search);
+  const [category, setCategory] = useState(initialFilters.category);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [categoryError, setCategoryError] = useState('');
+  const [categoryRetry, setCategoryRetry] = useState(0);
   const [requestService, setRequestService] = useState(null);
   const lastRoutePath = useRef(currentPath);
 
@@ -2922,11 +3111,33 @@ function ServicesPage({ onNavigate, user, currentPath }) {
     if (lastRoutePath.current === currentPath) return;
     lastRoutePath.current = currentPath;
     const nextPage = readServicePage(currentPath);
+    const nextFilters = getListingFiltersFromPath(currentPath);
     setPage(nextPage);
-    void loadServices(nextPage);
+    setSearchInput(nextFilters.search);
+    setSearch(nextFilters.search);
+    setCategory(nextFilters.category);
+    void loadServices(nextPage, nextFilters.search, nextFilters.category);
   }, [currentPath]);
 
-  async function loadServices(nextPage = 1) {
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadCategories() {
+      setCategoryError('');
+      try {
+        const response = await api('/platform/categories', { signal: controller.signal });
+        if (!controller.signal.aborted) setCategories(Array.isArray(response.data) ? response.data : []);
+      } catch (issue) {
+        if (issue.name !== 'AbortError' && !controller.signal.aborted) {
+          setCategories([]);
+          setCategoryError(issue.message || 'Service categories could not be loaded.');
+        }
+      }
+    }
+    loadCategories();
+    return () => controller.abort();
+  }, [categoryRetry]);
+
+  async function loadServices(nextPage = 1, nextSearch = search, nextCategory = category) {
     serviceRequestController.current?.abort();
     const controller = new AbortController();
     serviceRequestController.current = controller;
@@ -2934,6 +3145,8 @@ function ServicesPage({ onNavigate, user, currentPath }) {
     setError('');
     try {
       const params = new URLSearchParams({ page: String(nextPage), limit: '12', sort: 'recommended' });
+      if (nextSearch.trim()) params.set('search', nextSearch.trim());
+      if (nextCategory) params.set('category', nextCategory);
       const response = await api(`/platform/services?${params.toString()}`, { signal: controller.signal });
       if (controller.signal.aborted) return;
       setServices(Array.isArray(response.data) ? response.data : []);
@@ -2954,13 +3167,30 @@ function ServicesPage({ onNavigate, user, currentPath }) {
   }, []);
 
   const navigateToPage = (nextPage) => {
-    const path = serviceListingPath(nextPage);
+    const path = serviceListingPath(nextPage, search, category);
     setPage(nextPage);
     if (path === currentPath) void loadServices(nextPage);
     else onNavigate(path);
   };
+  const updateServiceFilters = (nextSearch, nextCategory) => {
+    const path = serviceListingPath(1, nextSearch, nextCategory);
+    setSearch(nextSearch);
+    setCategory(nextCategory);
+    setPage(1);
+    if (path === currentPath) void loadServices(1, nextSearch, nextCategory);
+    else onNavigate(path);
+  };
   return <main className="page-shell"><div className="content-stack">
     <div className="section-header"><div><p className="eyebrow">{t('servicesEyebrow')}</p><h2>{t('servicesHeading')}</h2></div></div>
+    {categoryError && <div className="alert error" role="alert">{categoryError}<button type="button" className="button secondary small" onClick={() => setCategoryRetry((value) => value + 1)}>{t('retry')}</button></div>}
+    <form className="panel service-listing-filters" role="search" onSubmit={(event) => {
+      event.preventDefault();
+      updateServiceFilters(searchInput.trim(), category);
+    }}>
+      <label className="field"><span>Search services</span><input type="search" maxLength="120" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Search services, vendors, or descriptions" /></label>
+      <label className="field"><span>Category</span><select value={category} onChange={(event) => updateServiceFilters(searchInput.trim(), event.target.value)}><option value="">All categories</option>{categories.map((item) => <option value={item.slug || item.name} key={item.id}>{item.name}</option>)}</select></label>
+      <button className="button" type="submit" disabled={loading}>{t('search')}</button>
+    </form>
     {!loading && !error && <p role="status">{pagination.total ?? services.length} {t('publicServicesFound')}</p>}
     {loading ? <div className="content-stack" role="status" aria-label={t('loadingServices')}><div className="loading"><span className="spinner"/>{t('loadingServices')}</div><div className="card-grid">{Array.from({ length: 6 }, (_, index) => <article className="info-card service-card-skeleton" key={index} aria-hidden="true"><div className="public-service-image vendor-skeleton-shimmer" /><div className="vendor-skeleton-line short vendor-skeleton-shimmer" /><div className="vendor-skeleton-line vendor-skeleton-shimmer" /><div className="vendor-skeleton-line long vendor-skeleton-shimmer" /></article>)}</div></div>
       : error ? <div className="alert error" role="alert">{error}<button type="button" className="button secondary small" onClick={() => loadServices(pagination.page || page)}>{t('retry')}</button></div>
@@ -4075,7 +4305,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
       try {
         setLoading(true);
         setError('');
-        const endpoints = ['overview', 'vendors', 'services', 'categories', 'bookings', 'history', 'events', 'favorites', 'saved-services', 'quotations', 'payments', 'refunds', 'messages', 'reviews', 'notifications', 'profile'];
+        const endpoints = ['overview', 'vendors', 'services', 'categories', 'bookings', 'events', 'favorites', 'saved-services', 'quotations', 'payments', 'refunds', 'messages', 'reviews', 'notifications', 'profile'];
         const results = await Promise.all(endpoints.map((endpoint) => api(`/customer/${endpoint}`)));
         const next = {};
         const objectEndpoints = new Set(['overview', 'profile']);
@@ -4094,7 +4324,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
 
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
-    if (error) return <div className="alert error">{error}</div>;
+    if (error) return <div className="alert error" role="alert">{error}<button className="text-action" type="button" onClick={() => setRefreshKey((current) => current + 1)}>Retry dashboard</button></div>;
     return <ErrorBoundary key={slug}>
       <CustomerWorkspace
         view={slug}
@@ -6042,6 +6272,7 @@ export default function App(){
     '/events': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>,
     '/vendors': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorsPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>,
     '/services': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>,
+    '/service-categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceCategoriesPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>,
     '/categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword />,
     '/register': <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} />,
@@ -6057,14 +6288,20 @@ export default function App(){
   const eventRoute = routePath.match(/^\/events\/(\d+)$/);
   const serviceRoute = routePath.match(/^\/services\/(\d+)$/);
   const vendorRoute = routePath.match(/^\/vendors\/(\d+)$/);
+  const customerBookingRoute = routePath.match(/^\/customer\/bookings\/(\d+)$/);
   const roleDashboardRoute = /^\/(customer|organizer|vendor)\/dashboard(?:\/|$)/.test(routePath);
-  const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || roleDashboardRoute;
+  const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || roleDashboardRoute || Boolean(customerBookingRoute);
   if (checking && requiresSession) return <div className="loading full-screen"><img className="loading-brand-symbol" src="/eventhub-symbol.png" alt="EventHub"/><span className="spinner"/>Checking your session…</div>;
   if (requiresSession && !user && ['error', 'rate-limited'].includes(authSessionState.status)) {
     return <SessionRecoveryPage sessionState={authSessionState}/>;
   }
   if (platformAvailability?.maintenanceMode && !(user && portal === 'admin') && routePath !== '/login' && !routePath.startsWith('/admin')) {
     return <MaintenancePage platformName={platformAvailability.platformName} message={platformAvailability.maintenanceMessage} onAdminSignIn={() => navigatePublic('/login')} />;
+  }
+  if (customerBookingRoute) {
+    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
+    if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="alert error">Booking details are available to customer accounts.</div></main></PublicPageLayout>;
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CustomerBookingDetailsPage bookingId={customerBookingRoute[1]} api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
   if (routePath === '/search') {
     const params = new URLSearchParams(currentPath.split('?')[1] || '');
@@ -6080,6 +6317,7 @@ export default function App(){
   if (vendorRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><VendorDetailPage vendorId={vendorRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/services') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if (serviceRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceDetailPage serviceId={serviceRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath === '/service-categories') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceCategoriesPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/categories' || routePath.startsWith('/categories?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath.startsWith('/categories/')) {
     const slug = routePath.replace(/^\/categories\//, '');

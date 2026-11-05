@@ -97,6 +97,21 @@ test('search, category, location and sorting filters apply to public services', 
   assert.equal(result.services[0].title, 'Premium Catering Package');
 });
 
+test('service search is case-insensitive across fields and relevance ranks title matches first', () => {
+  const searchableServices = [
+    { ...services[0], id: 21, title: 'Catering Service', category: 'Events', vendorName: 'Local Vendor', description: '', city: 'Hawassa' },
+    { ...services[1], id: 22, title: 'Dinner Service', category: 'Events', vendorName: 'Local Vendor', description: 'Catering for large events', city: 'Bahir Dar' },
+    { ...services[0], id: 23, title: 'Buffet Setup', category: 'Events', vendorName: 'Catering Company', description: '', city: 'Addis Ababa' },
+    { ...services[0], id: 24, title: 'Event Hall', category: 'Events', vendorName: 'Local Vendor', description: '', city: 'Catering City' },
+    { ...services[0], id: 25, title: 'Event Planning', category: 'Catering', vendorName: 'Local Vendor', description: '', city: 'Hawassa' },
+  ];
+  const ranked = listPublicServices(searchableServices, { search: 'CATERING', sort: 'relevance', page: 1, limit: 10 });
+  assert.deepEqual(ranked.services.map((service) => service.id), [21, 25, 23, 22, 24]);
+
+  const cityMatch = listPublicServices(services, { search: 'BAHIR', page: 1, limit: 10 });
+  assert.deepEqual(cityMatch.services.map((service) => service.id), [2]);
+});
+
 test('category ID filtering selects only services linked to the requested database category', () => {
   const result = listPublicServices(services, { categoryId: 11, page: 1, limit: 10 });
   assert.equal(result.total, 1);

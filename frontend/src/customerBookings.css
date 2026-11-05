@@ -1,0 +1,288 @@
+.customer-service-bookings,
+.customer-service-booking-details {
+  display: grid;
+  gap: 1.25rem;
+  width: 100%;
+}
+
+.customer-service-bookings-header,
+.customer-service-booking-details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.customer-service-bookings-header h1,
+.customer-service-booking-details-header h1 {
+  margin: 0.25rem 0;
+}
+
+.customer-service-bookings-header p:not(.eyebrow),
+.customer-service-booking-details-header p:not(.eyebrow) {
+  margin: 0;
+  color: var(--muted, #667085);
+}
+
+.customer-service-bookings-search {
+  max-width: 38rem;
+}
+
+.customer-service-bookings-search > div {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.customer-service-bookings-search svg {
+  flex: 0 0 auto;
+  color: var(--muted, #667085);
+}
+
+.customer-service-bookings-tabs {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.customer-service-bookings-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 999px;
+  padding: 0.55rem 0.8rem;
+  background: var(--surface, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+
+.customer-service-bookings-tabs button.active {
+  border-color: var(--primary, #5b4bdb);
+  background: var(--primary-soft, #f1efff);
+  color: var(--primary, #5b4bdb);
+}
+
+.customer-service-bookings-tabs button span {
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.customer-service-bookings-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.customer-service-booking {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.1rem;
+}
+
+.customer-service-booking-main {
+  display: grid;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.customer-service-booking-title,
+.customer-service-booking-meta,
+.customer-service-booking-payment,
+.customer-service-booking-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.customer-service-booking-reference {
+  color: var(--muted, #667085);
+  font-size: 0.85rem;
+}
+
+.customer-service-booking h2,
+.customer-service-booking-reschedule h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.customer-service-booking-subtitle {
+  margin: -0.3rem 0 0;
+  color: var(--muted, #667085);
+}
+
+.customer-service-booking-meta {
+  color: var(--muted, #667085);
+  font-size: 0.9rem;
+}
+
+.customer-service-booking-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.customer-service-booking-payment {
+  justify-content: flex-start;
+}
+
+.customer-service-booking-payment > span {
+  color: var(--muted, #667085);
+  font-size: 0.9rem;
+}
+
+.customer-service-booking-actions {
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.customer-booking-reschedule {
+  display: grid;
+  gap: 0.8rem;
+  width: min(100%, 34rem);
+  margin-top: 0.3rem;
+  padding: 1rem;
+  border: 1px solid var(--border, #e4e7ec);
+  border-radius: 0.75rem;
+  background: var(--surface-subtle, #f9fafb);
+}
+
+.customer-service-bookings-empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.5rem;
+  padding: 3rem 1rem;
+  border: 1px dashed var(--border, #e4e7ec);
+  border-radius: 0.9rem;
+  text-align: center;
+}
+
+.customer-service-bookings-empty h2,
+.customer-service-bookings-empty p {
+  margin: 0;
+}
+
+.customer-service-bookings-empty p {
+  color: var(--muted, #667085);
+}
+
+.customer-service-bookings-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.customer-service-booking-details {
+  max-width: 68rem;
+  margin: 0 auto;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.customer-service-booking-details-header {
+  margin: 0.25rem 0;
+}
+
+.customer-service-booking-details-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.2rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
+}
+
+.customer-service-booking-details-grid > div {
+  display: grid;
+  align-content: start;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.customer-service-booking-details-grid small {
+  color: var(--muted, #667085);
+}
+
+.customer-service-booking-details-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.customer-service-booking-details-grid .customer-service-booking-details-wide {
+  grid-column: 1 / -1;
+}
+
+.customer-service-booking-details-wide p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.customer-booking-modal-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  padding: 1rem;
+  background: rgb(16 24 40 / 58%);
+}
+
+.customer-booking-modal {
+  width: min(100%, 38rem);
+  max-height: min(90vh, 52rem);
+  overflow-y: auto;
+  padding: clamp(1rem, 4vw, 1.5rem);
+  border-radius: 1rem;
+  background: var(--surface, #fff);
+}
+
+.customer-booking-modal h2 {
+  margin-top: 0;
+}
+
+@media (max-width: 760px) {
+  .customer-service-bookings-header,
+  .customer-service-booking,
+  .customer-service-booking-details-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .customer-service-bookings-header > .button {
+    align-self: flex-start;
+  }
+
+  .customer-service-booking-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 520px) {
+  .customer-service-booking-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media print {
+  .site-header,
+  .contact-top-bar,
+  .site-footer,
+  .customer-service-booking-details > button,
+  .customer-service-booking-details .customer-service-booking-actions,
+  .customer-booking-modal-backdrop {
+    display: none !important;
+  }
+
+  .customer-service-booking-details {
+    max-width: none;
+    padding: 0;
+  }
+
+  .customer-service-booking-details-grid {
+    break-inside: avoid;
+    border: 1px solid #999;
+    box-shadow: none;
+  }
+}

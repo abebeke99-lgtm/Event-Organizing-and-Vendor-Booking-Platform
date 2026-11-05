@@ -157,13 +157,22 @@ test('customer overview qualifies booking status and returns dashboard counts', 
 });
 
 test('customer marketplace filters and sorts vendors with pagination metadata', async () => {
-  const response = await request('/api/customer/vendors?category=Catering&location=Addis&page=2&limit=1&sort=price-low');
+  const response = await request('/api/customer/vendors?category=Catering&location=Addis&minRating=4&minPrice=20000&verified=true&page=2&limit=1&sort=price-low');
 
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.equal(result.data.length, 1);
   assert.equal(result.data[0].business_name, 'Cedar Catering');
+  assert.equal(result.data[0].verified, true);
   assert.deepEqual(result.pagination, { page: 2, limit: 1, total: 2, totalPages: 2 });
+});
+
+test('customer vendor directory requires authentication and validates verification filters', async () => {
+  const unauthenticated = await request('/api/customer/vendors', { authenticated: false });
+  assert.equal(unauthenticated.status, 401);
+
+  const invalidFilter = await request('/api/customer/vendors?verified=pending');
+  assert.equal(invalidFilter.status, 400);
 });
 
 test('customer marketplace filters and sorts services with pagination metadata', async () => {
@@ -175,6 +184,18 @@ test('customer marketplace filters and sorts services with pagination metadata',
   assert.equal(result.data[0].title, 'Wedding Buffet');
   assert.deepEqual(result.pagination, { page: 1, limit: 1, total: 2, totalPages: 2 });
   assert.ok(database.statements.some(({ sql }) => sql.includes("COALESCE(NULLIF(TRIM(s.currency), ''), 'ETB') AS currency")));
+});
+
+test('customer service catalog validates relevance sorting and availability filters', async () => {
+  const response = await request('/api/customer/services?search=CATERING&sort=relevance&availableOnly=true&page=1&limit=1');
+
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.data[0].title, 'Corporate Lunch');
+  assert.deepEqual(result.pagination, { page: 1, limit: 1, total: 2, totalPages: 2 });
+
+  const invalidSort = await request('/api/customer/services?sort=unknown');
+  assert.equal(invalidSort.status, 400);
 });
 
 test('customer marketplace filters services to vendors with future availability', async () => {

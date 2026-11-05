@@ -12,6 +12,8 @@ import { createRefundRequest, isSafeFinancialNote } from '../lib/paymentManageme
 import { hashToken, writeAudit } from '../lib/security.js';
 import { createNotification, notifyAdministrators } from '../lib/notificationService.js';
 import { isStrongPassword } from '../lib/authFlow.js';
+import { checkBookingDateAvailability, lockBookingVendor, releaseBookingDate, reserveBookingDate } from '../lib/bookingAvailability.js';
+import { loadSystemSettings } from '../lib/systemSettings.js';
 import {
   complaintAttachmentParser,
   sanitizeComplaintAttachmentName,
@@ -72,7 +74,7 @@ function catalogQuerySchema(sorts, extraFields = {}) {
 }
 const vendorCatalogQuerySchema = catalogQuerySchema(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az']);
 const serviceCatalogQuerySchema = catalogQuerySchema(
-  ['recommended', 'highest-rated', 'price-low', 'price-high', 'alphabetical'],
+  ['recommended', 'relevance', 'highest-rated', 'price-low', 'price-high', 'alphabetical'],
   { availableOnly: z.enum(['true', 'false', '1', '0']).optional() },
 );
 const favoriteSchema = z.object({ vendorId: z.coerce.number().int().positive() }).strict();
@@ -100,14 +102,53 @@ router.use((req, res, next) => {
 const customerBookingSelect = `
   SELECT b.id, b.event_id, b.vendor_id, b.service_description, b.quoted_amount,
          COALESCE(NULLIF(TRIM(b.currency), ''), 'ETB') AS currency,
-         b.status, b.moderation_reason, b.created_at,
-         e.title AS event_title, DATE_FORMAT(e.start_date, '%Y-%m-%d') AS event_start_date,
-         u.full_name AS customer_name, vp.business_name AS vendor_name
+         b.service_id, b.scheduled_date, b.status, b.moderation_reason, b.created_at,
+         e.title AS event_title, e.event_type, e.description AS event_description,
+         e.start_date AS event_start_date, e.city AS event_city, e.venue AS event_venue,
+         e.budget AS event_budget, e.guest_count AS event_guest_count, e.notes AS event_notes,
+         u.full_name AS customer_name, vp.business_name AS vendor_name, s.title AS service_title,
+         (SELECT p.status FROM payments p WHERE p.booking_id = b.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS payment_status,
+         (b.status = 'completed' AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.booking_id = b.id)) AS can_review,
+         EXISTS (SELECT 1 FROM reviews r WHERE r.booking_id = b.id) AS has_review,
+         (b.status IN ('requested', 'under_review', 'quoted', 'accepted')
+           AND COALESCE(b.scheduled_date, e.start_date) > DATE_ADD(NOW(), INTERVAL CAST(COALESCE(
+             (SELECT setting_value FROM system_settings WHERE setting_key = 'booking_cancellation_cutoff_hours'), '24'
+           ) AS UNSIGNED) HOUR)) AS can_cancel,
+         (b.status IN ('requested', 'quoted', 'accepted')
+           AND COALESCE((SELECT setting_value FROM system_settings WHERE setting_key = 'booking_rescheduling_enabled'), 'true') IN ('true', '1')
+           AND COALESCE(b.scheduled_date, e.start_date) > DATE_ADD(NOW(), INTERVAL CAST(COALESCE(
+             (SELECT setting_value FROM system_settings WHERE setting_key = 'booking_reschedule_cutoff_hours'), '24'
+           ) AS UNSIGNED) HOUR)) AS can_reschedule
   FROM bookings b
   JOIN events e ON e.id = b.event_id
   JOIN users u ON u.id = e.organizer_id
   JOIN vendor_profiles vp ON vp.id = b.vendor_id
+  LEFT JOIN services s ON s.id = b.service_id
   WHERE e.organizer_id = ?`;
+
+function mapCustomerBookingRecord(row) {
+  const booking = mapBookingRecord(row);
+  return {
+    ...booking,
+    serviceTitle: String(row.service_title || row.service_description || '').trim(),
+    serviceDescription: row.service_description || '',
+    serviceId: row.service_id == null ? null : Number(row.service_id),
+    scheduledDate: row.scheduled_date || row.event_start_date || null,
+    eventCity: row.event_city || null,
+    eventVenue: row.event_venue || null,
+    eventType: row.event_type || null,
+    eventDescription: row.event_description || null,
+    eventBudget: row.event_budget == null ? null : Number(row.event_budget),
+    eventGuestCount: row.event_guest_count == null ? null : Number(row.event_guest_count),
+    eventNotes: row.event_notes || null,
+    location: [row.event_venue, row.event_city].filter(Boolean).join(', ') || null,
+    paymentStatus: row.payment_status || 'unpaid',
+    canReview: row.can_review === true || Number(row.can_review) === 1,
+    hasReview: row.has_review === true || Number(row.has_review) === 1,
+    canCancel: row.can_cancel === true || Number(row.can_cancel) === 1,
+    canReschedule: row.can_reschedule === true || Number(row.can_reschedule) === 1,
+  };
+}
 
 getRoute('/overview', async (req, res) => {
   const database = databaseFor(req);
@@ -183,15 +224,225 @@ getRoute('/categories', async (req, res) => {
 
 getRoute('/bookings', async (req, res) => {
   const [rows] = await databaseFor(req).execute(`${customerBookingSelect} ORDER BY b.created_at DESC`, [req.platformUser.id]);
-  return ok(res, rows.map(mapBookingRecord));
+  return ok(res, rows.map(mapCustomerBookingRecord));
+});
+
+getRoute('/bookings/:id', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Booking ID is invalid.' });
+  const [rows] = await databaseFor(req).execute(
+    `${customerBookingSelect} AND b.id = ? LIMIT 1`,
+    [req.platformUser.id, id.data],
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Booking not found.' });
+  return ok(res, mapCustomerBookingRecord(rows[0]));
+});
+
+patchRoute('/bookings/:id/reschedule', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  const parsed = z.object({
+    scheduledDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/),
+    reason: z.string().trim().min(5).max(500),
+  }).strict().safeParse(req.body || {});
+  if (!id.success || !parsed.success) {
+    return res.status(400).json({ error: 'Provide a valid booking date and rescheduling reason.' });
+  }
+  const [year, month, day, hour, minute] = parsed.data.scheduledDate.split(/[-T:]/).map(Number);
+  const localDate = new Date(year, month - 1, day, hour, minute);
+  if (localDate.getFullYear() !== year || localDate.getMonth() !== month - 1 || localDate.getDate() !== day
+    || localDate.getHours() !== hour || localDate.getMinutes() !== minute
+    || localDate <= new Date()) {
+    return res.status(400).json({ error: 'Enter a valid future booking date and time.' });
+  }
+  const scheduledDate = `${parsed.data.scheduledDate.replace('T', ' ')}:00`;
+  const database = databaseFor(req);
+  try {
+    const result = await transaction(database, async (connection) => {
+      const [[booking]] = await connection.execute(
+        `SELECT b.id, b.status, b.vendor_id, b.scheduled_date, e.start_date, e.title AS event_title,
+                e.organizer_id, vp.user_id AS vendor_user_id, vp.business_name AS vendor_name
+         FROM bookings b
+         JOIN events e ON e.id = b.event_id
+         JOIN vendor_profiles vp ON vp.id = b.vendor_id
+         WHERE b.id = ? AND e.organizer_id = ? LIMIT 1 FOR UPDATE`,
+        [id.data, req.platformUser.id],
+      );
+      if (!booking) throw Object.assign(new Error('Booking not found.'), { status: 404 });
+
+      await lockBookingVendor(connection, booking.vendor_id);
+      const settings = await loadSystemSettings(connection, [
+        'booking_rescheduling_enabled',
+        'booking_reschedule_cutoff_hours',
+      ]);
+      if (!settings.booking_rescheduling_enabled) {
+        throw Object.assign(new Error('Booking rescheduling is disabled by the current system policy.'), { status: 409 });
+      }
+      if (!['requested', 'quoted', 'accepted'].includes(booking.status)) {
+        throw Object.assign(new Error('This booking cannot be rescheduled in its current status.'), { status: 409 });
+      }
+      const previousDate = booking.scheduled_date || booking.start_date;
+      if (!previousDate) {
+        throw Object.assign(new Error('A booking cannot be rescheduled after its scheduled date.'), { status: 409 });
+      }
+      const [dateRows] = await connection.execute(
+        'SELECT ? <= NOW() AS booking_in_past, ? = ? AS same_datetime, DATE(?) = DATE(?) AS same_day',
+        [previousDate, previousDate, scheduledDate, previousDate, scheduledDate],
+      );
+      if (dateRows[0]?.booking_in_past) {
+        throw Object.assign(new Error('A booking cannot be rescheduled after its scheduled date.'), { status: 409 });
+      }
+      const [cutoffRows] = await connection.execute(
+        'SELECT ? <= DATE_ADD(NOW(), INTERVAL ? HOUR) AS inside_cutoff',
+        [previousDate, settings.booking_reschedule_cutoff_hours],
+      );
+      if (cutoffRows[0]?.inside_cutoff) {
+        throw Object.assign(new Error('This booking is inside the configured rescheduling cutoff.'), { status: 409 });
+      }
+      if (dateRows[0]?.same_datetime) {
+        throw Object.assign(new Error('Choose a different date to reschedule this booking.'), { status: 409 });
+      }
+
+      const availability = await checkBookingDateAvailability(connection, {
+        vendorId: booking.vendor_id,
+        bookingId: booking.id,
+        scheduledDate,
+      });
+      if (booking.status === 'accepted') {
+        await reserveBookingDate(connection, {
+          vendorId: booking.vendor_id,
+          bookingId: booking.id,
+          scheduledDate,
+          availability,
+        });
+      }
+      await connection.execute(
+        'UPDATE bookings SET scheduled_date = ?, moderation_reason = ? WHERE id = ?',
+        [scheduledDate, parsed.data.reason, booking.id],
+      );
+      if (booking.status === 'accepted' && !dateRows[0]?.same_day) {
+        await releaseBookingDate(connection, {
+          vendorId: booking.vendor_id,
+          bookingId: booking.id,
+          scheduledDate: previousDate,
+        });
+      }
+      await connection.execute(
+        `INSERT INTO booking_history (booking_id, actor_id, action, from_status, to_status, reason, details)
+         VALUES (?, ?, 'rescheduled', ?, ?, ?, ?)`,
+        [booking.id, req.platformUser.id, booking.status, booking.status, parsed.data.reason, JSON.stringify({ from: previousDate, to: scheduledDate })],
+      );
+      await writeAudit(connection, {
+        actorId: req.platformUser.id,
+        action: 'customer.booking_rescheduled',
+        entityType: 'booking',
+        entityId: booking.id,
+        details: { from: previousDate, to: scheduledDate, reason: parsed.data.reason },
+        ip: req.ip,
+      });
+      await createNotification(connection, {
+        userId: booking.vendor_user_id,
+        title: 'Booking rescheduled',
+        message: `The customer rescheduled ${booking.event_title} to ${scheduledDate}. ${parsed.data.reason}`,
+        type: 'booking',
+        relatedType: 'booking',
+        relatedId: booking.id,
+        actorId: req.platformUser.id,
+      });
+      return { id: Number(booking.id), scheduled_date: scheduledDate, status: booking.status };
+    });
+    return res.json({ data: result });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    throw error;
+  }
 });
 
 getRoute('/history', async (req, res) => {
-  const [rows] = await databaseFor(req).execute(
-    `${customerBookingSelect} AND b.status IN ('completed', 'cancelled', 'rejected') ORDER BY b.created_at DESC`,
-    [req.platformUser.id]
-  );
-  return ok(res, rows.map(mapBookingRecord));
+  const historicalStatuses = ['completed', 'cancelled', 'rejected', 'accepted', 'quoted', 'under_review', 'requested'];
+  const parsed = z.object({
+    search: z.string().trim().max(120).optional(),
+    status: z.enum(historicalStatuses).optional(),
+    dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    page: z.coerce.number().int().min(1).max(100000).default(1),
+    limit: z.coerce.number().int().min(1).max(50).default(10),
+  }).strict().superRefine((query, context) => {
+    for (const key of ['dateFrom', 'dateTo']) {
+      if (!query[key]) continue;
+      const [year, month, day] = query[key].split('-').map(Number);
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'Enter a valid calendar date.' });
+      }
+    }
+    if (query.dateFrom && query.dateTo && query.dateFrom > query.dateTo) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ['dateTo'], message: 'End date must be on or after the start date.' });
+    }
+  }).safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: 'Invalid booking history filters.',
+      details: parsed.error.issues.map(({ path, message }) => ({ field: path.join('.'), message })),
+    });
+  }
+
+  const query = parsed.data;
+  const filters = [
+    `(b.status IN ('completed', 'cancelled', 'rejected')
+      OR COALESCE(b.scheduled_date, e.start_date) < NOW())`,
+  ];
+  const values = [req.platformUser.id];
+  if (query.status) {
+    filters.push('b.status = ?');
+    values.push(query.status);
+  }
+  if (query.dateFrom) {
+    filters.push('e.start_date >= ?');
+    values.push(query.dateFrom);
+  }
+  if (query.dateTo) {
+    filters.push('e.start_date < DATE_ADD(?, INTERVAL 1 DAY)');
+    values.push(query.dateTo);
+  }
+  if (query.search) {
+    const search = `%${query.search}%`;
+    filters.push(`(
+      CONCAT('BK-', LPAD(b.id, 6, '0')) LIKE ?
+      OR CAST(b.id AS CHAR) LIKE ?
+      OR COALESCE(vp.business_name, '') LIKE ?
+      OR COALESCE(s.title, b.service_description, '') LIKE ?
+      OR COALESCE(e.title, '') LIKE ?
+    )`);
+    values.push(search, search, search, search, search);
+  }
+  const whereClause = `e.organizer_id = ? AND ${filters.join(' AND ')}`;
+  const database = databaseFor(req);
+  const joins = `
+    FROM bookings b
+    JOIN events e ON e.id = b.event_id
+    JOIN vendor_profiles vp ON vp.id = b.vendor_id
+    LEFT JOIN services s ON s.id = b.service_id`;
+  const [countResult, rowsResult] = await Promise.all([
+    database.execute(`SELECT COUNT(*) AS total ${joins} WHERE ${whereClause}`, values),
+    database.execute(
+      `${customerBookingSelect} AND ${filters.join(' AND ')}
+       ORDER BY COALESCE(b.scheduled_date, e.start_date) DESC, b.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...values, query.limit, (query.page - 1) * query.limit],
+    ),
+  ]);
+  const rows = rowsResult[0];
+  const total = Number(countResult[0][0]?.total || 0);
+  return res.json({
+    success: true,
+    data: rows.map(mapCustomerBookingRecord),
+    pagination: {
+      page: query.page,
+      limit: query.limit,
+      total,
+      totalPages: Math.ceil(total / query.limit),
+    },
+  });
 });
 
 getRoute('/events', async (req, res) => {
