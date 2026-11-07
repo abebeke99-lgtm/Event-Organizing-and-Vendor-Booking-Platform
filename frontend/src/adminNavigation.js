@@ -27,6 +27,7 @@ export function adminPathForSlug(slug) {
 
 export function adminSlugFromPath(path) {
   const pathname = String(path ?? '').split(/[?#]/, 1)[0].replace(/\/+$/, '') || '/';
+  if (pathname === '/admin/dashboard') return 'overview';
   const match = pathname.match(/^\/admin(?:\/([^/]+))?$/);
   if (!match) return null;
   const section = match[1] || 'overview';

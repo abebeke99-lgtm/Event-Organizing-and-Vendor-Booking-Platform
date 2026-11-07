@@ -63,13 +63,10 @@ const adminEmailChangeRateLimit = createAuthRateLimiter({
   message: 'Too many email verification attempts. Try again later.',
 });
 const adminPasswordSchema = z.string()
-  .min(16)
-  .max(72)
-  .refine((password) => Array.from(password).length >= 16
-    && Buffer.byteLength(password, 'utf8') <= 72
-    && /[A-Z]/.test(password)
-    && /[a-z]/.test(password)
-    && /\d/.test(password));
+  .refine((password) => {
+    const length = Array.from(password).length;
+    return length >= 12 && length <= 16 && Buffer.byteLength(password, 'utf8') <= 72;
+  });
 const categoryFieldsSchema = z.object({
   name: z.string().trim()
     .min(3, 'Category name must be at least 3 characters.')
@@ -1246,7 +1243,7 @@ router.post('/profile/password', asyncHandler(async (req, res) => {
   }).strict().safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({
-      error: 'Provide your current password and a new password with at least 16 characters, including uppercase, lowercase, and a number (maximum 72 UTF-8 bytes).',
+      error: 'Provide your current password and a new password between 12 and 16 characters (maximum 72 UTF-8 bytes).',
     });
   }
   if (parsed.data.currentPassword === parsed.data.newPassword) {

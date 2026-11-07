@@ -15,7 +15,7 @@ import {
   setPlatformSessionHint,
 } from './authSession.js';
 import { adminPathForSlug, adminSlugFromPath } from './adminNavigation.js';
-import { authenticateAdministrator, authenticatePlatformUser, getAdministratorRouteRedirect } from './adminAuthentication.js';
+import { authenticatePlatformUser, dashboardPathForRole } from './adminAuthentication.js';
 import { withStableKeys } from './listKeys.js';
 import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageStatistics, getHomepageTestimonials } from './homepageUtils.js';
 import { getHomepageVenueCards } from './homepageVenueUtils.js';
@@ -24,6 +24,7 @@ import HomepageEventsSection from './HomepageEventsSection.jsx';
 import HomepageImage from './HomepageImage.jsx';
 import HomepageVenueCarousel from './HomepageVenueCarousel.jsx';
 import HomepageTrustStrip from './HomepageTrustStrip.jsx';
+import AuthLayout from './components/AuthLayout.jsx';
 import ContactTopBar from './ContactTopBar.js';
 import AppFooter from './AppFooter.js';
 import PublicNavigation from './PublicNavigation.jsx';
@@ -36,7 +37,7 @@ const RecentlyViewedPage = React.lazy(() => import('./NavigationFeatures.jsx').t
 const RecommendationsPage = React.lazy(() => import('./NavigationFeatures.jsx').then(({ RecommendationsPage }) => ({ default: RecommendationsPage })));
 import { getComparedServiceIds, getComparedVendorIds, toggleComparedService, toggleComparedVendor } from './navigationFeatureUtils.js';
 import HorizontalCarousel from './HorizontalCarousel.jsx';
-import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
+import { clearDemoSession, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { createDemoDataService } from './demoData.js';
 const EventCountdown = React.lazy(() => import('./EventsExperience.jsx').then(({ EventCountdown }) => ({ default: EventCountdown })));
@@ -97,7 +98,19 @@ const modules = {
   'audit-logs':{title:'Audit Logs', endpoint:'audit-logs', columns:['id','actor_id','action','entity_type','entity_id','details','ip_address','created_at'], readonly:true},
 };
 const permissions = ['users:read','users:write','vendors:verify','events:write','bookings:moderate','payments:read','reviews:moderate','categories:write','reports:read','notifications:write'];
-const dashboardPathForRole = (role) => role === 'admin' ? '/admin' : `/${role}/dashboard`;
+
+function canRoleAccessPath(role, path) {
+  const destination = String(path || '');
+  if (!destination.startsWith('/') || destination.startsWith('//')) return false;
+  const pathname = destination.split('?')[0];
+  if (/^\/admin(?:\/|$)/.test(pathname)) return role === 'admin';
+  if (/^\/organizer\/dashboard(?:\/|$)/.test(pathname)) return role === 'organizer';
+  if (/^\/vendor\/dashboard(?:\/|$)/.test(pathname)) return role === 'vendor';
+  if (/^\/customer\/(?:dashboard|bookings)(?:\/|$)/.test(pathname)
+    || pathname === '/my-bookings' || pathname === '/my-favorites') return role === 'customer';
+  if (/^\/ai-chat(?:\/|$)/.test(pathname)) return ['customer', 'organizer', 'vendor'].includes(role);
+  return false;
+}
 
 const dashboardMenuIcons = {
   overview: LayoutDashboard,
@@ -126,7 +139,6 @@ const dashboardMenuIcons = {
 };
 
 function AuthBrand({ showEventHubLogo = true }) {
-  if (!showEventHubLogo) return null;
   return <div className="auth-brand" aria-label="EventHub">
     {showEventHubLogo && <img className="auth-brand-logo" src="/eventhub-logo.png" alt="EventHub" />}
   </div>;
@@ -211,7 +223,7 @@ function navigateBrowserPath(path) {
 }
 
 async function api(path, options={}) {
-  const liveAdministratorRoutes = ['/auth/login', '/auth/me', '/auth/logout'];
+  const liveAdministratorRoutes = ['/auth/login', '/auth/me', '/auth/logout', '/platform/login', '/platform/me', '/platform/logout'];
   if (DEMO_AUTH_ENABLED && !path.startsWith('/contact') && !liveAdministratorRoutes.includes(path)) {
     if (options.signal?.aborted) throw Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
     const route = path.split('?')[0];
@@ -291,8 +303,8 @@ async function api(path, options={}) {
       responseType: options.responseType,
       headers: { ...(options.body ? {'Content-Type':'application/json'} : {}), ...(options.headers || {}) },
     });
-    if (['/platform/login', '/platform/register'].includes(path)) setPlatformSessionHint();
-    if (path === '/platform/logout') clearPlatformSessionHint();
+    if (['/platform/login', '/auth/login', '/platform/register'].includes(path)) setPlatformSessionHint();
+    if (['/platform/logout', '/auth/logout'].includes(path)) clearPlatformSessionHint();
     if (response.status === 204) return null;
     return response.data === '' || response.data === undefined ? {} : response.data;
   } catch (error) {
@@ -3820,7 +3832,7 @@ function AuthHomeLink() {
   return <a className="auth-home-link" href="/"><ArrowLeft size={16} aria-hidden="true" /><span>Back to Home</span></a>;
 }
 
-function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
+function LoginPage({ onLogin, showForgotPassword = true }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
@@ -3843,15 +3855,14 @@ function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
     }
   }
 
-  return <main className="login-wrap"><div className="login-card">
-    <AuthBrand showEventHubLogo={false} />
+  return <AuthLayout><section className="login-card">
     <h1>{t('signIn')}</h1>
     <p className="muted">{t('accessWorkspace')}</p>
     {error && <div className="alert error" role="alert">{error}</div>}
     <form className="login-form" onSubmit={submit}>
       <label className="auth-field">
-        <span>{demoMode ? 'Email address or username' : t('emailAddress')}</span>
-        <input type={demoMode ? 'text' : 'email'} name="email" placeholder={demoMode ? 'Email address or username' : undefined} autoComplete="username" autoCapitalize="none" required value={email} onChange={(e) => setEmail(e.target.value)} />
+        <span>{t('emailAddress')}</span>
+        <input type="email" name="email" autoComplete="username" autoCapitalize="none" required value={email} onChange={(e) => setEmail(e.target.value)} />
       </label>
       <label className="auth-field" htmlFor="login-password">
         <span id="login-password-label">{t('password')}</span>
@@ -3860,15 +3871,15 @@ function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
           <button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
         </div>
       </label>
+      {showForgotPassword && <div className="auth-forgot-row">
+        <button type="button" className="text-link auth-forgot-link" onClick={() => navigateBrowserPath('/forgot-password')}>{t('forgotPassword')}</button>
+      </div>}
       <div className="auth-form-options">
         <label className="remember-option">
           <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />
           <span>{rememberMeLabel}</span>
         </label>
       </div>
-      {showForgotPassword && <div className="auth-forgot-row">
-        <button type="button" className="text-link auth-forgot-link" onClick={() => navigateBrowserPath('/forgot-password')}>{t('forgotPassword')}</button>
-      </div>}
       <button type="submit" className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button>
     </form>
 
@@ -3876,7 +3887,7 @@ function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
       <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button>
     </div>
     <div className="auth-home-footer"><AuthHomeLink /></div>
-  </div></main>;
+  </section></AuthLayout>;
 }
 
 function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled = true }) {
@@ -3886,22 +3897,29 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [validationAttempted, setValidationAttempted] = useState(false);
   const redirectTimer = useRef(null);
   useEffect(() => () => window.clearTimeout(redirectTimer.current), []);
-  const passwordValid = form.password.length >= 12
-    && form.password.length <= 16
-    && /[A-Z]/.test(form.password)
-    && /[a-z]/.test(form.password)
-    && /\d/.test(form.password);
-  const passwordError = Boolean(form.password && !passwordValid);
-  const confirmMismatch = Boolean(form.confirmPassword && form.confirmPassword !== form.password);
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
+  const validationErrors = {
+    name: form.name.trim() ? '' : t('fullNameRequired'),
+    email: !form.email.trim()
+      ? t('registrationEmailRequired')
+      : emailValid ? '' : t('validEmailRequired'),
+    password: !form.password
+      ? t('registrationPasswordRequired')
+      : form.password.length < 8 ? t('passwordInvalid') : '',
+    confirmPassword: !form.confirmPassword
+      ? t('registrationConfirmPasswordRequired')
+      : form.confirmPassword !== form.password ? t('passwordMismatch') : '',
+  };
 
   async function submit(event) {
     event.preventDefault();
     setError('');
     setSuccess('');
-    if (!passwordValid) return;
-    if (form.password !== form.confirmPassword) return;
+    setValidationAttempted(true);
+    if (Object.values(validationErrors).some(Boolean)) return;
     setBusy(true);
     try {
       const result = await onRegister(form.name.trim(), form.email.trim(), form.password);
@@ -3913,16 +3931,23 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
       setBusy(false);
     }
   }
-  return <main className="login-wrap"><div className="login-card registration-card">
-    <AuthBrand showEventHubLogo={false} />
+  return <AuthLayout><section className="login-card registration-card">
     <h1>{t('createAccountHeading')}</h1>
     <p className="muted">{t('registerAsRole')}</p>
     {!registrationEnabled && <div className="alert warning" role="status">{t('publicRegistrationDisabled')}</div>}
     {error && <div className="alert error" role="alert">{error}</div>}
-    {success && <div className="alert success" role="status">{success}<div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => { window.clearTimeout(redirectTimer.current); navigateBrowserPath('/login'); }}>{t('loginHere')}</button></div></div>}
-    <form onSubmit={submit}>
-      <label className="field"><span>{t('fullName')}</span><input name="name" autoComplete="name" minLength="2" maxLength="160" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></label>
-      <label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required /></label>
+    {success && <div className="alert success" role="status">{success}</div>}
+    <form onSubmit={submit} noValidate>
+      <label className="field">
+        <span>{t('fullName')}</span>
+        <input name="name" autoComplete="name" minLength="2" maxLength="160" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.name)} aria-describedby={validationAttempted && validationErrors.name ? 'registration-name-error' : undefined} />
+        {validationAttempted && validationErrors.name && <small id="registration-name-error" className="field-error" role="alert">{validationErrors.name}</small>}
+      </label>
+      <label className="field">
+        <span>{t('emailAddress')}</span>
+        <input name="email" type="email" autoComplete="email" maxLength="254" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.email)} aria-describedby={validationAttempted && validationErrors.email ? 'registration-email-error' : undefined} />
+        {validationAttempted && validationErrors.email && <small id="registration-email-error" className="field-error" role="alert">{validationErrors.email}</small>}
+      </label>
       <div className="registration-password-field">
         <PasswordField
           name="password"
@@ -3931,13 +3956,13 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
           autoComplete="new-password"
           language={language}
           placeholder={t('passwordPlaceholder')}
-          minLength={12}
+          minLength={8}
           maxLength={16}
-          describedBy={passwordError ? 'registration-password-error' : undefined}
-          invalid={passwordError}
+          describedBy={validationAttempted && validationErrors.password ? 'registration-password-error' : undefined}
+          invalid={Boolean(validationAttempted && validationErrors.password)}
           onChange={(e) => setForm({ ...form, password: e.target.value })}
         />
-        {passwordError && <p id="registration-password-error" className="field-error" role="alert">{t('passwordInvalid')}</p>}
+        {validationAttempted && validationErrors.password && <p id="registration-password-error" className="field-error" role="alert">{validationErrors.password}</p>}
       </div>
       <div className="registration-confirm-field">
         <PasswordField
@@ -3946,22 +3971,19 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
           value={form.confirmPassword}
           autoComplete="new-password"
           language={language}
-          minLength={12}
+          minLength={8}
           maxLength={16}
-          describedBy={form.confirmPassword ? 'registration-confirm-feedback' : undefined}
-          invalid={confirmMismatch}
+          describedBy={validationAttempted && validationErrors.confirmPassword ? 'registration-confirm-feedback' : undefined}
+          invalid={Boolean(validationAttempted && validationErrors.confirmPassword)}
           onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
         />
-        {form.confirmPassword && <p id="registration-confirm-feedback" className={confirmMismatch ? 'field-error' : 'field-success'} role={confirmMismatch ? 'alert' : 'status'} aria-live="polite">
-          {!confirmMismatch && <Check size={13} aria-hidden="true" />}
-          {confirmMismatch ? t('passwordMismatch') : t('passwordsMatch')}
-        </p>}
+        {validationAttempted && validationErrors.confirmPassword && <p id="registration-confirm-feedback" className="field-error" role="alert">{validationErrors.confirmPassword}</p>}
       </div>
       <button className="button login-button" disabled={busy || Boolean(success) || !registrationEnabled}>{busy ? t('creatingAccount') : t('registerNow')}</button>
     </form>
-    <div className="inline-links"><span>{t('alreadyHaveAccount')}</span><button type="button" className="text-link" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div>
+    <div className="registration-login-link"><span>{t('alreadyHaveAccount')}</span><button type="button" onClick={() => { window.clearTimeout(redirectTimer.current); navigateBrowserPath('/login'); }}>{t('loginHere')}</button></div>
     <div className="auth-home-footer"><AuthHomeLink /></div>
-  </div></main>;
+  </section></AuthLayout>;
 }
 
 function ForgotPasswordPage({ onSubmit }) {
@@ -4143,35 +4165,41 @@ function HelpPage() {
 
 function AccessDeniedPage({ onNavigate }) {
   const language = useLanguage();
-  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">{translate('accessDenied', language)}</p><h2>{translate('accessDeniedTitle', language)}</h2><p>{translate('accessDeniedCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('backHome', language)}</button></div></div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">403 · {translate('accessDenied', language)}</p><h2>{translate('accessDeniedTitle', language)}</h2><p>{translate('accessDeniedCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('backHome', language)}</button></div></div></main>;
+}
+
+function Navigate({ to, replace = false }) {
+  useEffect(() => {
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (currentPath === to) return;
+    if (replace) window.history.replaceState({}, '', to);
+    else window.history.pushState({}, '', to);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, [replace, to]);
+  return null;
+}
+
+function ProtectedRoute({ user, allowedRoles, onNavigate, children }) {
+  if (!user) {
+    const continuation = `${window.location.pathname}${window.location.search}`;
+    if (continuation !== '/login') {
+      try {
+        window.sessionStorage.setItem('eventhub_after_login', continuation);
+      } catch (error) {
+        console.error('Protected-page continuation could not be saved:', error);
+      }
+    }
+    return <Navigate to="/login" replace />;
+  }
+  if (!allowedRoles.includes(String(user.role || '').toLowerCase())) {
+    return <AccessDeniedPage onNavigate={onNavigate} />;
+  }
+  return children ?? null;
 }
 
 function NotFoundPage({ onNavigate }) {
   const language = useLanguage();
   return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">404</p><h2>{translate('pageNotFound', language)}</h2><p>{translate('pageNotFoundCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('returnHome', language)}</button></div></div></main>;
-}
-
-function VendorLogin({ onLogin }) {
-  const language = useLanguage();
-  const [email, setEmail] = useState('vendor@eventflow.io');
-  const [password, setPassword] = useState('vendor1234');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function submit(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      await onLogin(email, password);
-    } catch (issue) {
-      setError(issue.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('vendorPortal', language)}</p><h1>{translate('vendorSignIn', language)}</h1><p className="muted">{translate('manageYourBusiness', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openVendorDashboard', language)}</button></form><p className="login-note">{translateText('Vendor access remains restricted to the authenticated vendor’s own records and services.', language)}</p></div></main>;
 }
 
 function VendorDashboard({ user, onLogout, onUserChange }) {
@@ -4239,7 +4267,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <div className="alert error">{error}</div>;
-    if (slug !== 'verification') return <VendorWorkspace view={slug} data={data} api={api} user={user} onUserChange={onUserChange} onRefresh={() => setRefreshKey((current) => current + 1)} />;
+    if (slug !== 'verification') return <VendorWorkspace view={slug} data={data} api={api} user={user} onNavigate={setSlug} onUserChange={onUserChange} onRefresh={() => setRefreshKey((current) => current + 1)} />;
 
     switch (slug) {
       case 'overview':
@@ -4292,29 +4320,6 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
   }
 
   return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('vendorDashboard').toUpperCase()} groups={[{ id: 'vendor', label: 'nav.dashboard.groupBusinessArea', items: vendorMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isVendor onNavigate={(target) => setSlug(target === 'profile' ? 'account' : target)} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{renderSection()}</div><footer className="footer">{t('vendorPortal')} <span>•</span> {t('ownedRecordsOnly')}</footer></main></div>;
-}
-
-function CustomerLogin({ onLogin }) {
-  const language = useLanguage();
-  const [email, setEmail] = useState('customer@eventflow.io');
-  const [password, setPassword] = useState('customer123');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function submit(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      await onLogin(email, password);
-    } catch (issue) {
-      setError(issue.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('customerPortal', language)}</p><h1>{translate('customerSignIn', language)}</h1><p className="muted">{translate('discoverManageEvents', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openCustomerDashboard', language)}</button></form></div></main>;
 }
 
 function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
@@ -4466,29 +4471,6 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
   return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('customerDashboard').toUpperCase()} groups={[{ id: 'customer', label: t('bookings'), items: customerMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isCustomer onNavigate={setSlug} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
 }
 
-function OrganizerLogin({ onLogin }) {
-  const language = useLanguage();
-  const [email, setEmail] = useState('organizer@eventflow.io');
-  const [password, setPassword] = useState('organizer123');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function submit(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      await onLogin(email, password);
-    } catch (issue) {
-      setError(issue.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('organizerPortal', language)}</p><h1>{translate('organizerSignIn', language)}</h1><p className="muted">{translate('secureOrganizerAccess', language)}</p>{error && <div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy ? translate('signingIn', language) : translate('openOrganizerDashboard', language)}</button></form></div></main>;
-}
-
 function OrganizerDashboard({ user, onLogout, onUserChange }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
@@ -4558,7 +4540,7 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
     <div className="metric-grid">
       <article className="metric-card"><p>{t('activeEvents')}</p><strong>{summary.totalEvents}</strong><span>{summary.upcomingCount} {t('upcoming')} · {summary.ongoingCount} ongoing</span></article>
       <article className="metric-card"><p>{t('vendorMatches')}</p><strong>{vendors.length}</strong><span>{t('verifiedRanked')}</span></article>
-      <article className="metric-card"><p>{t('budgetAllocated')}</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(totalBudget)}</strong><span>{t('currentPlans')}</span></article>
+      <article className="metric-card"><p>{t('budgetAllocated')}</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(summary.totalBudget)}</strong><span>{t('currentPlans')}</span></article>
       <article className="metric-card"><p>{t('bookingsInMotion')}</p><strong>{activeBookings.length}</strong><span>{bookings.length} {t('totalTracked')}</span></article>
     </div>
     <div className="two-column-layout">
@@ -4595,12 +4577,6 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
   </section>);
 }
 
-function Login({onLogin}) {
-  const language = useLanguage();
-  const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [showPassword,setShowPassword]=useState(false); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
-  async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email,password); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error" role="alert">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><div className="password-input-wrap"><input type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/><button className="password-visibility" type="button" aria-label={translate(showPassword ? 'hidePassword' : 'showPassword', language)} onClick={()=>setShowPassword((visible)=>!visible)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
-}
 function Overview({ onNavigate }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
@@ -6172,7 +6148,7 @@ export default function App(){
     resolve();
     const listener=()=>resolve();
     window.addEventListener('popstate',listener);
-    if (DEMO_AUTH_ENABLED && !window.location.pathname.startsWith('/admin')) {
+    if (DEMO_AUTH_ENABLED && !hasPlatformSessionHint() && !window.location.pathname.startsWith('/admin')) {
       try {
         const demoProfile = readDemoSession();
         if (demoProfile) {
@@ -6195,7 +6171,7 @@ export default function App(){
   },[resolve]);
 
   useEffect(() => {
-    if ((DEMO_AUTH_ENABLED && !currentPath.split('?')[0].startsWith('/admin'))
+    if ((DEMO_AUTH_ENABLED && !hasPlatformSessionHint() && !currentPath.split('?')[0].startsWith('/admin'))
       || authSessionState.status === 'loading') return;
     setChecking(false);
     if (authSessionState.status === 'authenticated') {
@@ -6210,14 +6186,6 @@ export default function App(){
       setPortal('admin');
     }
   }, [authSessionState, currentPath]);
-
-  useEffect(() => {
-    const redirectPath = getAdministratorRouteRedirect(currentPath, user, portal);
-    if (!checking && redirectPath) {
-      window.history.replaceState({}, '', redirectPath);
-      setCurrentPath(redirectPath);
-    }
-  }, [checking, currentPath, user, portal]);
 
   useEffect(() => {
     function handleAuthInvalidated() {
@@ -6235,41 +6203,24 @@ export default function App(){
     if (preferredLanguage === 'en' || preferredLanguage === 'am') setLanguage(preferredLanguage);
   }, [portal, user?.id, user?.preferred_language, user?.role, user?.roles]);
 
-  async function login(email,password){
-    const administrator = await authenticateAdministrator(api, email, password);
-    authSessionLoader.setAuthenticated(administrator, 'admin');
-    setUser(administrator);setPortal('admin');setGlobalError('');setShowLogin(false);navigatePublic('/admin');
-  }
   async function loginPublic(email,password){
-    if (DEMO_AUTH_ENABLED) {
-      const credential = findDemoLogin(email, password);
-      if (!credential || credential.role === 'admin') {
-        throw new Error('Administrator accounts must sign in through /admin/login using the server.');
-      }
-      const demoProfile = saveDemoSession(credential);
-      const demoUser = toDemoUser(demoProfile);
-      authSessionLoader.setAuthenticated(demoUser, demoProfile.role);
-      setUser(demoUser);setPortal(demoProfile.role);setGlobalError('');setShowLogin(false);
-      const continuation = sessionStorage.getItem('eventhub_after_login');
-      if (continuation && (continuation === '/' && ['customer', 'organizer'].includes(demoProfile?.role) || /^\/events\/\d+$/.test(continuation) || continuation === '/vendor-application' && ['customer', 'organizer'].includes(demoProfile?.role))) {
-        sessionStorage.removeItem('eventhub_after_login');
-        navigatePublic(continuation);
-      } else {
-        navigatePublic(dashboardPathForRole(demoProfile.role));
-      }
-      return;
-    }
     const platformUser = await authenticatePlatformUser(api, email, password);
     const role = platformUser.role;
     authSessionLoader.setAuthenticated(platformUser, role);
     setUser(platformUser);setPortal(role);setGlobalError('');setShowLogin(false);
-    const continuation = sessionStorage.getItem('eventhub_after_login');
+    let continuation = null;
+    try {
+      continuation = sessionStorage.getItem('eventhub_after_login');
+      sessionStorage.removeItem('eventhub_after_login');
+    } catch (error) {
+      console.error('Post-login navigation state could not be read:', error);
+    }
     const canContinue = continuation && (
-      ['customer', 'organizer'].includes(role) && continuation === '/'
-      || role === 'customer' && (/^\/events\/\d+$/.test(continuation) || continuation === '/my-bookings' || continuation === '/vendor-application')
+      canRoleAccessPath(role, continuation)
+      || continuation === '/' && ['customer', 'organizer'].includes(role)
+      || role === 'customer' && (/^\/events\/\d+$/.test(continuation) || continuation === '/vendor-application')
       || role === 'organizer' && continuation === '/vendor-application'
     );
-    if (canContinue) sessionStorage.removeItem('eventhub_after_login');
     navigatePublic(canContinue ? continuation : dashboardPathForRole(role));
   }
   function completeRegistration(result) {
@@ -6302,27 +6253,21 @@ export default function App(){
   async function verifyPasswordResetOtp(email,otp){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/verify-reset-otp',{method:'POST',body:JSON.stringify({email,otp})}); }
   async function resetPassword(newPassword){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/reset-password',{method:'POST',body:JSON.stringify({newPassword})}); }
   async function verifyEmail(token){ const response = await api('/platform/verify-email',{method:'POST',body:JSON.stringify({token})}); return response; }
-  async function loginCustomer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'customer') throw new Error('Customer access is required.');authSessionLoader.setAuthenticated(r.data.user, 'customer');setUser(r.data.user);setPortal('customer');setGlobalError('');setShowLogin(false);navigatePublic('/customer/dashboard');}
-  async function loginOrganizer(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'organizer') throw new Error('Organizer access is required.');authSessionLoader.setAuthenticated(r.data.user, 'organizer');setUser(r.data.user);setPortal('organizer');setGlobalError('');setShowLogin(false);navigatePublic('/organizer/dashboard');}
-  async function loginVendor(email,password){const r=await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});if (!r?.data?.user || r.data.user.role !== 'vendor') throw new Error('Vendor access is required.');authSessionLoader.setAuthenticated(r.data.user, 'vendor');setUser(r.data.user);setPortal('vendor');setGlobalError('');setShowLogin(false);navigatePublic('/vendor/dashboard');}
   function navigate(next){const destination=DEMO_AUTH_ENABLED&&next==='account-settings'?'settings':next;const path=adminPathForSlug(destination);history.pushState({},'',path);setSlug(adminSlugFromPath(path)||'overview');setSidebarOpen(false);setGlobalError('');}
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
     if (!window.confirm(translate('confirmLogout', language))) return;
-    const signedInPortal = portal;
     try {
-      if (DEMO_AUTH_ENABLED && portal !== 'admin') clearDemoSession();
-      else if (portal === 'admin') await api('/auth/logout',{method:'POST'});
-      else if (user) await api('/platform/logout',{method:'POST'});
+      if (DEMO_AUTH_ENABLED) clearDemoSession();
+      if (user) await api('/platform/logout',{method:'POST'});
     } catch (issue) {
       setGlobalError(translate('logoutFailed', language));
       if (issue.status === 401) {
         authSessionLoader.setUnauthenticated();
         setUser(null);
         setPortal('admin');
-        const loginPath = signedInPortal === 'admin' ? '/admin/login' : '/login';
-        window.history.replaceState({}, '', loginPath);
-        setCurrentPath(loginPath);
+        window.history.replaceState({}, '', '/login');
+        setCurrentPath('/login');
       }
       return;
     }
@@ -6336,9 +6281,8 @@ export default function App(){
     } catch (issue) {
       console.error('Post-login navigation state could not be cleared:', issue);
     }
-    const loginPath = signedInPortal === 'admin' ? '/admin/login' : '/login';
-    window.history.replaceState({}, '', loginPath);
-    setCurrentPath(loginPath);
+    window.history.replaceState({}, '', '/login');
+    setCurrentPath('/login');
   }
 
   const publicRoutes = {
@@ -6365,22 +6309,30 @@ export default function App(){
   const vendorRoute = routePath.match(/^\/vendors\/(\d+)$/);
   const customerBookingRoute = routePath.match(/^\/customer\/bookings\/(\d+)$/);
   const roleDashboardRoute = /^\/(customer|organizer|vendor)\/dashboard(?:\/|$)/.test(routePath);
-  const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || isAiChatRoute || roleDashboardRoute || Boolean(customerBookingRoute);
+  const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || routePath === '/my-favorites' || isAiChatRoute || roleDashboardRoute || Boolean(customerBookingRoute);
+  if (routePath === '/admin/login') return <Navigate to="/login" replace />;
   if (checking && requiresSession) return <div className="loading full-screen"><img className="loading-brand-symbol" src="/eventhub-symbol.png" alt="EventHub"/><span className="spinner"/>Checking your session…</div>;
   if (requiresSession && !user && ['error', 'rate-limited'].includes(authSessionState.status)) {
     return <SessionRecoveryPage sessionState={authSessionState}/>;
   }
+  if (routePath.startsWith('/admin') && (!user || String(user.role || '').toLowerCase() !== 'admin')) {
+    return <ProtectedRoute user={user} allowedRoles={['admin']} onNavigate={navigatePublic} />;
+  }
+  if (roleDashboardRoute) {
+    const requiredRole = routePath.split('/')[1];
+    if (!user || String(user.role || '').toLowerCase() !== requiredRole) {
+      return <ProtectedRoute user={user} allowedRoles={[requiredRole]} onNavigate={navigatePublic} />;
+    }
+  }
   if (platformAvailability?.maintenanceMode && !(user && portal === 'admin') && routePath !== '/login' && !routePath.startsWith('/admin')) {
-    return <MaintenancePage platformName={platformAvailability.platformName} message={platformAvailability.maintenanceMessage} onAdminSignIn={() => navigatePublic('/admin/login')} />;
+    return <MaintenancePage platformName={platformAvailability.platformName} message={platformAvailability.maintenanceMessage} onAdminSignIn={() => navigatePublic('/login')} />;
   }
   if (customerBookingRoute) {
-    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
-    if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="alert error">Booking details are available to customer accounts.</div></main></PublicPageLayout>;
+    if (!user || user.role !== 'customer') return <ProtectedRoute user={user} allowedRoles={['customer']} onNavigate={navigatePublic} />;
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CustomerBookingDetailsPage bookingId={customerBookingRoute[1]} api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
   if (isAiChatRoute) {
-    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
-    if (user.role === 'admin') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('aiChatUnavailable', language)}</div></main></PublicPageLayout>;
+    if (!user || user.role === 'admin') return <ProtectedRoute user={user} allowedRoles={['customer', 'organizer', 'vendor']} onNavigate={navigatePublic} />;
     if (DEMO_AUTH_ENABLED) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('aiChatDemoUnavailable', language)}</div></main></PublicPageLayout>;
     return <AIChat user={user} currentPath={currentPath} onNavigate={navigatePublic}/>;
   }
@@ -6421,24 +6373,19 @@ export default function App(){
   if (routePath === '/compare') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CompareVendorsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/recently-viewed') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><RecentlyViewedPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/my-favorites' || routePath === '/recommendations') {
-    if (routePath === '/my-favorites' && !user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
-    if (routePath === '/my-favorites' && user?.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('navigationCustomerOnly', language)}</div></main></PublicPageLayout>;
+    if (routePath === '/my-favorites' && user?.role !== 'customer') return <ProtectedRoute user={user} allowedRoles={['customer']} onNavigate={navigatePublic} />;
     const page = routePath === '/my-favorites'
       ? <MyFavoritesPage api={api} onNavigate={navigatePublic} />
       : <RecommendationsPage api={api} onNavigate={navigatePublic} user={user} />;
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}>{page}</PublicPageLayout>;
   }
   if (routePath === '/my-bookings') {
-    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
-    if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="alert error">My Event Bookings is available to customer accounts.</div></main></PublicPageLayout>;
+    if (user?.role !== 'customer') return <ProtectedRoute user={user} allowedRoles={['customer']} onNavigate={navigatePublic} />;
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><MyEventBookingsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
   if(!user){
-    if (routePath === '/admin/login') return <Login onLogin={login}/>;
-    if (roleDashboardRoute) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
-    if (routePath === '/login') return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword/>;
+    if (routePath === '/login') return <LoginPage onLogin={loginPublic} showForgotPassword />;
     if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/>;
-    if (DEMO_AUTH_ENABLED && /^\/(customer|organizer|vendor)\/dashboard$/.test(currentPath)) return <LoginPage onLogin={loginPublic} demoMode />;
     if (routePath === '/forgot-password') return <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />;
     if (routePath === '/verify-reset-otp') return <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />;
     if (routePath === '/reset-password') return <ResetPasswordPage onSubmit={resetPassword} />;

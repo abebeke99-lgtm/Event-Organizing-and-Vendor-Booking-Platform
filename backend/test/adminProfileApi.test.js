@@ -336,7 +336,7 @@ test('password change requires the current password and rotates administrator se
   const tooShortPassword = await adminRequest('/api/admin/profile/password', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ currentPassword: 'CurrentAdminPassword123', newPassword: 'NewAdminPass123' }),
+    body: JSON.stringify({ currentPassword: 'CurrentAdminPassword123', newPassword: '!@#$%^&*()_' }),
   });
   assert.equal(tooShortPassword.status, 400);
 
@@ -349,6 +349,13 @@ test('password change requires the current password and rotates administrator se
     }),
   });
   assert.equal(tooManyBytes.status, 400);
+
+  const tooLongPassword = await adminRequest('/api/admin/profile/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPassword: 'CurrentAdminPassword123', newPassword: '12345678901234567' }),
+  });
+  assert.equal(tooLongPassword.status, 400);
 
   const wrongPassword = await adminRequest('/api/admin/profile/password', {
     method: 'POST',
@@ -367,7 +374,7 @@ test('password change requires the current password and rotates administrator se
   const changed = await adminRequest('/api/admin/profile/password', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ currentPassword: 'CurrentAdminPassword123', newPassword: 'AdminPass1234567' }),
+    body: JSON.stringify({ currentPassword: 'CurrentAdminPassword123', newPassword: '!@#$%^&*()_+' }),
   });
   assert.equal(changed.status, 200);
   const renewedCookie = changed.headers.get('set-cookie');
@@ -376,7 +383,7 @@ test('password change requires the current password and rotates administrator se
   assert.equal(adminSessions.has(hashToken(initialToken)), false);
   const rotatedToken = decodeURIComponent(renewedCookie.match(/admin_session=([^;]+)/)[1]);
   assert.equal(adminSessions.has(hashToken(rotatedToken)), true);
-  assert.equal(await bcrypt.compare('AdminPass1234567', passwordHash), true);
+  assert.equal(await bcrypt.compare('!@#$%^&*()_+', passwordHash), true);
 
   const oldSession = await adminRequest('/api/admin/profile', {}, initialToken);
   assert.equal(oldSession.status, 401);
@@ -393,14 +400,14 @@ test('administrator email changes stay pending until OTP verification and then u
   const unauthenticated = await adminRequest('/api/admin/profile/email-change', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'new@example.test', currentPassword: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: 'new@example.test', currentPassword: '!@#$%^&*()_+' }),
   }, 'invalid-session');
   assert.equal(unauthenticated.status, 401);
 
   const invalidAddress = await adminRequest('/api/admin/profile/email-change', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'invalid', currentPassword: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: 'invalid', currentPassword: '!@#$%^&*()_+' }),
   });
   assert.equal(invalidAddress.status, 400);
 
@@ -414,14 +421,14 @@ test('administrator email changes stay pending until OTP verification and then u
   const duplicate = await adminRequest('/api/admin/profile/email-change', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'taken@example.test', currentPassword: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: 'taken@example.test', currentPassword: '!@#$%^&*()_+' }),
   });
   assert.equal(duplicate.status, 409);
 
   const requested = await adminRequest('/api/admin/profile/email-change', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: ' NEW@example.test ', currentPassword: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: ' NEW@example.test ', currentPassword: '!@#$%^&*()_+' }),
   });
   assert.equal(requested.status, 202);
   assert.doesNotMatch(JSON.stringify(await requested.json()), /123456/);
@@ -451,7 +458,7 @@ test('administrator email changes stay pending until OTP verification and then u
   const newLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'new@example.test', password: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: 'new@example.test', password: '!@#$%^&*()_+' }),
   });
   assert.equal(newLogin.status, 200);
   assert.equal((await newLogin.json()).user.email, 'new@example.test');
@@ -459,7 +466,7 @@ test('administrator email changes stay pending until OTP verification and then u
   const oldLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'admin@example.test', password: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: 'admin@example.test', password: '!@#$%^&*()_+' }),
   });
   assert.equal(oldLogin.status, 401);
   assert.ok(auditRecords.some(({ values }) => values[1] === 'admin.profile_email_changed'));
@@ -468,7 +475,7 @@ test('administrator email changes stay pending until OTP verification and then u
   const undelivered = await adminRequest('/api/admin/profile/email-change', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'undelivered@example.test', currentPassword: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: 'undelivered@example.test', currentPassword: '!@#$%^&*()_+' }),
   });
   assert.equal(undelivered.status, 503);
   assert.equal(emailChangeChallenge, null);
@@ -478,7 +485,7 @@ test('administrator email changes stay pending until OTP verification and then u
   const expiredRequest = await adminRequest('/api/admin/profile/email-change', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'expired@example.test', currentPassword: 'AdminPass1234567' }),
+    body: JSON.stringify({ email: 'expired@example.test', currentPassword: '!@#$%^&*()_+' }),
   });
   assert.equal(expiredRequest.status, 202);
   emailChangeChallenge.expired = true;

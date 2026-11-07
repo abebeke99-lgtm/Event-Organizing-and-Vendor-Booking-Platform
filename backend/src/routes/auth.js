@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
-import { createSession, hashToken, writeAudit } from '../lib/security.js';
+import { hashToken, writeAudit } from '../lib/security.js';
 import { isStrongPassword } from '../lib/authFlow.js';
 import { getPasswordResetEmailConfig, getSmtpDiagnostic, sendPasswordResetOtpEmail } from '../lib/passwordResetEmail.js';
 import {
@@ -14,6 +14,7 @@ import {
 } from '../lib/passwordResetOtp.js';
 import { optionalAdmin, requireAdmin } from '../middleware/requireAdmin.js';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
+import { platformLoginHandler, platformLoginLimiter } from './platform.js';
 
 const cookieOptions = () => {
   return {
@@ -39,17 +40,11 @@ const verifyOtpSchema = emailSchema.extend({
   otp: z.string().regex(/^[0-9]{6}$/),
 }).strict();
 const resetPasswordSchema = z.object({
-  newPassword: z.string().min(12).max(72).refine((password) => Array.from(password).length >= 12
-    && Buffer.byteLength(password, 'utf8') <= 72
-    && /[A-Z]/.test(password)
-    && /[a-z]/.test(password)
-    && /\d/.test(password)),
+  newPassword: z.string().min(1).max(256),
 }).strict();
-const isStrongAdminPassword = (password) => Array.from(password).length >= 16
-  && Buffer.byteLength(password, 'utf8') <= 72
-  && /[A-Z]/.test(password)
-  && /[a-z]/.test(password)
-  && /\d/.test(password);
+const isStrongAdminPassword = (password) => Array.from(password).length >= 12
+  && Array.from(password).length <= 16
+  && Buffer.byteLength(password, 'utf8') <= 72;
 
 export function createAuthRouter({
   database = pool,
@@ -66,11 +61,6 @@ export function createAuthRouter({
     limit: 60,
     skipSuccessfulRequests: true,
     message: 'Too many session checks. Please try again later.',
-  });
-  const adminLoginLimiter = createAuthRateLimiter({
-    windowMs: 15 * 60 * 1000,
-    limit: 10,
-    message: 'Too many administrator sign-in attempts. Please try again later.',
   });
   const requestOtpLimiter = createAuthRateLimiter({
     windowMs: 15 * 60 * 1000,
@@ -300,50 +290,22 @@ export function createAuthRouter({
     }
   }));
 
-  router.post('/login', adminLoginLimiter, async (req, res, next) => {
-    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!email || !password || email.length > 254 || password.length > 256) {
-      return res.status(400).json({ error: 'Email and password are required.' });
-    }
-    try {
-      const [rows] = await database.execute(
-        `SELECT u.id, u.full_name, u.email, u.preferred_language, u.password_hash, u.status,
-           MAX(r.is_admin = TRUE) AS has_admin_role,
-           MAX(r.is_admin = TRUE AND r.is_active = TRUE) AS has_active_admin_role
-         FROM users u
-         LEFT JOIN user_roles ur ON ur.user_id = u.id
-         LEFT JOIN roles r ON r.id = ur.role_id
-         WHERE LOWER(u.email) = ?
-         GROUP BY u.id, u.full_name, u.email, u.preferred_language, u.password_hash, u.status
-         LIMIT 1`,
-        [email]
-      );
-      const user = rows[0];
-      if (!user) return res.status(401).json({ error: 'Invalid administrator credentials.' });
-      if (!Number(user.has_admin_role)) {
-        return res.status(403).json({ error: 'This account is not authorized for administrator access.' });
-      }
-      if (user.status !== 'active' || !Number(user.has_active_admin_role)) {
-        return res.status(403).json({ error: 'This administrator account or role is inactive.' });
-      }
-      if (!await bcrypt.compare(password, user.password_hash)) {
-        return res.status(401).json({ error: 'Invalid administrator credentials.' });
-      }
-      const session = await createSession(user.id, database);
-      res.cookie('admin_session', session.token, { ...cookieOptions(), expires: session.expiresAt });
-      await writeAudit(database, { actorId: user.id, action: 'auth.login', entityType: 'session', ip: req.ip });
-      res.json({ user: { id: user.id, full_name: user.full_name, email: user.email, preferred_language: user.preferred_language } });
-    } catch (error) { next(error); }
-  });
+  router.post('/login', platformLoginLimiter, platformLoginHandler);
 
   router.post('/logout', async (req, res, next) => {
-    const token = req.cookies?.admin_session;
+    const adminToken = req.cookies?.admin_session;
+    const platformToken = req.cookies?.platform_session;
     res.clearCookie('admin_session', { ...cookieOptions(), maxAge: undefined });
+    res.clearCookie('platform_session', { ...cookieOptions(), maxAge: undefined });
     try {
-      if (token) {
-        const [sessions] = await database.execute('SELECT user_id FROM admin_sessions WHERE token_hash = ?', [hashToken(token)]);
-        await database.execute('DELETE FROM admin_sessions WHERE token_hash = ?', [hashToken(token)]);
+      if (adminToken) {
+        const [sessions] = await database.execute('SELECT user_id FROM admin_sessions WHERE token_hash = ?', [hashToken(adminToken)]);
+        await database.execute('DELETE FROM admin_sessions WHERE token_hash = ?', [hashToken(adminToken)]);
+        if (sessions.length) await writeAudit(database, { actorId: sessions[0].user_id, action: 'auth.logout', entityType: 'session', ip: req.ip });
+      }
+      if (platformToken) {
+        const [sessions] = await database.execute('SELECT user_id FROM user_sessions WHERE token_hash = ?', [hashToken(platformToken)]);
+        await database.execute('DELETE FROM user_sessions WHERE token_hash = ?', [hashToken(platformToken)]);
         if (sessions.length) await writeAudit(database, { actorId: sessions[0].user_id, action: 'auth.logout', entityType: 'session', ip: req.ip });
       }
       res.status(204).end();

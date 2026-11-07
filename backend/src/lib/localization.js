@@ -360,6 +360,7 @@ const messages = {
     'Provide at least one service field to update.': 'ለማዘመን ቢያንስ አንድ የአገልግሎት መስክ ያቅርቡ።',
     'Provide your current password and a 12–16 character new password with uppercase, lowercase, and a number.': 'የአሁኑን የይለፍ ቃል እና አቢይ፣ ንዑስ ፊደል እና ቁጥር የያዘ ከ12–16 ቁምፊዎች ያሉት አዲስ የይለፍ ቃል ያስገቡ።',
     'Provide your current password and a 12–16 character new password with uppercase, lowercase, and number.': 'የአሁኑን የይለፍ ቃል እና አቢይ፣ ንዑስ ፊደል እና ቁጥር የያዘ ከ12–16 ቁምፊዎች ያሉት አዲስ የይለፍ ቃል ያስገቡ።',
+    'Provide your current password and a new password with at least 16 characters, including uppercase, lowercase, and a number (maximum 72 UTF-8 bytes).': 'የአሁኑን የይለፍ ቃል እና ቢያንስ 16 ቁምፊዎች ያሉት፣ አቢይ ሆሄ፣ ንዑስ ሆሄ እና ቁጥር የያዘ አዲስ የይለፍ ቃል ያስገቡ (ከ72 የUTF-8 ባይቶች ከፍ ሳይል)።',
     'Provide your current password and a new password with 12–16 characters, including uppercase, lowercase, and a number.': 'የአሁኑን የይለፍ ቃል እና አቢይ፣ ንዑስ ፊደል እና ቁጥር የያዘ ከ12–16 ቁምፊዎች ያሉት አዲስ የይለፍ ቃል ያስገቡ።',
     'Provider webhook verification failed.': 'የአቅራቢው webhook ማረጋገጫ አልተሳካም።',
     'Provider webhook verification is temporarily unavailable.': 'የአቅራቢው webhook ማረጋገጫ ለጊዜው አይገኝም።',

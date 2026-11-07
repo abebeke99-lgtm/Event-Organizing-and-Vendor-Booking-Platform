@@ -32,6 +32,7 @@
 .customer-comparison-table thead th { color: var(--ink, #17233a); }
 .customer-comparison-remove { display: inline-grid; width: 24px; height: 24px; margin-left: 6px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted, #667085); cursor: pointer; }
 .customer-catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+.customer-catalog-empty { grid-template-columns: minmax(0, 1fr); }
 .customer-catalog-card { display: grid; align-content: start; gap: 12px; padding: 13px; overflow: hidden; border-radius: 13px; box-shadow: 0 5px 18px rgba(21, 48, 79, .045); }
 .customer-catalog-card > img, .customer-vendor-image, .customer-vendor-image-empty { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 9px; }
 .customer-vendor-image-empty { display: grid; align-content: center; justify-items: center; gap: 8px; background: linear-gradient(135deg, #eff5fb, #e5eef8); color: #7691ac; font-size: 10px; }
@@ -66,8 +67,8 @@
 .customer-featured-badge, .customer-availability-badge { display: inline-flex; align-items: center; gap: 4px; color: #8a620f; font-size: 10px; font-weight: 650; }
 .customer-availability-badge { color: #148566; }
 .customer-portfolio-count { color: var(--muted, #667085); }
-.customer-vendor-empty { display: grid; justify-items: center; gap: 12px; }
-.customer-vendor-empty .empty { width: 100%; }
+.customer-vendor-empty { display: flex; grid-column: 1 / -1; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 12px 0; }
+.customer-vendor-empty .empty { width: auto; padding: 0; border: 0; background: transparent; box-shadow: none; }
 .customer-catalog-list { grid-template-columns: minmax(0, 1fr); }
 .customer-catalog-list .customer-catalog-card { grid-template-columns: minmax(160px, .7fr) minmax(0, 2fr); align-items: start; }
 .customer-catalog-list .customer-catalog-card > .customer-catalog-card-content, .customer-catalog-list .customer-catalog-actions { grid-column: 2; }

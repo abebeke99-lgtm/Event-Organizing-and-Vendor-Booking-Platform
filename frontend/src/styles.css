@@ -94,15 +94,13 @@ html,body{overflow-x:clip}
 .auth-form-options{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:-2px}
 .remember-option{display:inline-flex;align-items:center;gap:8px;color:#334155;font-size:12px;font-weight:500}
 .remember-option input{width:16px;height:16px;accent-color:#20639b}
-.auth-forgot-row{display:flex;justify-content:flex-end;margin-top:-8px}
+.auth-forgot-row{display:flex;justify-content:flex-end;margin-top:0}
 .auth-forgot-link{color:#20639b;font-size:12px;font-weight:600}
 .login-account-links{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:18px}
 .login-account-links.single-link{justify-content:flex-end}
 .login-account-links .text-link{color:#20639b;font-size:12px;font-weight:600;text-align:left;text-decoration:none}
 .login-account-links .text-link:hover{color:#184d7a;text-decoration:underline}
 .login-account-links .text-link:focus-visible{outline:3px solid rgba(32,99,155,.18);outline-offset:3px;border-radius:3px}
-.login-card .auth-language-row.auth-language-visible{display:flex;justify-content:flex-end;margin-bottom:16px}
-.login-card .auth-language-row .language-picker select{min-height:40px}
 .login-card .auth-brand-logo{width:min(170px,100%);height:92px}
 .registration-card form{display:grid;gap:16px}
 .registration-card .field{display:grid;gap:8px;min-width:0}
@@ -150,7 +148,6 @@ html,body{overflow-x:clip}
 @media(max-width:480px){.reset-card{padding:32px 22px;border-radius:24px}}
 @media(max-width:480px){.login-wrap{padding:16px}.login-card{padding:24px 18px;border-radius:24px}.login-card .auth-brand-logo{width:min(150px,100%);height:78px}.auth-form-options{align-items:flex-start;flex-direction:column}.demo-credential-header{flex-direction:column;align-items:flex-start}.demo-credential-actions{justify-content:flex-start}}
 @media(max-width:380px){.login-account-links{gap:8px}.login-account-links .text-link{font-size:11px}.demo-credentials{padding:14px}.demo-credential{padding:9px 10px}}
-.auth-language-row{display:none}
 .events-discovery-hero{display:grid;gap:12px;padding:22px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(125deg,var(--card),var(--surface))}
 .events-discovery-hero .section-header{align-items:center;margin:0}
 .events-discovery-hero h1{margin:0;color:var(--ink);font:800 clamp(26px,4vw,38px) Manrope,sans-serif}
@@ -402,6 +399,42 @@ html,body{overflow-x:clip}
 @media(max-width:950px){.dashboard-chart-grid{grid-template-columns:1fr}.dashboard-recent-grid{grid-template-columns:1fr}}
 @media(max-width:760px){.dashboard-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-booking-row{grid-template-columns:minmax(0,1fr) auto}.dashboard-filter-heading{align-items:flex-start}}
 @media(max-width:480px){.dashboard-metrics{grid-template-columns:1fr}.dashboard-filter-heading{flex-direction:column}.dashboard-presets{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.dashboard-custom-range .field,.dashboard-custom-range .button{width:100%}.dashboard-chart-card,.dashboard-sales,.dashboard-recent{padding:15px}.status-chart{gap:12px;flex-direction:column}.status-legend{width:100%}.dashboard-booking-row{grid-template-columns:1fr}.dashboard-booking-row>strong,.dashboard-booking-row>.pill{justify-self:start}}
+
+.auth-layout{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:100vh;min-height:100svh;width:100%;overflow-x:hidden;background:#f8fafc}
+.auth-layout-panel{position:relative;isolation:isolate;min-width:0;min-height:100vh;min-height:100svh;overflow:hidden;background:linear-gradient(135deg,#24629a 0%,#1b3f66 72%,#f28c28 150%)}
+.auth-layout-photo{position:absolute;z-index:-2;inset:0;width:100%;height:100%;object-fit:cover;object-position:center}
+.auth-layout-panel::before{position:absolute;z-index:-1;inset:0;background:linear-gradient(135deg,rgba(18,50,79,.62),rgba(17,45,73,.48));content:""}
+.auth-panel-logo{position:absolute;top:32px;left:36px;z-index:1;display:grid;place-items:center;width:168px;height:68px;padding:8px 13px;border-radius:14px;background:rgba(255,255,255,.96);box-shadow:0 10px 24px rgba(8,28,47,.15)}
+.auth-panel-logo img{display:block;width:100%;height:100%;object-fit:contain}
+.auth-panel-copy{position:absolute;top:50%;left:12%;z-index:1;max-width:510px;transform:translateY(-42%);color:#fff;animation:authCopyFade .8s ease-out both}
+.auth-panel-copy h2{margin:0 0 14px;font-size:clamp(34px,4vw,54px);font-weight:800;letter-spacing:-.045em;line-height:1.08}
+.auth-panel-copy p{max-width:430px;margin:0;color:rgba(255,255,255,.92);font-size:17px;line-height:1.65}
+.auth-layout-content{display:flex;align-items:center;justify-content:center;min-width:0;padding:32px}
+.auth-layout .login-card{max-width:440px;margin:0}
+.registration-login-link{display:flex;align-items:center;justify-content:center;gap:7px;margin-top:18px;color:#334155;font-size:14px;line-height:1.4}
+.registration-login-link button{padding:0;border:0;background:transparent;color:#24629a;font:inherit;font-weight:700;cursor:pointer}
+.registration-login-link button:hover{text-decoration:underline}
+.registration-login-link button:focus-visible{outline:3px solid rgba(36,98,154,.2);outline-offset:3px;border-radius:2px}
+.registration-card .field-error{display:block;margin:0;color:#b42318;font-size:12px;line-height:1.45}
+.registration-card input[aria-invalid="true"]{border-color:#d92d20}
+@keyframes authCopyFade{from{opacity:0;transform:translateY(calc(-42% + 12px))}to{opacity:1;transform:translateY(-42%)}}
+@media(max-width:899px){
+  .auth-layout{display:flex;align-items:center;justify-content:center;padding:24px 16px}
+  .auth-layout-panel{position:fixed;inset:0;min-height:100vh;min-height:100svh}
+  .auth-layout-panel::before{background:rgba(255,255,255,.85)}
+  .auth-panel-logo{top:20px;left:20px;width:144px;height:58px}
+  .auth-panel-copy{display:none}
+  .auth-layout-content{position:relative;z-index:1;width:min(440px,100%);padding:0}
+  .auth-layout .login-card{max-width:440px}
+}
+@media(max-width:480px){
+  .auth-layout{padding:18px 12px}
+  .auth-layout-panel::before{background:rgba(255,255,255,.87)}
+  .auth-panel-logo{top:14px;left:14px;width:126px;height:52px;padding:6px 10px}
+  .auth-layout .login-card{padding:24px 18px;border-radius:24px}
+  .registration-login-link{gap:6px;flex-wrap:wrap;font-size:13px}
+}
+@media(prefers-reduced-motion:reduce){.auth-panel-copy{animation:none}}
 
 :root{--nav:#112b45;--accent:#1769aa;--accent-dark:#10598f;--secondary:#17466c}
 .brand-mark{background:linear-gradient(145deg,#55a9e8,#1769aa);box-shadow:0 6px 17px #1769aa55}

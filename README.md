@@ -290,7 +290,7 @@ The predefined demo credentials are mock-only and are not valid for production o
 | Organizer | `organizer@demo.eventhub` | `Organizer12Ab` |
 | Vendor | `vendor@demo.eventhub` | `VendorDemo12` |
 
-Create the initial administrator only after database migrations have run. Set `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_NAME`, and `ADMIN_BOOTSTRAP_PASSWORD` privately in `backend/.env` or the backend process environment, then run `npm run bootstrap:admin` from the repository root. The password must be at least 16 characters and no more than 72 UTF-8 bytes. Provisioning hashes it with bcrypt and refuses an email that already exists without modifying that account. Never publish the environment values.
+Create the initial administrator only after database migrations have run. Set `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_NAME`, and `ADMIN_BOOTSTRAP_PASSWORD` privately in `backend/.env` or the backend process environment, then run `npm run bootstrap:admin` from the repository root. The password must be 12–16 characters; any characters are allowed. Provisioning hashes it with bcrypt and refuses an email that already exists without modifying that account. Never publish the environment values.
 
 ## 11. Acceptance Criteria Covered
 

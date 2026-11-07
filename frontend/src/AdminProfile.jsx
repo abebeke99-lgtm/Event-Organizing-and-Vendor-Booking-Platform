@@ -393,19 +393,19 @@ export default function AdminProfile({ user, onUserChange }) {
                   <label className="field">
                     <span>New password</span>
                     <span className="admin-profile-password-input">
-                      <input required type={visiblePasswords.new ? 'text' : 'password'} autoComplete="new-password" minLength={16} maxLength={72} value={password.newPassword} onChange={(event) => setPassword((current) => ({ ...current, newPassword: event.target.value }))}/>
+                      <input required type={visiblePasswords.new ? 'text' : 'password'} autoComplete="new-password" minLength={12} maxLength={16} value={password.newPassword} onChange={(event) => setPassword((current) => ({ ...current, newPassword: event.target.value }))}/>
                       {passwordVisibilityControl('new')}
                     </span>
                   </label>
                   <label className="field">
                     <span>Confirm new password</span>
                     <span className="admin-profile-password-input">
-                      <input required type={visiblePasswords.confirm ? 'text' : 'password'} autoComplete="new-password" minLength={16} maxLength={72} value={password.confirmPassword} onChange={(event) => setPassword((current) => ({ ...current, confirmPassword: event.target.value }))}/>
+                      <input required type={visiblePasswords.confirm ? 'text' : 'password'} autoComplete="new-password" minLength={12} maxLength={16} value={password.confirmPassword} onChange={(event) => setPassword((current) => ({ ...current, confirmPassword: event.target.value }))}/>
                       {passwordVisibilityControl('confirm')}
                     </span>
                   </label>
                 </div>
-                <p className="admin-profile-hint">{translateText('Use at least 16 characters, with uppercase and lowercase letters and at least one number. The maximum is 72 UTF-8 bytes.')}</p>
+                <p className="admin-profile-hint">{translateText('Use 12 to 16 characters. Any characters are allowed.')}</p>
                 <button className="button" type="submit" disabled={changingPassword}>{changingPassword ? 'Updating…' : 'Update password'}</button>
               </form>
             </section>

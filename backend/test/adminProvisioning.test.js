@@ -36,7 +36,7 @@ function createDatabase({ existing = [], roles = [{ id: 7 }], duplicateInsert = 
 const credentials = {
   email: '  ADMIN@example.test ',
   name: '  Initial Administrator ',
-  password: 'synthetic-provisioning-password',
+  password: 'abcdefghijkl',
 };
 
 test('initial admin provisioning stores only a bcrypt hash and links the active Admin role transactionally', async () => {
@@ -100,7 +100,7 @@ test('provisioning requires an active administrator role and valid secret config
   const invalidPassword = createDatabase();
   await assert.rejects(
     provisionAdministrator(invalidPassword.database, { ...credentials, password: 'short' }),
-    (error) => error instanceof AdministratorProvisioningError && /at least 16 characters/.test(error.message),
+    (error) => error instanceof AdministratorProvisioningError && /between 12 and 16 characters/.test(error.message),
   );
   assert.equal(invalidPassword.transaction.started, false);
 });
@@ -125,14 +125,27 @@ test('bootstrap configuration requires all variables and validates email and pas
       ADMIN_BOOTSTRAP_NAME: 'Initial Administrator',
       ADMIN_BOOTSTRAP_PASSWORD: 'too-short',
     }),
-    { name: 'AdministratorProvisioningError', message: /at least 16 characters/ },
+    { name: 'AdministratorProvisioningError', message: /between 12 and 16 characters/ },
   );
   assert.throws(
     () => getAdministratorBootstrapConfig({
       ADMIN_BOOTSTRAP_EMAIL: 'admin@example.test',
       ADMIN_BOOTSTRAP_NAME: 'Initial Administrator',
-      ADMIN_BOOTSTRAP_PASSWORD: '😀'.repeat(8),
+      ADMIN_BOOTSTRAP_PASSWORD: '😀'.repeat(17),
     }),
-    { name: 'AdministratorProvisioningError', message: /at least 16 characters/ },
+    { name: 'AdministratorProvisioningError', message: /between 12 and 16 characters/ },
+  );
+  assert.equal(getAdministratorBootstrapConfig({
+    ADMIN_BOOTSTRAP_EMAIL: 'admin@example.test',
+    ADMIN_BOOTSTRAP_NAME: 'Initial Administrator',
+    ADMIN_BOOTSTRAP_PASSWORD: '!@#$%^&*()_+',
+  }).password, '!@#$%^&*()_+');
+  assert.throws(
+    () => getAdministratorBootstrapConfig({
+      ADMIN_BOOTSTRAP_EMAIL: 'admin@example.test',
+      ADMIN_BOOTSTRAP_NAME: 'Initial Administrator',
+      ADMIN_BOOTSTRAP_PASSWORD: '12345678901234567',
+    }),
+    { name: 'AdministratorProvisioningError', message: /between 12 and 16 characters/ },
   );
 });

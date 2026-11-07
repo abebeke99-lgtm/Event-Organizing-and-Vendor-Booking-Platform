@@ -84,7 +84,7 @@ function CalendarGrid({ availability, bookings, onSetDate, onRemoveDate, busy })
   </>;
 }
 
-export default function VendorWorkspace({ view, data, api, user, onRefresh }) {
+export default function VendorWorkspace({ view, data, api, user, onNavigate, onRefresh }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');

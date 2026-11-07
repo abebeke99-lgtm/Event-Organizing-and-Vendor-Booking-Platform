@@ -147,22 +147,6 @@ function createHarness({ emailConfigured = true, emailSender = async () => {}, r
     },
   });
 
-  test('administrator password resets enforce the 16-character policy', async () => {
-    const harness = createHarness({ role: 'admin' });
-    await withServer(harness, async (baseUrl, state) => {
-      await requestOtp(baseUrl);
-      await waitForEmailCount(state, 1);
-      const verification = await post(baseUrl, 'verify-reset-otp', { email: state.user.email, otp: state.sentEmail.otp });
-      const resetCookie = verification.headers.get('set-cookie').split(';', 1)[0];
-      const rejected = await post(baseUrl, 'reset-password', { newPassword: strongPassword }, { Cookie: resetCookie });
-      assert.equal(rejected.status, 400);
-      assert.equal(state.userSessionsDeleted, 0);
-
-      const accepted = await post(baseUrl, 'reset-password', { newPassword: 'StrongAdminPass123' }, { Cookie: resetCookie });
-      assert.equal(accepted.status, 200);
-      assert.equal(await bcrypt.compare('StrongAdminPass123', state.user.password_hash), true);
-    });
-  });
   return { app, state };
 }
 
@@ -197,6 +181,27 @@ async function waitForEmailCount(state, count) {
 async function requestOtp(baseUrl, email = 'ada@example.test') {
   return post(baseUrl, 'forgot-password/otp', { email });
 }
+
+test('administrator password resets enforce the 12-to-16-character policy and allow any characters', async () => {
+  const harness = createHarness({ role: 'admin' });
+  await withServer(harness, async (baseUrl, state) => {
+    await requestOtp(baseUrl);
+    await waitForEmailCount(state, 1);
+    const verification = await post(baseUrl, 'verify-reset-otp', { email: state.user.email, otp: state.sentEmail.otp });
+    const resetCookie = verification.headers.get('set-cookie').split(';', 1)[0];
+    const rejected = await post(baseUrl, 'reset-password', { newPassword: 'short' }, { Cookie: resetCookie });
+    assert.equal(rejected.status, 400);
+    assert.equal(state.userSessionsDeleted, 0);
+
+    const tooLong = await post(baseUrl, 'reset-password', { newPassword: '12345678901234567' }, { Cookie: resetCookie });
+    assert.equal(tooLong.status, 400);
+    assert.equal(state.userSessionsDeleted, 0);
+
+    const accepted = await post(baseUrl, 'reset-password', { newPassword: '!@#$%^&*()_+' }, { Cookie: resetCookie });
+    assert.equal(accepted.status, 200);
+    assert.equal(await bcrypt.compare('!@#$%^&*()_+', state.user.password_hash), true);
+  });
+});
 
 test('OTP requests use generic responses and send mail only for registered accounts', async () => {
   const harness = createHarness();

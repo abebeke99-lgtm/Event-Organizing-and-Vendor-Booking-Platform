@@ -9,6 +9,7 @@
     "db:init": "node scripts/db-init.js",
     "db:check": "node scripts/check-db.js",
     "smtp:check": "node scripts/check-smtp.js",
+    "seed:users": "node scripts/seed-users.js",
     "seed:vendor-menu": "node scripts/seed-vendor-menu.js",
     "bootstrap:admin": "node scripts/bootstrap-admin.js",
     "test": "node --test"

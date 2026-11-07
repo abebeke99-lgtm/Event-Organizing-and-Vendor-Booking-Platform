@@ -14,6 +14,7 @@
     "build": "npm --workspace frontend run build",
     "test": "npm --workspace backend test && npm --workspace frontend test",
     "migrate": "npm --workspace backend run migrate",
+    "seed:users": "npm --workspace backend run seed:users",
     "db:init": "npm --workspace backend run db:init",
     "bootstrap:admin": "npm --workspace backend run bootstrap:admin",
     "db:check": "npm --workspace backend run db:check",

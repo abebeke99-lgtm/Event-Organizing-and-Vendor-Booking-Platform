@@ -84,7 +84,7 @@ async function notifyBookingParties(database, booking, actorId, status, reason =
     }
   }
 }
-const emailSchema = z.string().trim().email().max(254);
+const emailSchema = z.string().trim().email().max(254).transform((email) => email.toLowerCase());
 const sessionCheckLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 60,
@@ -96,7 +96,7 @@ const registrationLimiter = createAuthRateLimiter({
   limit: 5,
   message: 'Too many registration attempts. Please try again later.',
 });
-const platformLoginLimiter = createAuthRateLimiter({
+export const platformLoginLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 10,
   message: 'Too many sign-in attempts. Please try again later.',
@@ -2242,7 +2242,7 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
   });
 }));
 
-router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
+export const platformLoginHandler = asyncHandler(async (req, res) => {
   const schema = z.object({
     email: emailSchema,
     password: z.string().min(1).max(128),
@@ -2252,36 +2252,50 @@ router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
 
   const database = databaseFor(req);
   const [rows] = await database.execute(
-    `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.password_hash, u.status,
-            LOWER(r.name) AS role
+    `SELECT u.id, u.full_name, u.email, u.password_hash, u.status,
+            LOWER(r.name) AS role, r.is_admin, r.is_active AS role_is_active
      FROM users u
      JOIN user_roles ur ON ur.user_id = u.id
      JOIN roles r ON r.id = ur.role_id
-     WHERE u.email = ? AND r.is_admin = FALSE AND r.is_active = TRUE
-       AND NOT EXISTS (
-         SELECT 1 FROM user_roles admin_ur
-         JOIN roles admin_role ON admin_role.id = admin_ur.role_id
-         WHERE admin_ur.user_id = u.id AND admin_role.is_admin = TRUE
-       )
-     ORDER BY CASE LOWER(r.name) WHEN 'customer' THEN 1 WHEN 'organizer' THEN 2 WHEN 'vendor' THEN 3 ELSE 4 END
+     WHERE LOWER(u.email) = ?
+     ORDER BY r.is_active DESC,
+       CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN 1
+            WHEN LOWER(r.name) = 'organizer' THEN 2
+            WHEN LOWER(r.name) = 'vendor' THEN 3
+            WHEN LOWER(r.name) = 'customer' THEN 4 ELSE 5 END
      LIMIT 1`,
-    [parsed.data.email.toLowerCase()]
+    [parsed.data.email]
   );
   const user = rows[0];
-  if (!user || user.status !== 'active' || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
+  if (!user || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password.' });
+  }
+  if (user.status !== 'active') {
+    const message = user.status === 'pending'
+      ? 'This account is pending verification. Complete account verification before signing in.'
+      : 'This account is inactive. Contact support for assistance.';
+    return res.status(403).json({ error: message });
+  }
+  if (!Number(user.role_is_active)) {
+    return res.status(403).json({ error: 'This account role is inactive. Contact support for assistance.' });
+  }
+  const role = Number(user.is_admin) || ['admin', 'administrator'].includes(user.role)
+    ? 'admin'
+    : user.role;
+  if (!['admin', 'organizer', 'vendor', 'customer'].includes(role)) {
+    return res.status(403).json({ error: 'This account role is not permitted to sign in.' });
   }
 
   await database.execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
   const token = await inDatabaseTransaction(database, async (connection) => {
     const session = await createUserSession(connection, user.id);
-    if (user.role === 'vendor') await ensureVendorProfileRecord(user.id, user.full_name, connection);
+    if (role === 'vendor') await ensureVendorProfileRecord(user.id, user.full_name, connection);
     await writeAudit(connection, {
       actorId: user.id,
       action: 'auth.login',
       entityType: 'user',
       entityId: user.id,
-      details: { role: user.role },
+      details: { role },
       ip: req.ip,
     });
     return session.token;
@@ -2289,18 +2303,16 @@ router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
 
   setPlatformCookie(res, token);
   return res.json({
-    data: {
-      user: {
-        id: user.id,
-        name: user.full_name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        preferred_language: user.preferred_language,
-      },
+    user: {
+      id: user.id,
+      name: user.full_name,
+      email: user.email,
+      role,
     },
   });
-}));
+});
+
+router.post('/login', platformLoginLimiter, platformLoginHandler);
 
 router.post('/logout', async (req, res) => {
   const token = req.cookies?.platform_session;

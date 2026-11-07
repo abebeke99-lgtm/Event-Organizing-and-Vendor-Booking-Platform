@@ -23,9 +23,10 @@ export function getAdministratorBootstrapConfig(environment = process.env) {
   if (!name || name.length > 160) {
     throw new AdministratorProvisioningError('ADMIN_BOOTSTRAP_NAME must be between 1 and 160 characters.');
   }
-  if (Array.from(password).length < 16 || Buffer.byteLength(password, 'utf8') > 72) {
+  const passwordLength = Array.from(password).length;
+  if (passwordLength < 12 || passwordLength > 16 || Buffer.byteLength(password, 'utf8') > 72) {
     throw new AdministratorProvisioningError(
-      'ADMIN_BOOTSTRAP_PASSWORD must be at least 16 characters and no more than 72 UTF-8 bytes.',
+      'ADMIN_BOOTSTRAP_PASSWORD must be between 12 and 16 characters and no more than 72 UTF-8 bytes.',
     );
   }
   return { email, name, password };
