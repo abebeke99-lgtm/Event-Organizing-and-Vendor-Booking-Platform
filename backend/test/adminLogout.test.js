@@ -70,7 +70,7 @@ test('administrator logout invalidates the server session, clears its cookie, an
   assert.match(clearedCookie, /admin_session=/);
   assert.match(clearedCookie, /Path=\//i);
   assert.match(clearedCookie, /HttpOnly/i);
-  assert.match(clearedCookie, /SameSite=Strict/i);
+  assert.match(clearedCookie, /SameSite=Lax/i);
   assert.equal(sessions.has(hashToken(sessionToken)), false);
   assert.ok(auditActions.includes('auth.logout'));
 

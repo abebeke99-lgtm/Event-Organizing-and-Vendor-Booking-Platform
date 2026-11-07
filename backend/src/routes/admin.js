@@ -15,6 +15,7 @@ import {
   ROLE_PERMISSION_MATRIX,
 } from '../lib/rbac.js';
 import { createSession, hashToken, writeAudit } from '../lib/security.js';
+import { getCookieOptions } from '../lib/cookieOptions.js';
 import { createNotification } from '../lib/notificationService.js';
 import {
   checkBookingDateAvailability,
@@ -1280,13 +1281,7 @@ router.post('/profile/password', asyncHandler(async (req, res) => {
     if (error.status) return res.status(error.status).json({ error: error.message });
     throw error;
   }
-  res.cookie('admin_session', newSession.token, {
-    httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
-    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
-    path: '/',
-    expires: newSession.expiresAt,
-  });
+  res.cookie('admin_session', newSession.token, getCookieOptions({ expires: newSession.expiresAt }));
   res.json({ message: 'Password changed. Other account sessions have been signed out.' });
 }));
 

@@ -1,51 +1,64 @@
 import { getDatabaseConfigurationErrors } from './databaseConfig.js';
 
 const requiredVariables = [
-  'DB_HOST',
-  'DB_PORT',
-  'DB_NAME',
-  'DB_USER',
-  'DB_PASSWORD',
   'WEB_ORIGIN',
   'COOKIE_SECURE',
   'COOKIE_SAME_SITE',
   'NODE_ENV',
 ];
 
+function isValidOriginList(value, isProduction) {
+  const origins = value.split(',').map((origin) => origin.trim());
+  if (!origins.length || origins.some((origin) => !origin || origin === '*')) return false;
+  return origins.every((origin) => {
+    try {
+      const parsed = new URL(origin);
+      return parsed.origin === origin
+        && (!isProduction || parsed.protocol === 'https:');
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function getStartupConfigurationErrors(environment = process.env) {
-  const errors = new Set(
-    requiredVariables.filter((name) => !environment[name]?.trim()),
-  );
-  for (const error of getDatabaseConfigurationErrors(environment)) {
-    errors.add(error.split(/[ (]/)[0].split('=')[0]);
+  const errors = [...getDatabaseConfigurationErrors(environment)];
+  for (const name of requiredVariables) {
+    if (!environment[name]?.trim()) {
+      const suggestion = name === 'WEB_ORIGIN'
+        ? 'set exact frontend origins, comma-separated'
+        : name === 'COOKIE_SECURE'
+          ? 'set to true in production or false locally'
+          : name === 'COOKIE_SAME_SITE'
+            ? 'set to none in production or lax locally'
+            : 'set to production, development, or test';
+      errors.push(`${name} (${suggestion})`);
+    }
   }
 
   if (environment.COOKIE_SECURE && !['true', 'false'].includes(environment.COOKIE_SECURE)) {
-    errors.add('COOKIE_SECURE');
+    errors.push('COOKIE_SECURE (set to true or false)');
   }
   if (environment.COOKIE_SAME_SITE && !['strict', 'lax', 'none'].includes(environment.COOKIE_SAME_SITE)) {
-    errors.add('COOKIE_SAME_SITE');
+    errors.push('COOKIE_SAME_SITE (set to strict, lax, or none)');
+  }
+  if (environment.COOKIE_SAME_SITE === 'none' && environment.COOKIE_SECURE !== 'true') {
+    errors.push('COOKIE_SECURE (set to true when COOKIE_SAME_SITE is none)');
   }
   if (environment.NODE_ENV && !['development', 'test', 'production'].includes(environment.NODE_ENV)) {
-    errors.add('NODE_ENV');
+    errors.push('NODE_ENV (set to production, development, or test)');
   }
-  if (environment.WEB_ORIGIN) {
-    const origins = environment.WEB_ORIGIN.split(',').map((origin) => origin.trim());
-    if (origins.some((origin) => {
-      try {
-        const parsed = new URL(origin);
-        return parsed.origin !== origin
-          || (environment.NODE_ENV === 'production' && parsed.protocol !== 'https:');
-      } catch {
-        return true;
-      }
-    })) errors.add('WEB_ORIGIN');
+  if (environment.WEB_ORIGIN && !isValidOriginList(environment.WEB_ORIGIN, environment.NODE_ENV === 'production')) {
+    errors.push('WEB_ORIGIN (set exact origins; production origins must use HTTPS)');
   }
   if (environment.NODE_ENV === 'production') {
-    if (environment.COOKIE_SECURE !== 'true') errors.add('COOKIE_SECURE');
-    if (environment.COOKIE_SAME_SITE !== 'none') errors.add('COOKIE_SAME_SITE');
-    if (!environment.WEB_ORIGIN?.trim()) errors.add('WEB_ORIGIN');
+    if (environment.COOKIE_SECURE !== 'true') {
+      errors.push('COOKIE_SECURE (set to true in production)');
+    }
+    if (environment.COOKIE_SAME_SITE !== 'none') {
+      errors.push('COOKIE_SAME_SITE (set to none in production)');
+    }
   }
 
-  return [...errors];
+  return [...new Set(errors)];
 }

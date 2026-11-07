@@ -10,7 +10,7 @@ function resolveApiBaseUrl() {
     if (viteEnvironment.PROD) {
       throw new Error('VITE_API_URL must be configured to the deployed API origin or its /api base path.');
     }
-    return '/api';
+    return 'http://127.0.0.1:4000/api';
   }
 
   const parsedUrl = new URL(configuredUrl);

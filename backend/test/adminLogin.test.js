@@ -142,7 +142,7 @@ test('one platform login endpoint authenticates all four roles with a shared Htt
     assert.equal(body.user.role, role);
     assert.equal(Object.hasOwn(body.user, 'password_hash'), false);
     assert.match(cookie, /HttpOnly/i);
-    assert.match(cookie, /SameSite=Strict/i);
+    assert.match(cookie, /SameSite=Lax/i);
     assert.ok(token);
     assert.ok(sessions.has(hashToken(decodeURIComponent(token))));
     if (role === 'customer') customerSessionToken = token;

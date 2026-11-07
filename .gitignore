@@ -6,5 +6,8 @@ dist/
 coverage/
 *.log
 *.bak
+backend/uploads/secrets/
+uploads/secrets/
+*.key
 
 personalportofolio/

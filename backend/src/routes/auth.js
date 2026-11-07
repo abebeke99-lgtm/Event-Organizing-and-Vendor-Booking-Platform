@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { hashToken, writeAudit } from '../lib/security.js';
+import { getCookieOptions } from '../lib/cookieOptions.js';
 import { isStrongPassword } from '../lib/authFlow.js';
 import { getPasswordResetEmailConfig, getSmtpDiagnostic, sendPasswordResetOtpEmail } from '../lib/passwordResetEmail.js';
 import {
@@ -18,10 +19,7 @@ import { platformLoginHandler, platformLoginLimiter } from './platform.js';
 
 const cookieOptions = () => {
   return {
-    httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
-    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
-    path: '/',
+    ...getCookieOptions(),
     maxAge: 8 * 60 * 60 * 1000,
   };
 };
@@ -230,12 +228,7 @@ export function createAuthRouter({
       const reset = tokens[0];
       if (!reset) {
         await connection.rollback();
-        res.clearCookie(resetCookieName, {
-          httpOnly: true,
-          secure: process.env.COOKIE_SECURE === 'true',
-          sameSite: process.env.COOKIE_SAME_SITE || 'strict',
-          path: '/api/auth',
-        });
+        res.clearCookie(resetCookieName, getCookieOptions({ path: '/api/auth' }));
         return res.status(400).json({ error: resetAuthorizationMessage });
       }
 
@@ -275,12 +268,7 @@ export function createAuthRouter({
         ip: req.ip,
       });
       await connection.commit();
-      res.clearCookie(resetCookieName, {
-        httpOnly: true,
-        secure: process.env.COOKIE_SECURE === 'true',
-        sameSite: process.env.COOKIE_SAME_SITE || 'strict',
-        path: '/api/auth',
-      });
+      res.clearCookie(resetCookieName, getCookieOptions({ path: '/api/auth' }));
       return res.json({ success: true, message: 'Password reset successful.' });
     } catch (error) {
       await connection.rollback();

@@ -1,6 +1,7 @@
 import { pool } from '../db.js';
 import { getRolePermissionPolicy, isCriticalPermission } from '../lib/rbac.js';
 import { hashToken } from '../lib/security.js';
+import { getCookieOptions } from '../lib/cookieOptions.js';
 
 async function loadPlatformUser(req, { includeAdmins = false } = {}) {
   const database = req.app?.locals?.database || pool;
@@ -36,12 +37,7 @@ async function loadPlatformUser(req, { includeAdmins = false } = {}) {
 }
 
 function clearPlatformCookie(res) {
-  res.clearCookie('platform_session', {
-    httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
-    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
-    path: '/',
-  });
+  res.clearCookie('platform_session', getCookieOptions());
 }
 
 export async function requirePlatformUser(req, res, next) {

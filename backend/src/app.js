@@ -13,7 +13,7 @@ import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { requirePlatformRole } from './middleware/requirePlatformUser.js';
 import { getSystemLockState } from './lib/rbac.js';
-import { formatDatabaseError, getDatabaseFailureCode, pool, verifyDatabaseConnection } from './db.js';
+import { formatDatabaseError, pool } from './db.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { requirePlatformAvailable } from './middleware/rbac.js';
 import { loadSystemSettings, updateSystemSettingsCache } from './lib/systemSettings.js';
@@ -31,7 +31,6 @@ import { createAiChatRouter } from './routes/aiChat.js';
 
 export function createApp({
   database = pool,
-  expectedDatabase = process.env.DB_NAME,
   emailConfigured,
   emailSender,
   emailChangeEmailConfigured,
@@ -70,28 +69,12 @@ export function createApp({
     emailSender: notificationEmailSender,
   };
   app.locals.paymentProvider = paymentProvider;
-  const isProduction = process.env.NODE_ENV === 'production';
-  const localOrigins = isProduction
-    ? []
-    : ['http://127.0.0.1:5173', 'http://localhost:5173'];
   const configuredOrigins = (process.env.WEB_ORIGIN || '')
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
-  if (process.env.CLIENT_URL?.trim()) configuredOrigins.push(process.env.CLIENT_URL.trim());
-  const allowedOrigins = new Set([...localOrigins, ...configuredOrigins]);
-  const isAllowedOrigin = (requestOrigin) => {
-    if (!requestOrigin || allowedOrigins.has(requestOrigin)) return true;
-    if (isProduction) return false;
-
-    try {
-      const origin = new URL(requestOrigin);
-      return origin.protocol === 'http:'
-        && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname);
-    } catch {
-      return false;
-    }
-  };
+  const allowedOrigins = new Set(configuredOrigins);
+  const isAllowedOrigin = (requestOrigin) => !requestOrigin || allowedOrigins.has(requestOrigin);
   app.locals.systemSettings = {
     platform_status: process.env.PLATFORM_STATUS || 'open',
     maintenance_mode: process.env.MAINTENANCE_MODE === 'true',
@@ -125,19 +108,14 @@ export function createApp({
     commit: process.env.RENDER_GIT_COMMIT || process.env.GIT_COMMIT || 'unknown',
     environment: process.env.NODE_ENV || 'development',
   }));
-  app.get('/api/health', asyncHandler(async (req, res) => {
+  app.get('/api/health', asyncHandler(async (_req, res) => {
     try {
-      await verifyDatabaseConnection(database, expectedDatabase);
+      await database.query('SELECT 1');
+      return res.json({ ok: true, db: true });
     } catch (error) {
-      const databaseError = formatDatabaseError(error);
-      console.error('Database health check failed:', databaseError);
-      return res.status(503).json({
-        ok: false,
-        status: 'unavailable',
-        reasonCode: getDatabaseFailureCode(error),
-      });
+      console.error('Database health check failed:', formatDatabaseError(error));
+      return res.json({ ok: true, db: false });
     }
-    res.json({ ok: true, status: 'ok', db: 'connected' });
   }));
   app.get('/api/platform/availability', asyncHandler(async (req, res) => {
     const settings = await loadSystemSettings(database);

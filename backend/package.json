@@ -14,6 +14,9 @@
     "bootstrap:admin": "node scripts/bootstrap-admin.js",
     "test": "node --test"
   },
+  "engines": {
+    "node": "20.x"
+  },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",

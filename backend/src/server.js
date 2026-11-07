@@ -25,20 +25,16 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     import('./app.js'),
     import('./lib/paymentProvider.js'),
   ]);
+  let databaseConnected = false;
   try {
     await verifyDatabaseConnection();
+    databaseConnected = true;
   } catch (error) {
-    console.error('MySQL connection failed:', formatDatabaseError(error));
-    try {
-      await pool.end();
-    } catch (closeError) {
-      console.error('Failed to close the MySQL pool:', formatDatabaseError(closeError));
-    }
-    process.exitCode = 1;
+    console.warn('MySQL is temporarily unavailable; the API will start and report db:false at /api/health:', formatDatabaseError(error));
   }
 
   if (!process.exitCode) {
-    console.log('MySQL connected.');
+    if (databaseConnected) console.log('MySQL connected.');
     const paymentProvider = await loadPaymentProvider();
     const app = createApp({ paymentProvider });
     const server = app.listen(PORT, HOST, () => {

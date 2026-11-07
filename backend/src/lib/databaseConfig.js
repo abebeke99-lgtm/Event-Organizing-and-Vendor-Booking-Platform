@@ -1,7 +1,18 @@
 import { X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-function resolveCertificateAuthority(value) {
+function decodeCertificateAuthority(environment) {
+  const base64 = environment.DB_SSL_CA_BASE64?.trim();
+  if (base64) {
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) return null;
+    try {
+      return Buffer.from(base64, 'base64').toString('utf8').trim();
+    } catch {
+      return null;
+    }
+  }
+
+  const value = environment.DB_SSL_CA?.trim();
   if (!value) return null;
   const normalized = value.replace(/\\n/g, '\n').trim();
   if (normalized.includes('-----BEGIN CERTIFICATE-----')) return normalized;
@@ -24,24 +35,68 @@ function isCertificateAuthorityPem(value) {
   }
 }
 
+function parseDatabaseUrl(value) {
+  try {
+    const url = new URL(value);
+    if (!['mysql:', 'mysql2:'].includes(url.protocol)) return null;
+    const database = decodeURIComponent(url.pathname.replace(/^\/+/, ''));
+    const host = url.hostname;
+    const user = decodeURIComponent(url.username);
+    const password = decodeURIComponent(url.password);
+    const port = Number(url.port || 3306);
+    if (!host || !database || !user || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return { host, port, database, user, password };
+  } catch {
+    return null;
+  }
+}
+
+function getDatabaseCredentials(environment) {
+  const databaseUrl = environment.DATABASE_URL?.trim();
+  if (databaseUrl) return parseDatabaseUrl(databaseUrl);
+  return {
+    host: environment.DB_HOST?.trim(),
+    port: Number(environment.DB_PORT || 3306),
+    database: environment.DB_NAME?.trim(),
+    user: environment.DB_USER?.trim(),
+    password: environment.DB_PASSWORD,
+  };
+}
+
 export function getDatabaseConfigurationErrors(
   environment = process.env,
   { requireTls = environment.NODE_ENV === 'production' } = {},
 ) {
-  const missing = ['DB_HOST', 'DB_PORT', 'DB_NAME', 'DB_USER', 'DB_PASSWORD']
-    .filter((name) => !environment[name]?.trim());
-  const port = Number(environment.DB_PORT);
-  if (environment.DB_PORT && (!Number.isInteger(port) || port < 1 || port > 65535)) {
-    missing.push('DB_PORT (must be a valid TCP port)');
+  const errors = [];
+  const databaseUrl = environment.DATABASE_URL?.trim();
+  if (databaseUrl) {
+    if (!parseDatabaseUrl(databaseUrl)) errors.push('DATABASE_URL (set a valid mysql://user:password@host:port/database URL)');
+  } else {
+    for (const [name, value] of [
+      ['DB_HOST', environment.DB_HOST],
+      ['DB_PORT', environment.DB_PORT],
+      ['DB_NAME', environment.DB_NAME],
+      ['DB_USER', environment.DB_USER],
+      ['DB_PASSWORD', environment.DB_PASSWORD],
+    ]) {
+      if (!value?.trim()) errors.push(`${name} (or set DATABASE_URL)`);
+    }
+    const port = Number(environment.DB_PORT);
+    if (environment.DB_PORT && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      errors.push('DB_PORT (or set DATABASE_URL to a valid port)');
+    }
   }
-  if (requireTls && environment.DB_SSL !== 'true') {
-    missing.push('DB_SSL=true');
+
+  if (requireTls && environment.DB_SSL !== 'true') errors.push('DB_SSL (set to true in production)');
+  if (environment.DB_SSL && !['true', 'false'].includes(environment.DB_SSL)) {
+    errors.push('DB_SSL (set to true or false)');
   }
   if ((requireTls || environment.DB_SSL === 'true')
-    && !isCertificateAuthorityPem(resolveCertificateAuthority(environment.DB_SSL_CA))) {
-    missing.push('DB_SSL_CA (valid PEM certificate required)');
+    && (environment.DB_SSL_CA?.trim() || environment.DB_SSL_CA_BASE64?.trim())
+    && !isCertificateAuthorityPem(decodeCertificateAuthority(environment))) {
+    errors.push('DB_SSL_CA or DB_SSL_CA_BASE64 (set a valid PEM certificate)');
   }
-  return missing;
+  return errors;
 }
 
 export function validateDatabaseEnvironment(environment = process.env) {
@@ -52,18 +107,16 @@ export function validateDatabaseEnvironment(environment = process.env) {
 }
 
 export function createDatabaseConfig(environment = process.env) {
-  const sslEnabled = environment.DB_SSL === 'true';
-  const certificateAuthority = resolveCertificateAuthority(environment.DB_SSL_CA);
-  if (sslEnabled && !isCertificateAuthorityPem(certificateAuthority)) {
-    throw new Error('DB_SSL_CA must contain a PEM-encoded certificate when DB_SSL=true.');
+  const errors = getDatabaseConfigurationErrors(environment);
+  if (errors.length) {
+    throw new Error(`Database configuration is incomplete or invalid: ${errors.join(', ')}.`);
   }
 
+  const credentials = getDatabaseCredentials(environment);
+  const sslEnabled = environment.DB_SSL === 'true';
+  const certificateAuthority = decodeCertificateAuthority(environment);
   return {
-    host: environment.DB_HOST,
-    port: Number(environment.DB_PORT || 3306),
-    database: environment.DB_NAME,
-    user: environment.DB_USER,
-    password: environment.DB_PASSWORD,
+    ...credentials,
     waitForConnections: true,
     connectionLimit: 10,
     connectTimeout: 10000,
@@ -72,7 +125,7 @@ export function createDatabaseConfig(environment = process.env) {
     ...(sslEnabled ? {
       ssl: {
         rejectUnauthorized: true,
-        ca: certificateAuthority,
+        ...(certificateAuthority ? { ca: certificateAuthority } : {}),
       },
     } : {}),
   };

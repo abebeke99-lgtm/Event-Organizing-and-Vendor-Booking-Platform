@@ -14,36 +14,23 @@ import {
   verifyDatabaseConnection,
 } from '../src/db.js';
 import { getStartupConfigurationErrors } from '../src/lib/startupConfig.js';
+import { getCookieOptions } from '../src/lib/cookieOptions.js';
+
+const databaseCredentials = {
+  DB_HOST: 'mysql.example.test',
+  DB_PORT: '11713',
+  DB_NAME: 'defaultdb',
+  DB_USER: 'test-user',
+  DB_PASSWORD: 'test-only',
+};
 
 test('database TLS verifies certificates and normalizes escaped CA newlines', () => {
   const certificateAuthority = rootCertificates[0];
   const config = createDatabaseConfig({
-    DB_HOST: 'mysql.example.test',
-    DB_PORT: '11713',
-    DB_NAME: 'defaultdb',
-    DB_USER: 'avnadmin',
-    DB_PASSWORD: 'test-only',
+    ...databaseCredentials,
     DB_SSL: 'true',
     DB_SSL_CA: certificateAuthority.replace(/\n/g, '\\n'),
   });
-
-  test('database TLS loads and verifies CA certificates from a file path', () => {
-    const certificateAuthority = rootCertificates[0];
-    const directory = mkdtempSync(join(tmpdir(), 'event-platform-ca-'));
-    const certificatePath = join(directory, 'ca.pem');
-    try {
-      writeFileSync(certificatePath, certificateAuthority);
-      const config = createDatabaseConfig({
-        DB_SSL: 'true',
-        DB_SSL_CA: certificatePath,
-      });
-      assert.equal(config.ssl.ca, certificateAuthority.trim());
-      assert.equal(config.ssl.rejectUnauthorized, true);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
   assert.equal(config.host, 'mysql.example.test');
   assert.equal(config.port, 11713);
   assert.deepEqual(config.ssl, {
@@ -52,40 +39,86 @@ test('database TLS verifies certificates and normalizes escaped CA newlines', ()
   });
 });
 
-test('database TLS requires a valid CA certificate when enabled', () => {
-  assert.throws(
-    () => createDatabaseConfig({ DB_SSL: 'true', DB_SSL_CA: '' }),
-    { message: 'DB_SSL_CA must contain a PEM-encoded certificate when DB_SSL=true.' },
-  );
+test('database TLS loads and verifies CA certificates from a file path', () => {
+  const certificateAuthority = rootCertificates[0];
+  const directory = mkdtempSync(join(tmpdir(), 'event-platform-ca-'));
+  const certificatePath = join(directory, 'ca.pem');
+  try {
+    writeFileSync(certificatePath, certificateAuthority);
+    const config = createDatabaseConfig({
+      ...databaseCredentials,
+      DB_SSL: 'true',
+      DB_SSL_CA: certificatePath,
+    });
+    assert.equal(config.ssl.ca, certificateAuthority.trim());
+    assert.equal(config.ssl.rejectUnauthorized, true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('database TLS uses system certificate authorities when no custom CA is supplied', () => {
+  const config = createDatabaseConfig({ ...databaseCredentials, DB_SSL: 'true' });
+  assert.deepEqual(config.ssl, { rejectUnauthorized: true });
+});
+
+test('database TLS rejects an invalid custom CA certificate', () => {
   assert.throws(
     () => createDatabaseConfig({
+      ...databaseCredentials,
       DB_SSL: 'true',
       DB_SSL_CA: '-----BEGIN CERTIFICATE-----invalid-----END CERTIFICATE-----',
     }),
-    { message: 'DB_SSL_CA must contain a PEM-encoded certificate when DB_SSL=true.' },
+    /DB_SSL_CA or DB_SSL_CA_BASE64/,
   );
 });
 
-test('production database configuration requires credentials, TLS, a valid port, and a CA', () => {
-  assert.deepEqual(getDatabaseConfigurationErrors({}, { requireTls: true }), [
+test('production database configuration requires credentials and TLS but not a custom CA', () => {
+  assert.deepEqual(getDatabaseConfigurationErrors({}, { requireTls: true })
+    .map((error) => error.split(/[ (]/)[0]), [
     'DB_HOST',
     'DB_PORT',
     'DB_NAME',
     'DB_USER',
     'DB_PASSWORD',
-    'DB_SSL=true',
-    'DB_SSL_CA (valid PEM certificate required)',
+    'DB_SSL',
   ]);
 });
 
+test('DATABASE_URL supplies the MySQL connection credentials', () => {
+  const config = createDatabaseConfig({
+    DATABASE_URL: 'mysql://db-user:pass%40word@mysql.example.test:3307/events',
+    DB_SSL: 'true',
+  });
+  assert.equal(config.host, 'mysql.example.test');
+  assert.equal(config.port, 3307);
+  assert.equal(config.database, 'events');
+  assert.equal(config.user, 'db-user');
+  assert.equal(config.password, 'pass@word');
+  assert.deepEqual(config.ssl, { rejectUnauthorized: true });
+});
+
+test('database TLS accepts a base64-encoded custom CA', () => {
+  const certificateAuthority = rootCertificates[0];
+  const config = createDatabaseConfig({
+    ...databaseCredentials,
+    DB_SSL: 'true',
+    DB_SSL_CA_BASE64: Buffer.from(certificateAuthority).toString('base64'),
+  });
+  assert.equal(config.ssl.ca, certificateAuthority.trim());
+});
+
 test('database TLS is omitted when SSL is disabled for local development', () => {
-  const config = createDatabaseConfig({ DB_SSL: 'false' });
+  const config = createDatabaseConfig({
+    ...databaseCredentials,
+    DB_SSL: 'false',
+  });
 
   assert.equal('ssl' in config, false);
 });
 
 test('database pool has a bounded connection timeout', () => {
-  const config = createDatabaseConfig({});
+  const config = createDatabaseConfig(databaseCredentials);
 
   assert.equal(config.connectTimeout, 10000);
 });
@@ -152,7 +185,8 @@ test('database failure diagnostics map to safe reason codes', () => {
 });
 
 test('startup configuration validation reports missing environment variable names only', () => {
-  assert.deepEqual(getStartupConfigurationErrors({}), [
+  assert.deepEqual(getStartupConfigurationErrors({})
+    .map((error) => error.split(/[ (]/)[0]), [
     'DB_HOST',
     'DB_PORT',
     'DB_NAME',
@@ -179,25 +213,68 @@ test('production startup requires HTTPS origin and cross-site secure cookies', (
     COOKIE_SAME_SITE: 'lax',
     NODE_ENV: 'production',
   };
-  assert.deepEqual(getStartupConfigurationErrors(configuration), [
+  assert.deepEqual(getStartupConfigurationErrors(configuration)
+    .map((error) => error.split(/[ (]/)[0]), [
     'WEB_ORIGIN',
     'COOKIE_SECURE',
     'COOKIE_SAME_SITE',
   ]);
 });
 
+test('SameSite none is rejected unless Secure cookies are enabled', () => {
+  const errors = getStartupConfigurationErrors({
+    ...databaseCredentials,
+    DB_SSL: 'true',
+    WEB_ORIGIN: 'https://infobekele.netlify.app',
+    COOKIE_SECURE: 'false',
+    COOKIE_SAME_SITE: 'none',
+    NODE_ENV: 'test',
+  });
+  assert.ok(errors.includes('COOKIE_SECURE (set to true when COOKIE_SAME_SITE is none)'));
+});
+
+test('cookie options use Secure and SameSite=None in production and insecure Lax locally', () => {
+  const prior = {
+    NODE_ENV: process.env.NODE_ENV,
+    COOKIE_SECURE: process.env.COOKIE_SECURE,
+    COOKIE_SAME_SITE: process.env.COOKIE_SAME_SITE,
+  };
+  try {
+    process.env.NODE_ENV = 'production';
+    process.env.COOKIE_SECURE = 'true';
+    process.env.COOKIE_SAME_SITE = 'none';
+    assert.deepEqual(getCookieOptions(), {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'none',
+      path: '/',
+    });
+
+    process.env.NODE_ENV = 'development';
+    process.env.COOKIE_SECURE = 'false';
+    process.env.COOKIE_SAME_SITE = 'strict';
+    assert.deepEqual(getCookieOptions(), {
+      httpOnly: true,
+      secure: false,
+      sameSite: 'lax',
+      path: '/',
+    });
+  } finally {
+    for (const [name, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
 let healthQueryCount = 0;
 const app = createApp({
-  expectedDatabase: 'defaultdb',
   database: {
     async execute() {
       return [[], []];
     },
     async query(sql) {
       healthQueryCount += 1;
-      if (sql === 'SELECT DATABASE() AS database_name') {
-        return [[{ database_name: 'defaultdb' }], []];
-      }
       assert.equal(sql, 'SELECT 1');
       return [[], []];
     },
@@ -280,7 +357,7 @@ test('configured Netlify origin is allowed to make credentialed API requests', a
   }
 });
 
-test('local Vite origins on alternate ports are allowed in development', async () => {
+test('only explicitly configured local Vite origins are allowed in development', async () => {
   const previousOrigin = process.env.WEB_ORIGIN;
   const previousEnvironment = process.env.NODE_ENV;
   process.env.WEB_ORIGIN = 'http://127.0.0.1:5173';
@@ -299,8 +376,7 @@ test('local Vite origins on alternate ports are allowed in development', async (
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get('access-control-allow-origin'), 'http://127.0.0.1:5174');
-    assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
   } finally {
     await new Promise((resolve, reject) => {
       corsServer.close((error) => error ? reject(error) : resolve());
@@ -355,42 +431,11 @@ test('database health route remains available and checks database connectivity',
   const response = await fetch(`${baseUrl}/api/health`);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true, status: 'ok', db: 'connected' });
-  assert.equal(healthQueryCount, 2);
+  assert.deepEqual(await response.json(), { ok: true, db: true });
+  assert.equal(healthQueryCount, 1);
 });
 
-test('database health route reports unavailable when DB_NAME does not match the selected database', async () => {
-  const mismatchedApp = createApp({
-    expectedDatabase: 'defaultdb',
-    database: {
-      async query(sql) {
-        if (sql === 'SELECT DATABASE() AS database_name') {
-          return [[{ database_name: 'unexpected' }], []];
-        }
-        return [[], []];
-      },
-    },
-  });
-  const mismatchedServer = mismatchedApp.listen(0, '127.0.0.1');
-  await once(mismatchedServer, 'listening');
-
-  try {
-    const response = await fetch(`http://127.0.0.1:${mismatchedServer.address().port}/api/health`);
-    assert.equal(response.status, 503);
-    assert.deepEqual(await response.json(), {
-      ok: false,
-      status: 'unavailable',
-      reasonCode: 'DB_NAME_MISMATCH',
-    });
-  } finally {
-    await new Promise((resolve, reject) => {
-      mismatchedServer.close((error) => error ? reject(error) : resolve());
-      mismatchedServer.closeAllConnections();
-    });
-  }
-});
-
-test('database health route reports unavailable when the database query fails', async () => {
+test('database health route remains successful and reports db false when the query fails', async () => {
   const unavailableApp = createApp({
     database: {
       async query() {
@@ -417,10 +462,8 @@ test('database health route reports unavailable when the database query fails', 
       console.error = originalConsoleError;
     }
 
-    assert.equal(response.status, 503);
-    assert.equal(body.ok, false);
-    assert.equal(body.status, 'unavailable');
-    assert.equal(body.reasonCode, 'DB_CONNECT_FAILED');
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, { ok: true, db: false });
     assert.equal(Object.hasOwn(body, 'error'), false);
     assert.doesNotMatch(JSON.stringify(body), /health-test-secret/);
     assert.doesNotMatch(loggedErrors.join(' '), /health-test-secret/);

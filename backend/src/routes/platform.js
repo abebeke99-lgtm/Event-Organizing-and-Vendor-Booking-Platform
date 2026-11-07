@@ -8,6 +8,7 @@ import { optionalPlatformUser, requirePlatformUser } from '../middleware/require
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { getProfilePhoto, profilePhotoUploadParser, removeProfilePhoto, saveProfilePhoto } from '../lib/profilePhoto.js';
 import { createUserSession, hashToken, writeAudit } from '../lib/security.js';
+import { getCookieOptions } from '../lib/cookieOptions.js';
 import { createNotification, notifyAdministrators } from '../lib/notificationService.js';
 import {
   MAX_VENDOR_VERIFICATION_DOCUMENT_BYTES,
@@ -109,13 +110,9 @@ const passwordRecoveryLimiter = createAuthRateLimiter({
 });
 
 function setPlatformCookie(res, token) {
-  res.cookie('platform_session', token, {
-    httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
-    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
+  res.cookie('platform_session', token, getCookieOptions({
     maxAge: 8 * 60 * 60 * 1000,
-    path: '/',
-  });
+  }));
 }
 
 const bookingSelect = `
@@ -2267,7 +2264,7 @@ router.post('/login', platformLoginLimiter, platformLoginHandler);
 router.post('/logout', async (req, res) => {
   const token = req.cookies?.platform_session;
   if (token) await pool.execute('DELETE FROM user_sessions WHERE token_hash = ?', [hashToken(token)]);
-  res.clearCookie('platform_session', { path: '/' });
+  res.clearCookie('platform_session', getCookieOptions());
   return res.status(204).end();
 });
 

@@ -1,23 +1,14 @@
 import { pool } from '../db.js';
 import { ROLE_PERMISSION_MATRIX } from '../lib/rbac.js';
 import { hashToken } from '../lib/security.js';
+import { getCookieOptions } from '../lib/cookieOptions.js';
 
 function clearAdminCookie(res) {
-  res.clearCookie('admin_session', {
-    httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
-    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
-    path: '/',
-  });
+  res.clearCookie('admin_session', getCookieOptions());
 }
 
 function clearPlatformCookie(res) {
-  res.clearCookie('platform_session', {
-    httpOnly: true,
-    secure: process.env.COOKIE_SECURE === 'true',
-    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
-    path: '/',
-  });
+  res.clearCookie('platform_session', getCookieOptions());
 }
 
 async function findAdministrator(req) {
