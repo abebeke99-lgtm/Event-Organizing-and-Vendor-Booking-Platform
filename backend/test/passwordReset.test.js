@@ -103,6 +103,9 @@ function createHarness({ emailConfigured = true, emailSender = async () => {}, r
               && challenge.resetTokenExpiresAt > Date.now();
             return [valid ? [{ user_id: challenge.userId }] : [], []];
           }
+          if (statement.includes('SELECT MAX(r.is_admin = TRUE) AS has_admin_role')) {
+            return [[{ has_admin_role: state.user.role === 'admin' ? 1 : 0 }], []];
+          }
           if (statement.startsWith('UPDATE users SET password_hash')) {
             if (state.user.id !== values[1]) return [{ affectedRows: 0 }, []];
             state.user.password_hash = values[0];
@@ -142,6 +145,23 @@ function createHarness({ emailConfigured = true, emailSender = async () => {}, r
       state.sentEmail = message;
       return emailSender(message);
     },
+  });
+
+  test('administrator password resets enforce the 16-character policy', async () => {
+    const harness = createHarness({ role: 'admin' });
+    await withServer(harness, async (baseUrl, state) => {
+      await requestOtp(baseUrl);
+      await waitForEmailCount(state, 1);
+      const verification = await post(baseUrl, 'verify-reset-otp', { email: state.user.email, otp: state.sentEmail.otp });
+      const resetCookie = verification.headers.get('set-cookie').split(';', 1)[0];
+      const rejected = await post(baseUrl, 'reset-password', { newPassword: strongPassword }, { Cookie: resetCookie });
+      assert.equal(rejected.status, 400);
+      assert.equal(state.userSessionsDeleted, 0);
+
+      const accepted = await post(baseUrl, 'reset-password', { newPassword: 'StrongAdminPass123' }, { Cookie: resetCookie });
+      assert.equal(accepted.status, 200);
+      assert.equal(await bcrypt.compare('StrongAdminPass123', state.user.password_hash), true);
+    });
   });
   return { app, state };
 }

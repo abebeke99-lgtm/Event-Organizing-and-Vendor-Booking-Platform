@@ -175,6 +175,18 @@ test('customer vendor directory requires authentication and validates verificati
   assert.equal(invalidFilter.status, 400);
 });
 
+test('customer vendor directory validates and applies date-specific availability', async () => {
+  const response = await request('/api/customer/vendors?availableDate=2026-11-18&availableOnly=true&sort=popular');
+
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.data.map((vendor) => vendor.id), [12, 10]);
+  assert.ok(database.statements.some(({ sql, values }) => sql.includes('va.available_date = DATE(?)') && values[0] === '2026-11-18'));
+
+  const invalidDate = await request('/api/customer/vendors?availableDate=2026-02-31');
+  assert.equal(invalidDate.status, 400);
+});
+
 test('customer marketplace filters and sorts services with pagination metadata', async () => {
   const response = await request('/api/customer/services?search=catering&minPrice=15000&sort=price-low&page=1&limit=1');
 
@@ -204,6 +216,18 @@ test('customer marketplace filters services to vendors with future availability'
   assert.equal(response.status, 200);
   const result = await response.json();
   assert.deepEqual(result.data.map((service) => service.id), [102, 100]);
+});
+
+test('service search combines location, category, actual review counts, and verified date availability', async () => {
+  const response = await request('/api/customer/services?category=Catering&location=Addis&minReviews=10&sort=most-reviewed&availableDate=2026-11-18&limit=10');
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.deepEqual(result.data.map((service) => service.id), [102, 100]);
+  assert.ok(result.data.every((service) => service.available));
+  assert.ok(database.statements.some(({ sql, values }) => sql.includes('va.available_date = DATE(?)') && values[0] === '2026-11-18'));
+
+  const invalidRange = await request('/api/customer/services?minReviews=10&maxReviews=2');
+  assert.equal(invalidRange.status, 400);
 });
 
 test('customer catalog rejects malformed query parameters', async () => {

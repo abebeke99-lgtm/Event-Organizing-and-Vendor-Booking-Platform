@@ -1,7 +1,7 @@
 import express, { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { getPasswordResetEmailConfig, sendPasswordResetOtpEmail } from '../lib/passwordResetEmail.js';
+import { getPasswordResetEmailConfig, getSmtpDiagnostic, sendPasswordResetOtpEmail } from '../lib/passwordResetEmail.js';
 import { createPasswordResetOtp, hashPasswordResetOtp, verifyPasswordResetOtp } from '../lib/passwordResetOtp.js';
 import { sendAdminEmailChangeOtpEmail, sendAdminEmailChangeNotice } from '../lib/emailChangeEmail.js';
 import { pool, inTransaction } from '../db.js';
@@ -25,7 +25,6 @@ import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/das
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
-import { isStrongPassword } from '../lib/authFlow.js';
 import { ensureVendorProfile } from '../lib/marketplace.js';
 import {
   getProfilePhoto,
@@ -63,6 +62,14 @@ const adminEmailChangeRateLimit = createAuthRateLimiter({
   limit: 10,
   message: 'Too many email verification attempts. Try again later.',
 });
+const adminPasswordSchema = z.string()
+  .min(16)
+  .max(72)
+  .refine((password) => Array.from(password).length >= 16
+    && Buffer.byteLength(password, 'utf8') <= 72
+    && /[A-Z]/.test(password)
+    && /[a-z]/.test(password)
+    && /\d/.test(password));
 const categoryFieldsSchema = z.object({
   name: z.string().trim()
     .min(3, 'Category name must be at least 3 characters.')
@@ -1093,7 +1100,7 @@ router.post('/profile/email-change', adminEmailChangeRateLimit, asyncHandler(asy
       otp,
     });
   } catch (error) {
-    console.error('Email change verification delivery failed.', error?.code || error?.name || 'EMAIL_DELIVERY_FAILED');
+    console.error('Email change verification delivery failed.', getSmtpDiagnostic(error));
     try {
       await database.execute(
         'DELETE FROM admin_email_change_otp_challenges WHERE id = ? AND otp_hash = ?',
@@ -1186,7 +1193,7 @@ router.post('/profile/email-change/verify', adminEmailChangeRateLimit, asyncHand
       .then(() => (services.noticeSender || sendAdminEmailChangeNotice)({
         email: verification.previousEmail,
       }))
-      .catch((error) => console.error('Previous email change notice delivery failed.', error?.code || error?.name || 'EMAIL_DELIVERY_FAILED'));
+      .catch((error) => console.error('Previous email change notice delivery failed.', getSmtpDiagnostic(error)));
   });
 
   res.json({ data: { email: verification.email } });
@@ -1235,11 +1242,11 @@ router.get('/profile/activity', asyncHandler(async (req, res) => {
 router.post('/profile/password', asyncHandler(async (req, res) => {
   const parsed = z.object({
     currentPassword: z.string().min(1).max(256),
-    newPassword: z.string().min(12).max(16).refine(isStrongPassword),
+    newPassword: adminPasswordSchema,
   }).strict().safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({
-      error: 'Provide your current password and a new password with 12–16 characters, including uppercase, lowercase, and a number.',
+      error: 'Provide your current password and a new password with at least 16 characters, including uppercase, lowercase, and a number (maximum 72 UTF-8 bytes).',
     });
   }
   if (parsed.data.currentPassword === parsed.data.newPassword) {
@@ -1512,7 +1519,7 @@ router.post('/users/:id/password-reset', async (req, res, next) => {
       Promise.resolve()
         .then(() => (resetServices.emailSender || sendPasswordResetOtpEmail)({ email: user.email, name: user.full_name, otp }))
         .catch(async (error) => {
-          console.error('Password reset email delivery failed.', error?.code || error?.name || 'EMAIL_DELIVERY_FAILED');
+          console.error('Password reset email delivery failed.', getSmtpDiagnostic(error));
           try {
             await database.execute(
               `UPDATE password_reset_otp_challenges

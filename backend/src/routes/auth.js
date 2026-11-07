@@ -6,7 +6,7 @@ import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { createSession, hashToken, writeAudit } from '../lib/security.js';
 import { isStrongPassword } from '../lib/authFlow.js';
-import { getPasswordResetEmailConfig, sendPasswordResetOtpEmail } from '../lib/passwordResetEmail.js';
+import { getPasswordResetEmailConfig, getSmtpDiagnostic, sendPasswordResetOtpEmail } from '../lib/passwordResetEmail.js';
 import {
   createPasswordResetOtp,
   hashPasswordResetOtp,
@@ -39,8 +39,17 @@ const verifyOtpSchema = emailSchema.extend({
   otp: z.string().regex(/^[0-9]{6}$/),
 }).strict();
 const resetPasswordSchema = z.object({
-  newPassword: z.string().min(12).max(16).refine(isStrongPassword),
+  newPassword: z.string().min(12).max(72).refine((password) => Array.from(password).length >= 12
+    && Buffer.byteLength(password, 'utf8') <= 72
+    && /[A-Z]/.test(password)
+    && /[a-z]/.test(password)
+    && /\d/.test(password)),
 }).strict();
+const isStrongAdminPassword = (password) => Array.from(password).length >= 16
+  && Buffer.byteLength(password, 'utf8') <= 72
+  && /[A-Z]/.test(password)
+  && /[a-z]/.test(password)
+  && /\d/.test(password);
 
 export function createAuthRouter({
   database = pool,
@@ -139,7 +148,7 @@ export function createAuthRouter({
     res.status(202).json({ message: genericResetMessage });
     setImmediate(() => {
       Promise.resolve().then(() => emailSender({ email: user.email, name: user.full_name, otp })).catch(async (error) => {
-        console.error('Password reset email delivery failed.', error?.code || error?.name || 'EMAIL_DELIVERY_FAILED');
+        console.error('Password reset email delivery failed.', getSmtpDiagnostic(error));
         try {
           await database.execute(
             `UPDATE password_reset_otp_challenges
@@ -240,6 +249,21 @@ export function createAuthRouter({
         return res.status(400).json({ error: resetAuthorizationMessage });
       }
 
+      const [roles] = await connection.execute(
+        `SELECT MAX(r.is_admin = TRUE) AS has_admin_role
+         FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+         WHERE ur.user_id = ?`,
+        [reset.user_id]
+      );
+      const isAdmin = Number(roles[0]?.has_admin_role) === 1;
+      const passwordValid = isAdmin
+        ? isStrongAdminPassword(parsed.data.newPassword)
+        : isStrongPassword(parsed.data.newPassword);
+      if (!passwordValid) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Enter a password that meets the password requirements.' });
+      }
+
       const [updated] = await connection.execute(
         'UPDATE users SET password_hash = ? WHERE id = ?',
         [passwordHash, reset.user_id]
@@ -284,17 +308,32 @@ export function createAuthRouter({
     }
     try {
       const [rows] = await database.execute(
-        `SELECT u.id, u.full_name, u.email, u.preferred_language, u.password_hash FROM users u
-         JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
-         WHERE u.email = ? AND u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE LIMIT 1`,
+        `SELECT u.id, u.full_name, u.email, u.preferred_language, u.password_hash, u.status,
+           MAX(r.is_admin = TRUE) AS has_admin_role,
+           MAX(r.is_admin = TRUE AND r.is_active = TRUE) AS has_active_admin_role
+         FROM users u
+         LEFT JOIN user_roles ur ON ur.user_id = u.id
+         LEFT JOIN roles r ON r.id = ur.role_id
+         WHERE LOWER(u.email) = ?
+         GROUP BY u.id, u.full_name, u.email, u.preferred_language, u.password_hash, u.status
+         LIMIT 1`,
         [email]
       );
-      const valid = rows.length && await bcrypt.compare(password, rows[0].password_hash);
-      if (!valid) return res.status(401).json({ error: 'Invalid administrator credentials.' });
-      const session = await createSession(rows[0].id, database);
+      const user = rows[0];
+      if (!user) return res.status(401).json({ error: 'Invalid administrator credentials.' });
+      if (!Number(user.has_admin_role)) {
+        return res.status(403).json({ error: 'This account is not authorized for administrator access.' });
+      }
+      if (user.status !== 'active' || !Number(user.has_active_admin_role)) {
+        return res.status(403).json({ error: 'This administrator account or role is inactive.' });
+      }
+      if (!await bcrypt.compare(password, user.password_hash)) {
+        return res.status(401).json({ error: 'Invalid administrator credentials.' });
+      }
+      const session = await createSession(user.id, database);
       res.cookie('admin_session', session.token, { ...cookieOptions(), expires: session.expiresAt });
-      await writeAudit(database, { actorId: rows[0].id, action: 'auth.login', entityType: 'session', ip: req.ip });
-      res.json({ user: { id: rows[0].id, full_name: rows[0].full_name, email: rows[0].email, preferred_language: rows[0].preferred_language } });
+      await writeAudit(database, { actorId: user.id, action: 'auth.login', entityType: 'session', ip: req.ip });
+      res.json({ user: { id: user.id, full_name: user.full_name, email: user.email, preferred_language: user.preferred_language } });
     } catch (error) { next(error); }
   });
 

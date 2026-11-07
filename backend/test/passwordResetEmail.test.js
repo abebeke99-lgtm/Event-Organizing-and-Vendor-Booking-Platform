@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPasswordResetOtpEmail,
+  createSmtpTransport,
   getPasswordResetEmailConfig,
+  getSmtpDiagnostic,
   sendPasswordResetOtpEmail,
+  verifySmtpConnection,
 } from '../src/lib/passwordResetEmail.js';
 
 const smtpEnvironment = {
@@ -33,11 +36,15 @@ test('password reset email configuration accepts SMTP without a frontend URL', (
   assert.ok(getPasswordResetEmailConfig(smtpEnvironment));
   assert.equal(getPasswordResetEmailConfig({ ...smtpEnvironment, SMTP_PASSWORD: '' }), null);
   assert.equal(getPasswordResetEmailConfig({ ...smtpEnvironment, SMTP_PORT: 'invalid' }), null);
+  assert.equal(getPasswordResetEmailConfig({ ...smtpEnvironment, SMTP_SECURE: 'yes' }), null);
+  assert.equal(getPasswordResetEmailConfig({ ...smtpEnvironment, SMTP_SECURE: 'true' }).secure, true);
+  assert.equal(getPasswordResetEmailConfig({ ...smtpEnvironment, SMTP_PORT: '465' }).secure, true);
 });
 
 test('SMTP delivery succeeds only when the provider accepts the recipient', async () => {
   let transportOptions;
   let sentMessage;
+  let closed = false;
   await sendPasswordResetOtpEmail({
     email: 'ada@example.test',
     name: 'Ada',
@@ -49,11 +56,14 @@ test('SMTP delivery succeeds only when the provider accepts the recipient', asyn
         sentMessage = message;
         return { accepted: ['ada@example.test'], rejected: [] };
       },
+      close() { closed = true; },
     };
   });
 
   assert.equal(transportOptions.requireTLS, true);
+  assert.equal(transportOptions.tls.rejectUnauthorized, true);
   assert.equal(sentMessage.to, 'ada@example.test');
+  assert.equal(closed, true);
   await assert.rejects(sendPasswordResetOtpEmail({
     email: 'ada@example.test',
     name: 'Ada',
@@ -62,5 +72,47 @@ test('SMTP delivery succeeds only when the provider accepts the recipient', asyn
     async sendMail() {
       return { accepted: [], rejected: ['ada@example.test'] };
     },
+    close() {},
   })), /did not accept/);
+});
+
+test('SMTP connection verification closes the transport on success and failure', async () => {
+  let closed = false;
+  await verifySmtpConnection(smtpEnvironment, (options) => {
+    assert.equal(options.secure, false);
+    return { async verify() {}, close() { closed = true; } };
+  });
+  assert.equal(closed, true);
+
+  closed = false;
+  await assert.rejects(verifySmtpConnection(smtpEnvironment, () => ({
+    async verify() { throw new Error('private SMTP details'); },
+    close() { closed = true; },
+  })), /private SMTP details/);
+  assert.equal(closed, true);
+});
+
+test('SMTP diagnostics do not reveal provider error details', () => {
+  const error = Object.assign(new Error('smtp-password leaked'), { code: 'EAUTH' });
+  const diagnostic = getSmtpDiagnostic(error);
+  assert.equal(diagnostic, 'SMTP authentication failed (EAUTH).');
+  assert.doesNotMatch(diagnostic, /smtp-password|leaked/);
+});
+
+test('SMTP transport uses the configured TLS mode and verifies peer certificates', () => {
+  let options;
+  createSmtpTransport({ ...smtpEnvironment, SMTP_PORT: '465', SMTP_SECURE: 'true' }, (config) => {
+    options = config;
+    return {};
+  });
+  assert.equal(options.secure, true);
+  assert.equal(options.requireTLS, false);
+  assert.equal(options.tls.rejectUnauthorized, true);
+
+  createSmtpTransport({ ...smtpEnvironment, SMTP_SECURE: 'false' }, (config) => {
+    options = config;
+    return {};
+  });
+  assert.equal(options.secure, false);
+  assert.equal(options.requireTLS, true);
 });

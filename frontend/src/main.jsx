@@ -8,4 +8,10 @@ import './homepage.css';
 const nativeConfirm = window.confirm.bind(window);
 window.confirm = (message) => nativeConfirm(translateText(String(message)));
 
-createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>);
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <React.Suspense fallback={<div role="status">Loading page...</div>}>
+      <App />
+    </React.Suspense>
+  </React.StrictMode>,
+);

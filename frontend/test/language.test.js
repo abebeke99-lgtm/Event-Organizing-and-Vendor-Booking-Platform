@@ -32,6 +32,12 @@ test('navigation feature labels are translated in English and Amharic', () => {
   assert.equal(translateText('Help & Support', 'am'), 'እገዛ እና ድጋፍ');
 });
 
+test('AI chat labels are translated in English and Amharic', () => {
+  assert.equal(translate('aiChatAssistant', 'en'), 'AI Assistant');
+  assert.equal(translate('aiChatAssistant', 'am'), 'የAI ረዳት');
+  assert.equal(translate('aiChatArchive', 'am'), 'ወደ ማህደር አስገባ');
+});
+
 test('footer attribution is translated without a copyright symbol or design credit', () => {
   assert.equal(translate('footerCopyright', 'en'), '{year} EventHub. All Rights Reserved.');
   assert.equal(translate('footerCopyright', 'am'), '{year} EventHub. መብቱ በሕግ የተጠበቀ ነው።');

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { randomBytes } from 'node:crypto';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { z } from 'zod';
-import { inTransaction, pool } from '../db.js';
+import { pool } from '../db.js';
 import { optionalPlatformUser, requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { getProfilePhoto, profilePhotoUploadParser, removeProfilePhoto, saveProfilePhoto } from '../lib/profilePhoto.js';
@@ -512,6 +512,12 @@ router.get('/services', asyncHandler(async (req, res) => {
     maxPrice: z.coerce.number().finite().min(0).optional(),
     minRating: z.coerce.number().finite().min(0).max(5).optional(),
     availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+    ids: z.string().max(80).refine((value) => {
+      const ids = value.split(',').map(Number);
+      return ids.length <= 4
+        && ids.every((id) => Number.isSafeInteger(id) && id > 0)
+        && new Set(ids).size === ids.length;
+    }, 'Invalid service filters.').optional(),
     sort: z.enum(['recommended', 'popular', 'newest', 'highest-rated', 'rating', 'price-low', 'price-high', 'alphabetical']).optional(),
     page: z.coerce.number().int().min(1).max(100000).optional(),
     limit: z.coerce.number().int().min(1).max(50).optional(),
@@ -539,7 +545,11 @@ router.get('/services', asyncHandler(async (req, res) => {
     categoryId = Number(match.id);
   }
   const marketplace = await loadPublicMarketplace(database);
-  const result = listPublicServices(marketplace.services, {
+  const serviceIds = parsedFilters.data.ids?.split(',').map(Number);
+  const sourceServices = serviceIds
+    ? marketplace.services.filter((service) => serviceIds.includes(Number(service.id)))
+    : marketplace.services;
+  const result = listPublicServices(sourceServices, {
     ...parsedFilters.data,
     categoryId,
   });
@@ -565,19 +575,43 @@ router.get('/services/:id', asyncHandler(async (req, res) => {
       [service.id]
     ),
     database.execute(
-      `SELECT available_date, status
-       FROM vendor_availability
-       WHERE vendor_id = ? AND available_date >= CURDATE()
-       ORDER BY available_date ASC
+      `SELECT va.available_date,
+              CASE
+                WHEN va.status = 'available' AND NOT EXISTS (
+                  SELECT 1
+                  FROM bookings b
+                  JOIN events e ON e.id = b.event_id
+                  WHERE b.vendor_id = va.vendor_id
+                    AND b.status IN ('accepted', 'confirmed', 'in_progress')
+                    AND DATE(COALESCE(b.scheduled_date, e.start_date)) = va.available_date
+                ) THEN 'available'
+                WHEN va.status = 'available' THEN 'unavailable'
+                ELSE va.status
+              END AS status
+       FROM vendor_availability va
+       WHERE va.vendor_id = ? AND va.available_date >= CURDATE()
+       ORDER BY va.available_date ASC
        LIMIT 30`,
       [service.vendorId]
     ),
   ]);
   const vendor = marketplace.vendors.find((entry) => entry.id === service.vendorId);
+  const relatedServices = marketplace.services
+    .filter((entry) => service.categoryId !== null && entry.id !== service.id && entry.categoryId === service.categoryId)
+    .slice(0, 4);
   return res.json({
     data: {
       ...service,
+      vendorProfile: vendor ? {
+        id: vendor.id,
+        name: vendor.business_name,
+        category: vendor.category,
+        city: vendor.city,
+        description: vendor.description,
+        verified: vendor.verified,
+      } : null,
       packages: service.packages || [],
+      relatedServices,
       availability: availability.map((entry) => ({
         date: entry.available_date,
         status: entry.status,
@@ -1699,13 +1733,11 @@ router.post('/bookings', requirePlatformUser, async (req, res, next) => {
     if (!scheduledDate || new Date(String(scheduledDate).replace(' ', 'T')) <= new Date()) {
       throw Object.assign(new Error('The event must have a future scheduled date.'), { status: 409 });
     }
-    const [[availability]] = await connection.execute(
-      'SELECT status FROM vendor_availability WHERE vendor_id = ? AND available_date = DATE(?) FOR UPDATE',
-      [service.vendor_id, scheduledDate],
-    );
-    if (availability && availability.status !== 'available') {
-      throw Object.assign(new Error('This vendor is not available on the event date.'), { status: 409 });
-    }
+    await checkBookingDateAvailability(connection, {
+      vendorId: service.vendor_id,
+      bookingId: 0,
+      scheduledDate,
+    });
     const [[duplicate]] = await connection.execute(
       `SELECT id FROM bookings
        WHERE event_id = ? AND service_id = ?
@@ -2218,13 +2250,19 @@ router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
 
-  const [rows] = await pool.execute(
+  const database = databaseFor(req);
+  const [rows] = await database.execute(
     `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.password_hash, u.status,
             LOWER(r.name) AS role
      FROM users u
      JOIN user_roles ur ON ur.user_id = u.id
      JOIN roles r ON r.id = ur.role_id
      WHERE u.email = ? AND r.is_admin = FALSE AND r.is_active = TRUE
+       AND NOT EXISTS (
+         SELECT 1 FROM user_roles admin_ur
+         JOIN roles admin_role ON admin_role.id = admin_ur.role_id
+         WHERE admin_ur.user_id = u.id AND admin_role.is_admin = TRUE
+       )
      ORDER BY CASE LOWER(r.name) WHEN 'customer' THEN 1 WHEN 'organizer' THEN 2 WHEN 'vendor' THEN 3 ELSE 4 END
      LIMIT 1`,
     [parsed.data.email.toLowerCase()]
@@ -2234,8 +2272,8 @@ router.post('/login', platformLoginLimiter, asyncHandler(async (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password.' });
   }
 
-  await pool.execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
-  const token = await inTransaction(async (connection) => {
+  await database.execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
+  const token = await inDatabaseTransaction(database, async (connection) => {
     const session = await createUserSession(connection, user.id);
     if (user.role === 'vendor') await ensureVendorProfileRecord(user.id, user.full_name, connection);
     await writeAudit(connection, {

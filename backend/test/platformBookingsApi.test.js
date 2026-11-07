@@ -50,7 +50,8 @@ async function execute(sql, values = []) {
     }]];
   }
   if (sql.startsWith('SELECT id FROM vendor_profiles')) return [[{ id: 8 }]];
-  if (sql.startsWith('SELECT status FROM vendor_availability')) return [[]];
+  if (sql.startsWith('SELECT status, note FROM vendor_availability')) return [[]];
+  if (sql.startsWith('SELECT b.id FROM bookings b')) return [[]];
   if (sql.startsWith('SELECT id FROM bookings')) {
     return [bookings
       .filter((booking) => booking.event_id === values[0] && booking.service_id === values[1])

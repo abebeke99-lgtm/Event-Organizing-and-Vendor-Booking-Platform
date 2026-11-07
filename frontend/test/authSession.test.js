@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAuthSessionLoader, getRetryAfterMilliseconds } from '../src/authSession.js';
+import { getAdministratorRouteRedirect } from '../src/adminAuthentication.js';
 
 function httpError(status, properties = {}) {
   return Object.assign(new Error(`Request failed (${status}).`), { status, ...properties });
@@ -34,6 +35,23 @@ test('StrictMode effect replay shares one in-flight administrator session reques
   assert.strictEqual(replayedResult, firstResult);
   assert.equal(platformCalls, 1);
   assert.equal(loader.getSnapshot().user.id, 8);
+});
+
+test('a refreshed verified administrator session keeps the protected dashboard open', async () => {
+  const loader = createAuthSessionLoader({
+    async getAdminSession() {
+      return { user: { id: 8, email: 'admin@example.test', roles: 'Admin' } };
+    },
+    async getPlatformSession() {
+      return { data: { user: null } };
+    },
+  });
+
+  const result = await loader.load();
+
+  assert.equal(result.status, 'authenticated');
+  assert.equal(result.role, 'admin');
+  assert.equal(getAdministratorRouteRedirect('/admin', result.user, result.role), null);
 });
 
 test('401 responses resolve to an anonymous state without inventing a user', async () => {

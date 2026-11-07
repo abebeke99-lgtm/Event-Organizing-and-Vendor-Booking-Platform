@@ -74,6 +74,7 @@ function mapService(row) {
     rating: toNumber(row.rating),
     reviewCount: toNumber(row.review_count),
     bookingCount: toNumber(row.booking_count),
+    verified: row.verification_status === 'verified',
     createdAt: row.created_at || null,
     packages: [],
     images: [],
@@ -189,9 +190,18 @@ export async function loadPublicServices(db = pool) {
   if (vendorIds.length) {
     const vendorPlaceholders = vendorIds.map(() => '?').join(', ');
     const [availableVendors] = await db.execute(
-      `SELECT DISTINCT vendor_id FROM vendor_availability
-       WHERE status = 'available' AND available_date >= CURDATE()
-         AND vendor_id IN (${vendorPlaceholders})`,
+      `SELECT DISTINCT va.vendor_id
+       FROM vendor_availability va
+       WHERE va.status = 'available' AND va.available_date >= CURDATE()
+         AND va.vendor_id IN (${vendorPlaceholders})
+         AND NOT EXISTS (
+           SELECT 1
+           FROM bookings b
+           JOIN events e ON e.id = b.event_id
+           WHERE b.vendor_id = va.vendor_id
+             AND b.status IN ('accepted', 'confirmed', 'in_progress')
+             AND DATE(COALESCE(b.scheduled_date, e.start_date)) = va.available_date
+         )`,
       vendorIds,
     );
     const vendorsWithAvailability = new Set(availableVendors.map((row) => Number(row.vendor_id)));

@@ -260,6 +260,22 @@ test('public service packages and detail return correctly mapped optional data',
   assert.ok(Array.isArray(service.packages));
   assert.ok(Array.isArray(service.reviews));
   assert.ok(Array.isArray(service.availability));
+
+  const comparisonResponse = await get(`/api/platform/services?ids=${serviceId}&limit=4`);
+  assert.equal(comparisonResponse.status, 200);
+  const comparison = await comparisonResponse.json();
+  assert.deepEqual(comparison.data.map((item) => item.id), [serviceId]);
+});
+
+test('public service comparison accepts bounded IDs and rejects malformed filters', async () => {
+  const validResponse = await get('/api/platform/services?ids=1&limit=4');
+  assert.equal(validResponse.status, 200);
+  const validResult = await validResponse.json();
+  assert.ok(Array.isArray(validResult.data));
+  assert.ok(validResult.data.every((service) => service.id === 1));
+
+  const response = await get('/api/platform/services?ids=1,1');
+  assert.equal(response.status, 400);
 });
 
 test('vendor detail distinguishes invalid IDs from unknown vendor IDs', async () => {

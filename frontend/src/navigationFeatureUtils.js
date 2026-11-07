@@ -1,6 +1,7 @@
 const COMPARE_KEY = 'eventhub:compare-vendors:v1';
+const SERVICE_COMPARE_KEY = 'eventhub:compare-services:v1';
 const RECENT_KEY = 'eventhub:recently-viewed:v1';
-const MAX_COMPARE = 3;
+const MAX_COMPARE = 4;
 const MAX_RECENT = 12;
 
 function readList(storage, key) {
@@ -33,6 +34,30 @@ export function toggleComparedVendor(id, storage = window.localStorage) {
 
 export function clearComparedVendors(storage = window.localStorage) {
   storage.removeItem(COMPARE_KEY);
+}
+
+export function getComparedServiceIds(storage = window.localStorage) {
+  return [...new Set(readList(storage, SERVICE_COMPARE_KEY).map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))]
+    .slice(0, MAX_COMPARE);
+}
+
+export function toggleComparedService(id, storage = window.localStorage) {
+  const serviceId = Number(id);
+  if (!Number.isSafeInteger(serviceId) || serviceId < 1) throw new Error('A valid service is required for comparison.');
+  const current = getComparedServiceIds(storage);
+  if (current.includes(serviceId)) {
+    const ids = current.filter((entry) => entry !== serviceId);
+    storage.setItem(SERVICE_COMPARE_KEY, JSON.stringify(ids));
+    return { ids, added: false };
+  }
+  if (current.length >= MAX_COMPARE) return { ids: current, added: false, limitReached: true };
+  const ids = [...current, serviceId];
+  storage.setItem(SERVICE_COMPARE_KEY, JSON.stringify(ids));
+  return { ids, added: true };
+}
+
+export function clearComparedServices(storage = window.localStorage) {
+  storage.removeItem(SERVICE_COMPARE_KEY);
 }
 
 export function recordRecentlyViewed(type, id, storage = window.localStorage) {

@@ -16,7 +16,8 @@
     "migrate": "npm --workspace backend run migrate",
     "db:init": "npm --workspace backend run db:init",
     "bootstrap:admin": "npm --workspace backend run bootstrap:admin",
-    "db:check": "npm --workspace backend run db:check"
+    "db:check": "npm --workspace backend run db:check",
+    "smtp:check": "npm --workspace backend run smtp:check"
   },
   "engines": {
     "node": "20.x"

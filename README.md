@@ -68,12 +68,26 @@ The booking logic is enforced in the backend with explicit transition checks so 
 - Admin and platform authentication, public marketplace listings, and customer/vendor dashboard reads are backed by MySQL. Event creation now stores organizer-owned draft events transactionally with an audit record. Some dashboard controls and payment-provider workflows remain incomplete; payment records do not represent a real payment integration.
 - Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true` and a valid PEM CA certificate in `DB_SSL_CA`; certificate verification remains enabled.
 
+## EventHub AI Assistant
+
+Signed-in customer, organizer, and vendor accounts can open **AI Assistant** from the account menu. Conversations and messages are stored in MySQL and scoped to their owner. Responses stream from the server through Server-Sent Events; the OpenAI key is only read by the backend and is never sent to the browser. Administrator and browser-demo sessions are not supported by this feature.
+
+Configure these backend environment variables to enable AI responses:
+
+- `OPENAI_API_KEY`: secret OpenAI API key, set only in the backend environment.
+- `OPENAI_MODEL`: default model identifier (defaults to `gpt-4o-mini`).
+- `OPENAI_CHAT_MODELS`: comma-separated server-approved model IDs exposed in the model selector (defaults to `gpt-4o-mini`).
+
+Run `npm run migrate` after reviewing the additive `backend/migrations/038_ai_chat.sql` migration and taking an appropriate backup. Without `OPENAI_API_KEY`, chat history and the page remain available but generating responses returns a clear configuration notice. Model access and pricing depend on the OpenAI account. This initial integration does not include file/image uploads, voice, web search, custom assistants, or shared chat links.
+
+AI chat also blocks common requests to disclose credentials, hidden instructions, private configuration, or other users' data before calling the provider. Credential-shaped values are redacted from chat input, stored titles/messages, model context, streamed output, and rendered message text; the model receives a fixed security policy that treats conversation content as untrusted. These checks are defense in depth and pattern-based, not a substitute for keeping secrets out of user messages or for access controls.
+
 ## Deployment checklist
 
 ### Render backend
 
 - Blueprint: repository `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
-- Set these environment variable names in Render: `NODE_ENV`, `WEB_ORIGIN`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL`, `DB_SSL_CA`, `COOKIE_SECURE`, and `COOKIE_SAME_SITE`. Production requires TLS and a verified CA, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Keep credentials and CA material only in secure dashboard settings.
+- Set these environment variable names in Render: `NODE_ENV`, `WEB_ORIGIN`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL`, `DB_SSL_CA`, `COOKIE_SECURE`, `COOKIE_SAME_SITE`, and (when enabling AI Assistant) `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS`. Production requires TLS and a verified CA, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Keep credentials and CA material only in secure dashboard settings.
 - Hero slide files are stored under `backend/uploads/hero-slides`. Configure persistent shared storage for this directory in production (especially across deploys or multiple API instances); the database stores only generated filenames and the API serves the image bytes.
 - `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and checks `SELECT DATABASE()` against `DB_NAME`; readiness failures return a safe reason code. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
 - Run `npm run db:check` only in an environment configured with the real DB credentials and CA. It performs read-only checks and no schema/data changes.
@@ -242,8 +256,9 @@ The interface supports English and Amharic (አማርኛ). The header selector a
 Password reset uses a six-digit email OTP, a five-minute expiry, up to five verification attempts, a 60-second resend cooldown, and a short-lived HttpOnly reset authorization cookie. Configure these variables only in the backend environment (never in the frontend):
 
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and `SMTP_FROM`
+- Optional `SMTP_SECURE=true|false`; by default port 465 uses implicit TLS and other ports require STARTTLS.
 
-Use SMTP credentials and a verified sender address issued by your email provider. Port 465 uses implicit TLS; other ports use STARTTLS. When SMTP is missing, every valid request receives the same generic service-unavailable response and the backend logs a configuration warning without looking up accounts. Delivery failures are logged without email addresses or OTP values, and the undelivered code is invalidated. Apply migrations with `npm run migrate --prefix backend`; this includes `011_password_reset_otps.sql`. Successful resets revoke existing admin and platform sessions and do not sign users in automatically.
+Use SMTP credentials and a verified sender address issued by your email provider. Validate the backend SMTP connection with `npm run smtp:check` from the repository root; the command never prints credential values. TLS certificate verification remains enabled. When SMTP is missing, every valid request receives the same generic service-unavailable response and the backend logs a configuration warning without looking up accounts. Delivery failures are logged without email addresses or OTP values, and the undelivered code is invalidated. Apply migrations with `npm run migrate --prefix backend`; this includes `011_password_reset_otps.sql`. Successful resets revoke existing admin and platform sessions and do not sign users in automatically.
 
 For a real local reset flow, provision and start MySQL, configure `backend/.env` with valid database and SMTP settings, then run:
 
@@ -275,7 +290,7 @@ The predefined demo credentials are mock-only and are not valid for production o
 | Organizer | `organizer@demo.eventhub` | `Organizer12Ab` |
 | Vendor | `vendor@demo.eventhub` | `VendorDemo12` |
 
-For production, create an administrator with the `bootstrap:admin` command and private `ADMIN_BOOTSTRAP_*` environment configuration only after the database is provisioned. Never publish those production values.
+Create the initial administrator only after database migrations have run. Set `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_NAME`, and `ADMIN_BOOTSTRAP_PASSWORD` privately in `backend/.env` or the backend process environment, then run `npm run bootstrap:admin` from the repository root. The password must be at least 16 characters and no more than 72 UTF-8 bytes. Provisioning hashes it with bcrypt and refuses an email that already exists without modifying that account. Never publish the environment values.
 
 ## 11. Acceptance Criteria Covered
 
@@ -364,7 +379,7 @@ Audit entries are generated server-side by the existing audit writer. Requests r
 
 ### Administrator profile and security
 
-The Administrator > Profile screen reads profile and recent account activity from the authenticated administrator session. Name and phone changes, validated profile-image uploads/removals, and password changes are persisted and audited; role, status, and email are displayed read-only. Password changes require the current password and the existing 12–16 character password policy, rotate the current administrator session, and invalidate other administrator and platform sessions for that account. The profile endpoints accept no client-supplied user ID.
+The Administrator > Profile screen reads profile and recent account activity from the authenticated administrator session. Name and phone changes, validated profile-image uploads/removals, and password changes are persisted and audited; role, status, and email are displayed read-only. Password changes require the current password and at least 16 characters, including uppercase, lowercase, and a number, with a 72-byte bcrypt maximum. The current administrator session is rotated and other administrator and platform sessions for that account are invalidated. Verified email changes require current-password confirmation and a short-lived OTP delivered through SMTP. The profile endpoints accept no client-supplied user ID.
 
 ### Home hero image slides
 

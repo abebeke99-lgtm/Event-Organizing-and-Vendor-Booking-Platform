@@ -34,6 +34,8 @@ export function normalizeServiceRecord(service = {}) {
   record.price = price === null || price === undefined || price === '' ? null : Number(price);
   if (!Number.isFinite(record.price)) record.price = null;
   record.currency = sanitizeText(record.currency || 'ETB', 'ETB').toUpperCase();
+  record.packages = Array.isArray(record.packages) ? record.packages.filter(Boolean) : [];
+  record.features = Array.isArray(record.features) ? record.features.filter(Boolean) : [];
   record.rating = Number(record.rating ?? record.average_rating ?? 0) || 0;
   record.reviewCount = Number(record.reviewCount ?? record.reviews_count ?? 0) || 0;
   record.bookingCount = Number(record.bookingCount ?? record.booking_count ?? 0) || 0;
@@ -55,6 +57,10 @@ export function buildServiceFilters(raw = {}) {
   const minPrice = Number.isFinite(Number(raw.minPrice)) ? Math.max(0, Number(raw.minPrice)) : 0;
   const maxPrice = Number.isFinite(Number(raw.maxPrice)) ? Math.max(minPrice, Number(raw.maxPrice)) : 0;
   const minRating = Number.isFinite(Number(raw.minRating)) ? Math.max(0, Number(raw.minRating)) : 0;
+  const minReviews = Number.isFinite(Number(raw.minReviews)) ? Math.max(0, Number(raw.minReviews)) : 0;
+  const maxReviews = Number.isFinite(Number(raw.maxReviews)) ? Math.max(minReviews, Number(raw.maxReviews)) : 0;
+  const hasMaxReviews = raw.maxReviews !== undefined && raw.maxReviews !== null && String(raw.maxReviews).trim() !== '';
+  const feature = sanitizeText(raw.feature, '').toLowerCase().slice(0, 120);
   const availableOnly = raw.availableOnly === true || raw.availableOnly === 'true' || raw.availableOnly === '1';
   const sort = sanitizeText(raw.sort, 'recommended').toLowerCase();
   const page = Number.isFinite(Number(raw.page)) ? Math.max(1, Number(raw.page)) : 1;
@@ -70,6 +76,10 @@ export function buildServiceFilters(raw = {}) {
     minPrice,
     maxPrice,
     minRating,
+    minReviews,
+    maxReviews,
+    hasMaxReviews,
+    feature,
     availableOnly,
     sort: ['recommended', 'relevance', 'popular', 'newest', 'highest-rated', 'rating', 'price-low', 'price-high', 'alphabetical'].includes(sort) ? sort : 'recommended',
     page,
@@ -89,8 +99,19 @@ export function listPublicServices(services = [], filters = {}) {
   const options = buildServiceFilters(filters);
 
   const filtered = normalized.filter((service) => {
-    const haystack = [service.title, service.category, service.description, service.vendorName, service.city].join(' ').toLowerCase();
+    const packageText = service.packages.flatMap((item) => [
+      item.name,
+      item.description,
+      ...(Array.isArray(item.includedFeatures) ? item.includedFeatures : []),
+      ...(Array.isArray(item.extras) ? item.extras.flatMap((extra) => [extra.name, extra.description]) : []),
+    ]);
+    const featureText = Array.isArray(service.features) ? service.features : [];
+    const featureHaystack = [...packageText, ...featureText].join(' ').toLowerCase();
+    const haystack = [service.title, service.category, service.description, service.vendorName, service.city, ...packageText, ...featureText]
+      .join(' ')
+      .toLowerCase();
     if (options.search && !haystack.includes(options.search)) return false;
+    if (options.feature && !featureHaystack.includes(options.feature)) return false;
     if (options.categoryId && Number(service.categoryId) !== options.categoryId) return false;
     if (options.category && !matchesCategoryName(service.category, options.category)) return false;
     if (options.location && !service.city.toLowerCase().includes(options.location)) return false;
@@ -99,6 +120,8 @@ export function listPublicServices(services = [], filters = {}) {
     if (options.minPrice && (service.price === null || service.price < options.minPrice)) return false;
     if (options.maxPrice && (service.price === null || service.price > options.maxPrice)) return false;
     if (options.minRating && service.rating < options.minRating) return false;
+    if (options.minReviews && service.reviewCount < options.minReviews) return false;
+    if (options.hasMaxReviews && service.reviewCount > options.maxReviews) return false;
     if (options.availableOnly && service.available !== true) return false;
     return true;
   });
@@ -123,6 +146,10 @@ export function listPublicServices(services = [], filters = {}) {
       case 'popular':
         return (b.bookingCount || 0) - (a.bookingCount || 0)
           || (b.reviewCount || 0) - (a.reviewCount || 0)
+          || (b.rating || 0) - (a.rating || 0)
+          || a.title.localeCompare(b.title);
+      case 'most-reviewed':
+        return (b.reviewCount || 0) - (a.reviewCount || 0)
           || (b.rating || 0) - (a.rating || 0)
           || a.title.localeCompare(b.title);
       case 'newest':

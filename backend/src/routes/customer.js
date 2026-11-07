@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
@@ -21,6 +22,13 @@ import {
 } from '../lib/complaintAttachments.js';
 
 const router = Router();
+const serviceSearchLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 90,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, error: 'Too many service searches. Please try again shortly.' },
+});
 
 function ok(res, data) {
   return res.json({ success: true, data });
@@ -70,12 +78,34 @@ function catalogQuerySchema(sorts, extraFields = {}) {
   if (query.minPrice !== undefined && query.maxPrice !== undefined && query.maxPrice < query.minPrice) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxPrice'], message: 'Maximum price must be greater than or equal to minimum price.' });
   }
+  if (query.minReviews !== undefined && query.maxReviews !== undefined && query.maxReviews < query.minReviews) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxReviews'], message: 'Maximum review count must be greater than or equal to minimum review count.' });
+  }
   });
 }
-const vendorCatalogQuerySchema = catalogQuerySchema(['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az']);
+const vendorCatalogQuerySchema = catalogQuerySchema(
+  ['recommended', 'popular', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added'],
+  {
+    filter: z.enum(['featured']).optional(),
+    availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+    availableDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+      const date = new Date(`${value}T00:00:00.000Z`);
+      return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    }).optional(),
+  },
+);
 const serviceCatalogQuerySchema = catalogQuerySchema(
-  ['recommended', 'relevance', 'highest-rated', 'price-low', 'price-high', 'alphabetical'],
-  { availableOnly: z.enum(['true', 'false', '1', '0']).optional() },
+  ['recommended', 'relevance', 'popular', 'newest', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'alphabetical'],
+  {
+    availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+    availableDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+      const date = new Date(`${value}T00:00:00.000Z`);
+      return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+    }).optional(),
+    minReviews: z.coerce.number().int().min(0).optional(),
+    maxReviews: z.coerce.number().int().min(0).optional(),
+    feature: z.string().trim().max(120).optional(),
+  },
 );
 const favoriteSchema = z.object({ vendorId: z.coerce.number().int().positive() }).strict();
 
@@ -193,8 +223,30 @@ getRoute('/overview', async (req, res) => {
 getRoute('/vendors', async (req, res) => {
   const filters = parseCatalogQuery(req, res, vendorCatalogQuerySchema);
   if (!filters) return;
-  const marketplace = await loadPublicMarketplace(databaseFor(req));
-  const result = listPublicVendors(marketplace.vendors, filters);
+  const database = databaseFor(req);
+  const marketplace = await loadPublicMarketplace(database);
+  let vendors = marketplace.vendors;
+  if (filters.availableDate) {
+    const [availableRows] = await database.execute(
+      `SELECT va.vendor_id
+       FROM vendor_availability va
+       WHERE va.available_date = DATE(?) AND va.status = 'available'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM bookings b
+           JOIN events e ON e.id = b.event_id
+           WHERE b.vendor_id = va.vendor_id
+             AND b.status IN ('accepted', 'confirmed', 'in_progress')
+             AND DATE(COALESCE(b.scheduled_date, e.start_date)) = va.available_date
+         )`,
+      [filters.availableDate],
+    );
+    const availableVendorIds = new Set(availableRows.map((row) => Number(row.vendor_id)));
+    vendors = vendors
+      .filter((vendor) => availableVendorIds.has(Number(vendor.id)))
+      .map((vendor) => ({ ...vendor, available: true }));
+  }
+  const result = listPublicVendors(vendors, filters);
   return res.json({
     success: true,
     data: result.vendors,
@@ -202,17 +254,41 @@ getRoute('/vendors', async (req, res) => {
   });
 });
 
-getRoute('/services', async (req, res) => {
+router.get('/services', serviceSearchLimiter, asyncHandler(async (req, res) => {
   const filters = parseCatalogQuery(req, res, serviceCatalogQuerySchema);
   if (!filters) return;
   const marketplace = await loadPublicMarketplace(databaseFor(req));
-  const result = listPublicServices(marketplace.services, filters);
+  if (filters.availableDate) {
+    const [availableRows] = await databaseFor(req).execute(
+      `SELECT DISTINCT va.vendor_id
+       FROM vendor_availability va
+       WHERE va.available_date = DATE(?) AND va.status = 'available'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM bookings b
+           JOIN events e ON e.id = b.event_id
+           WHERE b.vendor_id = va.vendor_id
+             AND b.status IN ('accepted', 'confirmed', 'in_progress')
+             AND DATE(COALESCE(b.scheduled_date, e.start_date)) = va.available_date
+         )`,
+      [filters.availableDate],
+    );
+    const availableVendorIds = new Set(availableRows.map((row) => Number(row.vendor_id)));
+    marketplace.services = marketplace.services.map((service) => ({
+      ...service,
+      available: availableVendorIds.has(Number(service.vendorId)),
+    }));
+  }
+  const result = listPublicServices(marketplace.services, {
+    ...filters,
+    availableOnly: filters.availableDate ? true : filters.availableOnly,
+  });
   return res.json({
     success: true,
     data: result.services,
     pagination: { page: result.page, limit: result.limit, total: result.total, totalPages: result.totalPages },
   });
-});
+}));
 
 getRoute('/categories', async (req, res) => {
   const marketplace = await loadPublicMarketplace(databaseFor(req));

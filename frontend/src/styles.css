@@ -754,7 +754,6 @@ html,body{overflow-x:clip}
 .sidebar-brand-copy span{overflow-wrap:anywhere}
 .auth-brand{display:flex;flex-direction:column;align-items:center;gap:7px;margin:2px auto 16px}
 .auth-brand-logo{width:min(192px,100%);height:129px;object-fit:contain}
-.auth-institution-logo{width:48px;height:42px;object-fit:contain}
 .login-card .auth-brand{margin-bottom:16px}
 .maintenance-card .auth-brand{margin:0 auto 18px}
 .loading-brand-symbol{width:48px;height:48px;object-fit:contain}

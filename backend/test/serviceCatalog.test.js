@@ -162,3 +162,30 @@ test('popular services rank by actual bookings, then reviews and ratings', () =>
 
   assert.deepEqual(result.services.map((service) => service.id), [12, 11, 13]);
 });
+
+test('service features, review-count bounds, and most-reviewed sorting use published data', () => {
+  const featureServices = [
+    {
+      ...services[0],
+      id: 31,
+      reviewCount: 12,
+      packages: [{ name: 'Full service', includedFeatures: ['On-site setup', 'Table linens'], extras: [] }],
+    },
+    {
+      ...services[1],
+      id: 32,
+      reviewCount: 5,
+      packages: [{ name: 'Basic service', includedFeatures: ['Delivery'], extras: [] }],
+    },
+  ];
+  const filtered = listPublicServices(featureServices, {
+    feature: 'table linens',
+    minReviews: 10,
+    maxReviews: 15,
+    page: 1,
+    limit: 10,
+  });
+  assert.deepEqual(filtered.services.map((service) => service.id), [31]);
+  const sorted = listPublicServices(featureServices, { sort: 'most-reviewed', page: 1, limit: 10 });
+  assert.deepEqual(sorted.services.map((service) => service.id), [31, 32]);
+});

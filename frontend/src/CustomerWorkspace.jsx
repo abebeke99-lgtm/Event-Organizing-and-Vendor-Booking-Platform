@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight, BadgeCheck, Bell, Building2, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, ExternalLink, FileClock, MessageSquare, Search, Sparkles, Star, Trash2, X } from 'lucide-react';
 import apiClient from './api/axios.js';
-import { translateText } from './language.js';
+import { translate as translateKey, translateText as translatePhrase } from './language.js';
 import { formatCustomerMoney as money } from './customerMoney.js';
+import { clearComparedServices, getComparedServiceIds, getComparedVendorIds, toggleComparedService, toggleComparedVendor } from './navigationFeatureUtils.js';
 import ServiceCategoriesPage from './ServiceCategoriesPage.jsx';
 import { CustomerBookingsList } from './CustomerBookings.jsx';
 import CustomerBookingHistory from './CustomerBookingHistory.jsx';
@@ -13,9 +14,15 @@ const formatDate = (value) => {
   const date = new Date(String(value).replace(' ', 'T'));
   return Number.isNaN(date.getTime()) ? String(value) : new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
 };
+
 const statusClass = (value) => String(value || '').toLowerCase().replaceAll('_', '-');
 const EMPTY_OBJECT = Object.freeze({});
-const SERVICE_SORTS = new Set(['relevance', 'price-low', 'price-high', 'highest-rated']);
+const SERVICE_SORTS = new Set(['relevance', 'popular', 'newest', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'alphabetical']);
+const VENDOR_SEARCH_HISTORY_KEY = 'eventhub:customer-vendor-searches:v1';
+const SERVICE_SEARCH_HISTORY_KEY = 'eventhub:customer-service-searches:v1';
+const translateText = (value) => typeof value === 'string' && value.startsWith('customer')
+  ? translateKey(value)
+  : translatePhrase(value);
 
 function getCustomerCatalogUrlState() {
   const params = new URLSearchParams(window.location.search);
@@ -28,7 +35,11 @@ function getCustomerCatalogUrlState() {
       minPrice: params.get('minPrice') || '',
       maxPrice: params.get('maxPrice') || '',
       minRating: params.get('minRating') || '',
+      minReviews: params.get('minReviews') || '',
+      maxReviews: params.get('maxReviews') || '',
+      feature: params.get('feature') || '',
       availableOnly: params.get('availableOnly') === 'true' ? 'true' : '',
+      availableDate: params.get('availableDate') || '',
       verified: params.get('verified') === 'true' ? 'true' : '',
       sort: params.get('sort') || (params.get('view') === 'services' ? 'relevance' : 'recommended'),
     },
@@ -46,7 +57,11 @@ function updateCustomerCatalogUrl(filters, page) {
     minPrice: filters.minPrice,
     maxPrice: filters.maxPrice,
     minRating: filters.minRating,
+    minReviews: filters.minReviews,
+    maxReviews: filters.maxReviews,
+    feature: filters.feature,
     availableOnly: filters.availableOnly,
+    availableDate: filters.availableDate,
     sort: filters.sort,
   };
   for (const [key, value] of Object.entries(queryValues)) {
@@ -75,6 +90,20 @@ function VendorDirectoryImage({ vendor }) {
   return <img className="customer-vendor-image" src={src} alt={`${vendor.business_name || vendor.name} profile`} loading="lazy" onError={() => setFailed(true)} />;
 }
 
+function ServiceCatalogImage({ service }) {
+  const [failed, setFailed] = useState(false);
+  const path = service.images?.[0]?.url;
+  const baseUrl = apiClient.defaults.baseURL;
+  const src = path?.startsWith('/api/') && baseUrl && !baseUrl.startsWith('/')
+    ? new URL(path, baseUrl).toString()
+    : path;
+
+  useEffect(() => setFailed(false), [src]);
+
+  if (!src || failed) return <div className="customer-vendor-image-empty" role="img" aria-label="Service image unavailable"><Building2 size={26}/><span>Service image unavailable</span></div>;
+  return <img className="customer-vendor-image" src={src} alt={service.title} loading="lazy" onError={() => setFailed(true)} />;
+}
+
 function PageHeading({ eyebrow, title, description, action, className = '' }) {
   return <div className={`page-heading customer-workspace-heading ${className}`}><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2><p className="muted">{description}</p></div>{action}</div>;
 }
@@ -83,30 +112,220 @@ function EmptyState({ children }) {
   return <div className="empty panel"><strong>{children}</strong></div>;
 }
 
-function CustomerRequestModal({ item, events, api, mutate, onClose }) {
-  const [form, setForm] = useState({ eventId: '', guestCount: '', budget: '', notes: '' });
-  if (item.kind === 'save-service') return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal" role="dialog" aria-modal="true" aria-label="Save service"><div className="modal-head"><h2>Save service</h2><button className="icon-button" type="button" aria-label="Close" onClick={onClose}>×</button></div><div className="modal-body"><p>Save {item.service.title} by {item.service.vendorName} to your wishlist?</p></div><div className="modal-foot"><button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button" type="button" onClick={() => mutate(async () => { await api('/customer/saved-services', { method: 'POST', body: JSON.stringify({ serviceId: Number(item.service.id) }) }); onClose(); }, 'Service saved to wishlist.')}>Save service</button></div></section></div>;
-
+function CustomerRequestModal({ item, events, user, api, mutate, busy, onClose }) {
+  const [form, setForm] = useState({
+    eventId: '',
+    eventName: '',
+    eventDate: '',
+    eventLocation: '',
+    eventType: '',
+    contactPhone: user.phone || '',
+    guestCount: '',
+    budget: '',
+    notes: '',
+  });
   const isBooking = item.kind === 'booking';
-  const availableEvents = isBooking ? events.filter((event) => ['active', 'published', 'upcoming', 'open'].includes(String(event.status).toLowerCase())) : events;
+  const availableEvents = events.filter((event) => (
+    ['active', 'published', 'upcoming', 'open'].includes(String(event.status).toLowerCase())
+    && new Date(String(event.startDate || event.date || '').replace(' ', 'T')).getTime() > Date.now()
+  ));
   return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={(event) => {
     event.preventDefault();
     const body = isBooking
       ? { eventId: Number(form.eventId), serviceId: Number(item.service.id), notes: form.notes }
-      : { eventId: Number(form.eventId), serviceId: Number(item.service.id), guestCount: form.guestCount ? Number(form.guestCount) : undefined, budget: form.budget ? Number(form.budget) : undefined, notes: form.notes };
+      : {
+        ...(form.eventId ? { eventId: Number(form.eventId) } : {}),
+        serviceId: Number(item.service.id),
+        eventName: form.eventName,
+        eventDate: form.eventDate,
+        eventLocation: form.eventLocation,
+        eventType: form.eventType,
+        contactPhone: form.contactPhone,
+        guestCount: form.guestCount ? Number(form.guestCount) : undefined,
+        budget: form.budget ? Number(form.budget) : undefined,
+        requiredServices: item.service.title,
+        additionalRequirements: form.notes,
+        message: form.notes,
+      };
     mutate(async () => {
-      await api(isBooking ? '/platform/bookings' : '/platform/service-quote-requests', { method: 'POST', body: JSON.stringify(body) });
+      const result = await api(isBooking ? '/platform/bookings' : '/platform/service-quote-requests', { method: 'POST', body: JSON.stringify(body) });
       onClose();
-    }, isBooking ? 'Booking request sent.' : 'Quotation request sent.');
+      return result;
+    }, (result) => isBooking
+      ? `Booking request submitted. Current status: ${result?.data?.status || 'requested'}.`
+      : `Quotation request submitted. Current status: ${result?.data?.status || 'pending vendor response'}.`);
   }}>
     <div className="modal-head"><h2>{isBooking ? 'Request a booking' : 'Request a quotation'}</h2><button className="icon-button" type="button" aria-label="Close" onClick={onClose}>×</button></div>
-    <div className="modal-body"><p>{item.service.title} · {item.service.vendorName}</p>
-      <label className="field"><span>Event</span><select required value={form.eventId} onChange={(event) => setForm((current) => ({ ...current, eventId: event.target.value }))}><option value="">Choose an event</option>{availableEvents.map((event) => <option value={event.id} key={event.id}>{event.title} · {new Date(String(event.startDate || event.date).replace(' ', 'T')).toLocaleDateString()}</option>)}</select></label>
-      {!isBooking && <><label className="field"><span>Expected guests</span><input type="number" min="1" max="100000" value={form.guestCount} onChange={(event) => setForm((current) => ({ ...current, guestCount: event.target.value }))} /></label><label className="field"><span>Budget</span><input type="number" min="0" max="100000000" step="0.01" value={form.budget} onChange={(event) => setForm((current) => ({ ...current, budget: event.target.value }))} /></label></>}
+    <div className="modal-body"><p>{item.service.title} · {item.service.vendorName}{item.service.price != null ? ` · ${money(item.service.price, item.service.currency)}` : ''}</p>
+      <label className="field"><span>Event</span><select required={isBooking} value={form.eventId} onChange={(event) => {
+        const selected = availableEvents.find((entry) => Number(entry.id) === Number(event.target.value));
+        setForm((current) => ({
+          ...current,
+          eventId: event.target.value,
+          eventName: selected?.title || '',
+          eventDate: String(selected?.startDate || selected?.date || '').replace(' ', 'T').slice(0, 16),
+          eventLocation: selected?.location || selected?.city || '',
+          eventType: selected?.type || selected?.eventType || '',
+          guestCount: selected?.guestCount ?? current.guestCount,
+          budget: selected?.budget ?? current.budget,
+        }));
+      }}><option value="">Choose an event</option>{availableEvents.map((event) => <option value={event.id} key={event.id}>{event.title} · {new Date(String(event.startDate || event.date).replace(' ', 'T')).toLocaleDateString()}</option>)}</select></label>
+      {!isBooking && <>
+        <label className="field"><span>Event name (optional)</span><input maxLength="180" value={form.eventName} onChange={(event) => setForm((current) => ({ ...current, eventName: event.target.value }))} /></label>
+        <label className="field"><span>Event date and time</span><input required type="datetime-local" min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)} value={form.eventDate} onChange={(event) => setForm((current) => ({ ...current, eventDate: event.target.value }))} /></label>
+        <label className="field"><span>Event location</span><input required maxLength="120" value={form.eventLocation} onChange={(event) => setForm((current) => ({ ...current, eventLocation: event.target.value }))} /></label>
+        <label className="field"><span>Event type</span><input required minLength="2" maxLength="80" value={form.eventType} onChange={(event) => setForm((current) => ({ ...current, eventType: event.target.value }))} /></label>
+        <label className="field"><span>Contact phone</span><input required minLength="7" maxLength="30" pattern="\\+?[0-9][0-9 ()-]{5,28}" value={form.contactPhone} onChange={(event) => setForm((current) => ({ ...current, contactPhone: event.target.value }))} /></label>
+        <label className="field"><span>Expected guests</span><input type="number" min="1" max="100000" value={form.guestCount} onChange={(event) => setForm((current) => ({ ...current, guestCount: event.target.value }))} /></label>
+        <label className="field"><span>Budget (ETB)</span><input type="number" min="0" max="100000000" step="0.01" value={form.budget} onChange={(event) => setForm((current) => ({ ...current, budget: event.target.value }))} /></label>
+      </>}
       <label className="field"><span>Requirements</span><textarea maxLength={isBooking ? 500 : 2000} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} /></label>
+      {isBooking && form.eventId && <p className="muted">Event date: {formatDate(availableEvents.find((entry) => Number(entry.id) === Number(form.eventId))?.startDate || availableEvents.find((entry) => Number(entry.id) === Number(form.eventId))?.date)}. Availability and current service pricing are verified by the booking API.</p>}
     </div>
-    <div className="modal-foot"><button className="button secondary" type="button" onClick={onClose}>Cancel</button><button className="button" type="submit" disabled={!form.eventId}>{isBooking ? 'Send booking request' : 'Send quotation request'}</button></div>
+    <div className="modal-foot"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>Cancel</button><button className="button" type="submit" disabled={busy || (isBooking && !form.eventId) || (!isBooking && (!form.eventDate || !form.eventLocation.trim() || !form.eventType.trim() || !form.contactPhone.trim()))}>{busy ? translateText('customerSendingRequest') : isBooking ? translateText('customerBookService') : translateText('customerRequestQuotation')}</button></div>
   </form></div>;
+}
+
+function CustomerServiceDiscovery({
+  feedback,
+  user,
+  api,
+  mutate,
+  busy,
+  events,
+  requestService,
+  onCloseRequest,
+  categories,
+  filters,
+  onChangeFilter,
+  serviceSearchInput,
+  onSearchInput,
+  onSubmitSearch,
+  onClearSearch,
+  onClearFilters,
+  serviceSearchHistory,
+  onRememberSearch,
+  catalogRows,
+  catalogPage,
+  catalogLoading,
+  onRetry,
+  serviceDisplay,
+  setServiceDisplay,
+  savedServiceIds,
+  onToggleFavorite,
+  comparedServiceIds,
+  onToggleCompare,
+  comparedServices,
+  comparisonLoading,
+  onClearCompare,
+  onChangePage,
+  onOpenService,
+  onRequestService,
+}) {
+  const suggestions = [...new Set([
+    ...categories.map((category) => category.name),
+    ...catalogRows.flatMap((service) => [service.title, service.vendorName, service.category]),
+    ...serviceSearchHistory,
+  ].filter(Boolean))].filter((value) => !serviceSearchInput.trim()
+    || value.toLowerCase().includes(serviceSearchInput.trim().toLowerCase())).slice(0, 10);
+  const popularSearches = [...categories]
+    .filter((category) => Number(category.serviceCount) > 0)
+    .sort((first, second) => Number(second.serviceCount) - Number(first.serviceCount))
+    .slice(0, 6);
+  const activeFilters = [
+    filters.search && { label: `Search: ${filters.search}`, clear: onClearSearch },
+    filters.category && { label: `Category: ${filters.category}`, clear: () => onChangeFilter('category', '') },
+    filters.location && { label: `Location: ${filters.location}`, clear: () => onChangeFilter('location', '') },
+    filters.minPrice && { label: `Min ETB ${filters.minPrice}`, clear: () => onChangeFilter('minPrice', '') },
+    filters.maxPrice && { label: `Max ETB ${filters.maxPrice}`, clear: () => onChangeFilter('maxPrice', '') },
+    filters.minRating && { label: `${filters.minRating}+ stars`, clear: () => onChangeFilter('minRating', '') },
+    filters.minReviews && { label: `${filters.minReviews}+ reviews`, clear: () => onChangeFilter('minReviews', '') },
+    filters.maxReviews && { label: `Up to ${filters.maxReviews} reviews`, clear: () => onChangeFilter('maxReviews', '') },
+    filters.feature && { label: `Feature: ${filters.feature}`, clear: () => onChangeFilter('feature', '') },
+    filters.availableDate && { label: `Available ${filters.availableDate}`, clear: () => onChangeFilter('availableDate', '') },
+    filters.availableOnly && !filters.availableDate && { label: translateText('customerAvailableOnly'), clear: () => onChangeFilter('availableOnly', '') },
+  ].filter(Boolean);
+
+  return <section className="customer-workspace">
+    {feedback}
+    <PageHeading eyebrow="DISCOVERY" title="Search services" description="Find verified services by name, features, category, provider, or location." />
+    <form className="panel customer-service-search-panel" role="search" onSubmit={onSubmitSearch}>
+      <label className="field"><span>{translateText('customerSearchServices')}</span><div className="customer-search"><Search size={16}/><input type="search" maxLength="120" list="customer-service-search-suggestions" value={serviceSearchInput} onChange={(event) => onSearchInput(event.target.value)} placeholder={translateText('customerSearchServicesPlaceholder')} aria-label={translateText('customerSearchServices')} /></div></label>
+      <datalist id="customer-service-search-suggestions">{suggestions.map((value) => <option value={value} key={value} />)}</datalist>
+      <div className="customer-service-search-actions"><button className="button" type="submit" disabled={catalogLoading}>{translateText('customerSearchButton')}</button>{serviceSearchInput && <button className="button secondary" type="button" onClick={onClearSearch} aria-label="Clear search"><X size={16}/>{translateText('customerClearSearch')}</button>}</div>
+    </form>
+    <div className="panel customer-catalog-filters customer-service-filters">
+      <label className="field"><span>{translateText('customerCategory')}</span><select value={filters.category} onChange={(event) => onChangeFilter('category', event.target.value)}><option value="">{translateText('customerAllCategories')}</option>{categories.map((category) => <option value={category.name} key={category.id}>{category.name}</option>)}</select></label>
+      <label className="field"><span>{translateText('customerLocation')}</span><input value={filters.location} maxLength="120" onChange={(event) => onChangeFilter('location', event.target.value)} placeholder={translateText('customerAnyCity')} /></label>
+      <label className="field"><span>{translateText('customerMinimumPrice')} (ETB)</span><input type="number" min="0" step="0.01" value={filters.minPrice} onChange={(event) => onChangeFilter('minPrice', event.target.value)} /></label>
+      <label className="field"><span>{translateText('customerMaximumPrice')} (ETB)</span><input type="number" min="0" step="0.01" value={filters.maxPrice} onChange={(event) => onChangeFilter('maxPrice', event.target.value)} /></label>
+      <label className="field"><span>{translateText('customerMinimumRating')}</span><select value={filters.minRating} onChange={(event) => onChangeFilter('minRating', event.target.value)}><option value="">{translateText('customerAnyRating')}</option><option value="3">3+</option><option value="4">4+</option><option value="4.5">4.5+</option></select></label>
+      <label className="field"><span>{translateText('customerMinimumReviews')}</span><input type="number" min="0" value={filters.minReviews} onChange={(event) => onChangeFilter('minReviews', event.target.value)} placeholder="0" /></label>
+      <label className="field"><span>{translateText('customerMaximumReviews')}</span><input type="number" min="0" value={filters.maxReviews} onChange={(event) => onChangeFilter('maxReviews', event.target.value)} placeholder={translateText('customerNoMaximum')} /></label>
+      <label className="field"><span>{translateText('customerServiceFeature')}</span><input value={filters.feature} maxLength="120" onChange={(event) => onChangeFilter('feature', event.target.value)} placeholder={translateText('customerSearchFeatures')} /></label>
+      <label className="field"><span>{translateText('customerAvailableOn')}</span><input type="date" min={new Date().toISOString().slice(0, 10)} value={filters.availableDate} onChange={(event) => onChangeFilter('availableDate', event.target.value)} /></label>
+      <label className="field"><span>{translateText('customerAvailability')}</span><select value={filters.availableOnly} onChange={(event) => onChangeFilter('availableOnly', event.target.value)}><option value="">{translateText('customerAnyAvailability')}</option><option value="true">{translateText('customerAvailableOnly')}</option></select></label>
+      <label className="field"><span>{translateText('customerSortBy')}</span><select value={filters.sort} onChange={(event) => onChangeFilter('sort', event.target.value)}><option value="relevance">{translateText('customerSortRelevant')}</option><option value="highest-rated">{translateText('customerSortHighestRated')}</option><option value="most-reviewed">{translateText('customerSortMostReviewed')}</option><option value="price-low">{translateText('customerSortPriceLow')}</option><option value="price-high">{translateText('customerSortPriceHigh')}</option><option value="newest">{translateText('customerSortNewest')}</option><option value="popular">{translateText('customerSortPopular')}</option></select></label>
+      <div className="customer-service-filter-actions"><span className="customer-directory-scope"><BadgeCheck size={15}/>{translateText('customerVerifiedServicesOnly')}</span><button className="button small" type="button" onClick={onRetry}>{translateText('customerApplyFilters')}</button><button className="button secondary small" type="button" onClick={onClearFilters} disabled={!activeFilters.length && filters.sort === 'relevance'}>{translateText('customerClearFilters')}</button></div>
+    </div>
+    <div className="customer-service-discovery-bar">
+      {popularSearches.length > 0 && <div className="customer-service-keywords"><strong>{translateText('customerPopularSearches')}</strong>{popularSearches.map((category) => <button className="customer-category-chip" type="button" key={category.id} onClick={() => onChangeFilter('category', category.name)}>{category.name}</button>)}</div>}
+      {serviceSearchHistory.length > 0 && <div className="customer-service-keywords"><strong>{translateText('customerRecentSearches')}</strong>{serviceSearchHistory.slice(0, 5).map((term) => <button className="customer-category-chip" type="button" key={term} onClick={() => { onSearchInput(term); onRememberSearch(term); }}>{term}</button>)}</div>}
+    </div>
+    {activeFilters.length > 0 && <div className="customer-active-filters" aria-label={translateText('customerActiveFilters')}><strong>{translateText('customerActiveFilters')}</strong>{activeFilters.map((filter) => <button type="button" className="customer-active-filter" key={filter.label} onClick={filter.clear}>{filter.label}<X size={13}/></button>)}</div>}
+    <div className="customer-vendor-results-bar"><span>{catalogPage.total} {translateText('customerServiceResults')}</span><div className="customer-vendor-results-actions"><button className="button secondary small" type="button" disabled={comparedServiceIds.length === 0} onClick={() => document.getElementById('customer-service-comparison')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>{translateText('customerCompareServices')} ({comparedServiceIds.length}/4)</button><button className={`button secondary small ${serviceDisplay === 'grid' ? 'active' : ''}`} type="button" aria-pressed={serviceDisplay === 'grid'} onClick={() => setServiceDisplay('grid')}>{translateText('customerGridView')}</button><button className={`button secondary small ${serviceDisplay === 'list' ? 'active' : ''}`} type="button" aria-pressed={serviceDisplay === 'list'} onClick={() => setServiceDisplay('list')}>{translateText('customerListView')}</button></div></div>
+    {catalogLoading
+      ? <div className="customer-service-skeletons" role="status" aria-label={translateText('customerLoadingServices')}>{[1, 2, 3].map((item) => <div className="panel customer-service-skeleton" key={item}><span/><span/><span/></div>)}</div>
+      : catalogRows.length
+        ? <div className={`customer-catalog-grid${serviceDisplay === 'list' ? ' customer-catalog-list' : ''}`}>{catalogRows.map((service) => {
+          const features = [...new Set((service.packages || []).flatMap((item) => item.includedFeatures || []))].filter((feature) => typeof feature === 'string').slice(0, 3);
+          const isSaved = savedServiceIds.includes(Number(service.id));
+          const isCompared = comparedServiceIds.includes(Number(service.id));
+          return <article className="panel customer-catalog-card customer-service-card" key={service.id}>
+            <ServiceCatalogImage service={service}/>
+            <div className="customer-catalog-card-content">
+              <div className="customer-vendor-card-badges"><span className="pill">{service.category || translateText('customerUncategorizedService')}</span>{service.verified && <span className="customer-verified-badge"><BadgeCheck size={13}/>{translateText('customerVerified')}</span>}</div>
+              <h3>{service.title}</h3>
+              <p className="customer-vendor-category">{service.vendorName}</p>
+              <p className="customer-vendor-location">{service.city || translateText('customerLocationNotListed')}</p>
+              <p className="customer-vendor-description">{service.description || translateText('customerNoServiceDescription')}</p>
+              {service.reviewCount > 0
+                ? <p className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(service.rating).toFixed(1)} / 5 · {service.reviewCount} {translateText('customerReviews')}</p>
+                : <p className="customer-no-reviews">{translateText('customerNoReviews')}</p>}
+              <div className="customer-vendor-card-price"><small>{translateText('customerServicePrice')}</small><strong>{service.price === null || service.price === undefined ? translateText('customerPriceOnRequest') : money(service.price, service.currency)}</strong></div>
+              {service.available && <span className="customer-availability-badge"><Check size={13}/>{filters.availableDate ? `${translateText('customerAvailablePrefix')} ${filters.availableDate}` : translateText('customerAvailabilityListed')}</span>}
+              {features.length > 0 && <div className="customer-service-features">{features.map((feature) => <span key={feature}>{feature}</span>)}</div>}
+            </div>
+            <div className="customer-catalog-actions">
+              <button className="button secondary small" type="button" onClick={() => onOpenService(service.id)}>{translateText('customerViewDetails')}</button>
+              <button className="button secondary small" type="button" aria-pressed={isSaved} disabled={busy} onClick={() => onToggleFavorite(service)}>{isSaved ? translateText('customerSaved') : translateText('customerSaveService')}</button>
+              <button className="button secondary small" type="button" aria-pressed={isCompared} onClick={() => onToggleCompare(service.id)}>{isCompared ? translateText('customerRemoveCompare') : translateText('customerCompareServices')}</button>
+              <button className="button secondary small" type="button" onClick={() => onRequestService({ kind: 'quote', service })}>{translateText('customerRequestQuotation')}</button>
+              <button className="button small" type="button" onClick={() => onRequestService({ kind: 'booking', service })}>{translateText('customerBookService')}</button>
+            </div>
+          </article>;
+        })}</div>
+        : <div className="customer-vendor-empty"><EmptyState>{catalogPage.total ? translateText('customerNoServicesPage') : translateText('customerNoMatchingServices')}</EmptyState>{activeFilters.length > 0 && <button className="button secondary small" type="button" onClick={onClearFilters}>{translateText('customerClearFilters')}</button>}</div>}
+    {!catalogLoading && catalogRows.length > 0 && <div className="pagination-row"><span>{catalogPage.total} {translateText('customerServiceResults')}</span><button className="button secondary small" type="button" disabled={catalogPage.page <= 1} onClick={() => onChangePage(catalogPage.page - 1)}><ChevronLeft size={16}/>{translateText('customerPrevious')}</button><span>{translateText('customerPage')} {catalogPage.page} {translateText('customerOf')} {catalogPage.totalPages}</span><button className="button secondary small" type="button" disabled={catalogPage.page >= catalogPage.totalPages} onClick={() => onChangePage(catalogPage.page + 1)}>{translateText('customerNext')} <ChevronRight size={16}/></button></div>}
+    <section className="panel customer-service-comparison" id="customer-service-comparison"><div className="panel-header"><h3>{translateText('customerServiceComparison')}</h3><button className="button secondary small" type="button" disabled={!comparedServiceIds.length} onClick={onClearCompare}>{translateText('customerClearComparison')}</button></div>
+      {comparisonLoading ? <div className="loading" role="status"><span className="spinner"/>{translateText('customerLoadingComparison')}</div>
+        : comparedServices.length > 0 ? <div className="customer-comparison-scroll"><table className="customer-comparison-table"><thead><tr><th>{translateText('customerCompareAttribute')}</th>{comparedServices.map((service) => <th key={service.id}><button className="text-action" type="button" onClick={() => onOpenService(service.id)}>{service.title}</button><button className="customer-comparison-remove" type="button" aria-label={`${translateText('customerRemove')} ${service.title}`} onClick={() => onToggleCompare(service.id)}><X size={14}/></button></th>)}</tr></thead><tbody>
+        {[
+          [translateText('customerVendor'), (service) => service.vendorName || '—'],
+          [translateText('customerCategory'), (service) => service.category || '—'],
+          [translateText('customerServicePrice'), (service) => service.price == null ? translateText('customerPriceOnRequest') : money(service.price, service.currency)],
+          [translateText('customerRating'), (service) => service.reviewCount > 0 ? `${Number(service.rating).toFixed(1)} / 5` : translateText('customerNoReviews')],
+          [translateText('customerReviewCount'), (service) => String(service.reviewCount || 0)],
+          [translateText('customerLocation'), (service) => service.city || '—'],
+          [translateText('customerAvailability'), (service) => service.available ? translateText('customerAvailabilityListed') : translateText('customerAvailabilityNotListed')],
+          [translateText('customerFeatures'), (service) => [...new Set((service.packages || []).flatMap((item) => item.includedFeatures || []))].join(', ') || '—'],
+          [translateText('customerPackages'), (service) => (service.packages || []).map((item) => `${item.name}: ${money(item.price, item.currency)}`).join('; ') || '—'],
+        ].map(([label, valueFor]) => <tr key={label}><th scope="row">{label}</th>{comparedServices.map((service) => <td key={service.id}>{valueFor(service)}</td>)}</tr>)}
+      </tbody></table></div>
+        : <p className="muted">{translateText('customerNoServicesCompared')}</p>}
+    </section>
+    {requestService && <CustomerRequestModal item={requestService} events={events} user={user} api={api} mutate={mutate} busy={busy} onClose={onCloseRequest} />}
+  </section>;
 }
 
 export default function CustomerWorkspace({ view, data = {}, api, user = {}, onNavigate, onNavigatePublic, onRefresh, onUserChange }) {
@@ -125,17 +344,36 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   const profile = data?.profile ?? EMPTY_OBJECT;
   const overview = data?.overview ?? EMPTY_OBJECT;
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [comparisonSelection] = useState(() => {
+    try { return { ids: getComparedVendorIds(), error: '' }; }
+    catch (issue) { return { ids: [], error: issue.message || 'Saved comparison data could not be read.' }; }
+  });
+  const [serviceComparisonSelection] = useState(() => {
+    try { return { ids: getComparedServiceIds(), error: '' }; }
+    catch (issue) { return { ids: [], error: issue.message || 'Saved service comparison data could not be read.' }; }
+  });
+  const [comparedVendorIds, setComparedVendorIds] = useState(comparisonSelection.ids);
+  const [comparedServiceIds, setComparedServiceIds] = useState(serviceComparisonSelection.ids);
+  const [comparedServices, setComparedServices] = useState([]);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [error, setError] = useState(comparisonSelection.error || serviceComparisonSelection.error);
   const [notice, setNotice] = useState('');
   const [filters, setFilters] = useState(() => getCustomerCatalogUrlState().filters);
   const [catalogRows, setCatalogRows] = useState([]);
   const [catalogPage, setCatalogPage] = useState(() => ({ ...getCustomerCatalogUrlState(), total: 0, totalPages: 1, limit: 12 }));
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [serviceSearchInput, setServiceSearchInput] = useState(() => getCustomerCatalogUrlState().filters.search);
+  const [vendorSearchInput, setVendorSearchInput] = useState(() => getCustomerCatalogUrlState().filters.search);
+  const [vendorSearchHistory, setVendorSearchHistory] = useState([]);
+  const [serviceSearchHistory, setServiceSearchHistory] = useState([]);
+  const [vendorDisplay, setVendorDisplay] = useState('grid');
+  const [serviceDisplay, setServiceDisplay] = useState('grid');
+  const [catalogReload, setCatalogReload] = useState(0);
   const [eventForm, setEventForm] = useState({ title: '', type: '', description: '', city: '', venue: '', startDate: '', endDate: '', guestCount: '', budget: '', capacity: '', notes: '', coverImageUrl: '' });
   const [editingEventId, setEditingEventId] = useState(null);
   const [eventFormOpen, setEventFormOpen] = useState(false);
   const [requestService, setRequestService] = useState(null);
+  const [savedServiceIds, setSavedServiceIds] = useState(() => savedServices.map((service) => Number(service.id)));
   const [requestForm, setRequestForm] = useState({ eventId: '', guestCount: '', budget: '', notes: '' });
   const [quoteReasons, setQuoteReasons] = useState({});
   const [messageForm, setMessageForm] = useState({ bookingId: '', body: '' });
@@ -155,6 +393,10 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   }, [profile, user.full_name, user.name, user.phone]);
 
   useEffect(() => {
+    setSavedServiceIds(savedServices.map((service) => Number(service.id)));
+  }, [data?.['saved-services']]);
+
+  useEffect(() => {
     if (view !== 'services') return undefined;
     const syncServiceSearch = () => {
       if (new URLSearchParams(window.location.search).get('view') !== 'services') return;
@@ -172,6 +414,93 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   }, [view]);
 
   useEffect(() => {
+    if (view !== 'vendors') return undefined;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      setFilters((current) => current.search === vendorSearchInput
+        ? current
+        : { ...current, search: vendorSearchInput });
+      setCatalogPage((current) => current.page === 1 ? current : { ...current, page: 1 });
+    }, 300);
+    try {
+      const saved = window.localStorage.getItem(VENDOR_SEARCH_HISTORY_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+          throw new Error('Saved vendor search history is invalid.');
+        }
+        if (active) setVendorSearchHistory(parsed.slice(0, 6));
+      }
+    } catch (issue) {
+      if (active) setError(issue.message || 'Vendor search history could not be loaded.');
+    }
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [view, vendorSearchInput]);
+
+  useEffect(() => {
+    if (view !== 'services') return undefined;
+    try {
+      const saved = window.localStorage.getItem(SERVICE_SEARCH_HISTORY_KEY);
+      if (!saved) {
+        setServiceSearchHistory([]);
+        return undefined;
+      }
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+        throw new Error('Saved service search history is invalid.');
+      }
+      setServiceSearchHistory(parsed.slice(0, 6));
+    } catch (issue) {
+      setError(issue.message || 'Service search history could not be loaded.');
+    }
+    return undefined;
+  }, [view]);
+
+  useEffect(() => {
+    if (view !== 'services' || serviceSearchInput.trim() === filters.search) return undefined;
+    const timer = window.setTimeout(() => {
+      const search = serviceSearchInput.trim();
+      const nextFilters = { ...filters, search };
+      setFilters(nextFilters);
+      setCatalogPage((current) => ({ ...current, page: 1 }));
+      updateCustomerCatalogUrl(nextFilters, 1);
+      if (search) {
+        try {
+          const history = [search, ...serviceSearchHistory.filter((item) => item.toLowerCase() !== search.toLowerCase())].slice(0, 6);
+          window.localStorage.setItem(SERVICE_SEARCH_HISTORY_KEY, JSON.stringify(history));
+          setServiceSearchHistory(history);
+        } catch (issue) {
+          setError(issue.message || 'Service search history could not be saved.');
+        }
+      }
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [filters, serviceSearchHistory, serviceSearchInput, view]);
+
+  useEffect(() => {
+    if (view !== 'services' || comparedServiceIds.length === 0) {
+      setComparedServices([]);
+      return undefined;
+    }
+    let active = true;
+    setComparisonLoading(true);
+    api(`/platform/services?ids=${comparedServiceIds.join(',')}&limit=4`)
+      .then((response) => {
+        if (active) setComparedServices(response?.data || []);
+      })
+      .catch((issue) => {
+        if (active) setError(issue.response?.data?.error || issue.message || 'Compared services could not be loaded.');
+      })
+      .finally(() => {
+        if (active) setComparisonLoading(false);
+      });
+    return () => { active = false; };
+  }, [api, comparedServiceIds, view]);
+
+  useEffect(() => {
     if (!['vendors', 'services'].includes(view)) return undefined;
     let active = true;
     async function loadCatalog() {
@@ -180,7 +509,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
       try {
         const sort = view === 'services' && !SERVICE_SORTS.has(filters.sort)
           ? 'relevance'
-          : view === 'vendors' && !['recommended', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az'].includes(filters.sort)
+          : view === 'vendors' && !['recommended', 'popular', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added'].includes(filters.sort)
             ? 'recommended'
             : filters.sort;
         const params = new URLSearchParams({ page: String(catalogPage.page || 1), limit: '12', sort });
@@ -190,8 +519,13 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
         if (filters.minPrice !== '') params.set('minPrice', filters.minPrice);
         if (filters.maxPrice !== '') params.set('maxPrice', filters.maxPrice);
         if (filters.minRating !== '') params.set('minRating', filters.minRating);
+        if (view === 'services' && filters.minReviews !== '') params.set('minReviews', filters.minReviews);
+        if (view === 'services' && filters.maxReviews !== '') params.set('maxReviews', filters.maxReviews);
+        if (view === 'services' && filters.feature.trim()) params.set('feature', filters.feature.trim());
         if (view === 'vendors' && filters.verified) params.set('verified', filters.verified);
-        if (view === 'services' && filters.availableOnly) params.set('availableOnly', filters.availableOnly);
+        if (filters.availableOnly) params.set('availableOnly', filters.availableOnly);
+        if (filters.availableDate) params.set('availableDate', filters.availableDate);
+        if (view === 'vendors' && filters.featured) params.set('filter', 'featured');
         const response = await api(`/customer/${view}?${params}`);
         if (!active) return;
         setCatalogRows(Array.isArray(response?.data) ? response.data.filter(Boolean) : []);
@@ -212,7 +546,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
     }
     loadCatalog();
     return () => { active = false; };
-  }, [api, catalogPage.page, filters, view]);
+  }, [api, catalogPage.page, catalogReload, filters, view]);
 
   async function mutate(action, message) {
     setBusy(true);
@@ -220,7 +554,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
     setNotice('');
     try {
       const result = await action();
-      setNotice(message);
+      setNotice(typeof message === 'function' ? message(result) : message);
       onRefresh();
       return result;
     } catch (issue) {
@@ -234,10 +568,27 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   const feedback = <>{error && <div className="alert error" role="alert">{error}</div>}{notice && <div className="alert success" role="status">{notice}</div>}</>;
   const changeFilter = (key, value) => {
     setCatalogPage((current) => ({ ...current, page: 1 }));
-    const nextFilters = { ...filters, [key]: value };
+    const nextFilters = {
+      ...filters,
+      [key]: value,
+      ...(key === 'availableDate' && view === 'services' ? { availableOnly: value ? 'true' : '' } : {}),
+      ...(key === 'availableOnly' && view === 'services' && !value ? { availableDate: '' } : {}),
+    };
     setFilters(nextFilters);
     if (view === 'services') updateCustomerCatalogUrl(nextFilters, 1);
   };
+
+  function rememberServiceSearch(value) {
+    const search = String(value || '').trim();
+    if (!search) return;
+    try {
+      const history = [search, ...serviceSearchHistory.filter((item) => item.toLowerCase() !== search.toLowerCase())].slice(0, 6);
+      window.localStorage.setItem(SERVICE_SEARCH_HISTORY_KEY, JSON.stringify(history));
+      setServiceSearchHistory(history);
+    } catch (issue) {
+      setError(issue.message || 'Service search history could not be saved.');
+    }
+  }
 
   function submitServiceSearch(event) {
     event.preventDefault();
@@ -245,6 +596,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
     setFilters(nextFilters);
     setCatalogPage((current) => ({ ...current, page: 1 }));
     updateCustomerCatalogUrl(nextFilters, 1);
+    rememberServiceSearch(nextFilters.search);
   }
 
   function clearServiceSearch() {
@@ -253,6 +605,64 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
     setFilters(nextFilters);
     setCatalogPage((current) => ({ ...current, page: 1 }));
     updateCustomerCatalogUrl(nextFilters, 1);
+  }
+
+  function clearServiceFilters() {
+    const cleared = {
+      search: '',
+      category: '',
+      location: '',
+      minPrice: '',
+      maxPrice: '',
+      minRating: '',
+      minReviews: '',
+      maxReviews: '',
+      feature: '',
+      availableOnly: '',
+      availableDate: '',
+      verified: '',
+      sort: 'relevance',
+    };
+    setServiceSearchInput('');
+    setFilters(cleared);
+    setCatalogPage((current) => ({ ...current, page: 1 }));
+    updateCustomerCatalogUrl(cleared, 1);
+  }
+
+  function toggleServiceComparison(serviceId) {
+    try {
+      const result = toggleComparedService(serviceId);
+      setComparedServiceIds(result.ids);
+      setError(result.limitReached ? 'You can compare up to four services at a time.' : '');
+    } catch (issue) {
+      setError(issue.message || 'Service comparison could not be updated.');
+    }
+  }
+
+  function clearServiceComparison() {
+    try {
+      clearComparedServices();
+      setComparedServiceIds([]);
+      setComparedServices([]);
+      setError('');
+    } catch (issue) {
+      setError(issue.message || 'Service comparison could not be cleared.');
+    }
+  }
+
+  function toggleServiceFavorite(service) {
+    const serviceId = Number(service.id);
+    const isSaved = savedServiceIds.includes(serviceId);
+    return mutate(async () => {
+      const result = await api(isSaved ? `/customer/saved-services/${serviceId}` : '/customer/saved-services', {
+        method: isSaved ? 'DELETE' : 'POST',
+        ...(isSaved ? {} : { body: JSON.stringify({ serviceId }) }),
+      });
+      setSavedServiceIds((current) => isSaved
+        ? current.filter((id) => id !== serviceId)
+        : [...new Set([...current, serviceId])]);
+      return result;
+    }, isSaved ? 'Service removed from saved services.' : 'Service saved to your favorites.');
   }
 
   function changeCatalogPage(page) {
@@ -294,6 +704,37 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
 
   function requestVendorMutation(vendorId) {
     return mutate(() => api('/customer/favorites', { method: 'POST', body: JSON.stringify({ vendorId: Number(vendorId) }) }), 'Vendor added to wishlist.');
+  }
+
+  function toggleVendorFavorite(vendor) {
+    const saved = favorites.some((favorite) => Number(favorite.id) === Number(vendor.id));
+    if (saved) {
+      return mutate(() => api(`/customer/favorites/${vendor.id}`, { method: 'DELETE' }), 'Vendor removed from wishlist.');
+    }
+    return requestVendorMutation(vendor.id);
+  }
+
+  function rememberVendorSearch(value) {
+    const search = String(value || '').trim();
+    if (!search) return;
+    try {
+      const history = [search, ...vendorSearchHistory.filter((item) => item.toLowerCase() !== search.toLowerCase())].slice(0, 6);
+      window.localStorage.setItem(VENDOR_SEARCH_HISTORY_KEY, JSON.stringify(history));
+      setVendorSearchHistory(history);
+    } catch (issue) {
+      setError(issue.message || 'Vendor search history could not be saved.');
+    }
+  }
+
+  function toggleVendorComparison(vendorId) {
+    try {
+      const result = toggleComparedVendor(vendorId);
+      setComparedVendorIds(result.ids);
+      if (result.limitReached) setError('You can compare up to four vendors at a time.');
+      else setError('');
+    } catch (issue) {
+      setError(issue.message || 'Vendor comparison could not be updated.');
+    }
   }
 
   if (view === 'overview') {
@@ -347,10 +788,48 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   if (view === 'vendors' || view === 'services') {
     const isVendors = view === 'vendors';
     const categoryOptions = categories;
+    if (!isVendors) {
+      return <CustomerServiceDiscovery
+        feedback={feedback}
+        user={user}
+        api={api}
+        mutate={mutate}
+        busy={busy}
+        events={events}
+        requestService={requestService}
+        onCloseRequest={() => setRequestService(null)}
+        categories={categoryOptions}
+        filters={filters}
+        onChangeFilter={changeFilter}
+        serviceSearchInput={serviceSearchInput}
+        onSearchInput={setServiceSearchInput}
+        onSubmitSearch={submitServiceSearch}
+        onClearSearch={clearServiceSearch}
+        onClearFilters={clearServiceFilters}
+        serviceSearchHistory={serviceSearchHistory}
+        onRememberSearch={rememberServiceSearch}
+        catalogRows={catalogRows}
+        catalogPage={catalogPage}
+        catalogLoading={catalogLoading}
+        onRetry={() => setCatalogReload((current) => current + 1)}
+        serviceDisplay={serviceDisplay}
+        setServiceDisplay={setServiceDisplay}
+        savedServiceIds={savedServiceIds}
+        onToggleFavorite={toggleServiceFavorite}
+        comparedServiceIds={comparedServiceIds}
+        onToggleCompare={toggleServiceComparison}
+        comparedServices={comparedServices}
+        comparisonLoading={comparisonLoading}
+        onClearCompare={clearServiceComparison}
+        onChangePage={changeCatalogPage}
+        onOpenService={(serviceId) => onNavigatePublic(`/services/${serviceId}`)}
+        onRequestService={setRequestService}
+      />;
+    }
     return <section className="customer-workspace">{feedback}<PageHeading eyebrow="DISCOVERY" title={isVendors ? 'Browse vendors' : 'Search services'} description="Search, compare, save, and request a service for one of your events." />
       <div className="panel customer-catalog-filters">
         {isVendors
-          ? <label className="field"><span>Search</span><div className="customer-search"><Search size={16}/><input value={filters.search} onChange={(event) => changeFilter('search', event.target.value)} placeholder="Vendor name" /></div></label>
+          ? <label className="field customer-vendor-search-field"><span>{translateText('customerSearchVendorsServices')}</span><div className="customer-search"><Search size={16}/><input type="search" list="customer-vendor-search-suggestions" value={vendorSearchInput} onChange={(event) => setVendorSearchInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') rememberVendorSearch(vendorSearchInput); }} placeholder={translateText('customerSearchVendorPlaceholder')} aria-label={translateText('customerSearchVendorsServices')} />{vendorSearchInput && <button className="customer-search-clear" type="button" aria-label="Clear search" onClick={() => { setVendorSearchInput(''); rememberVendorSearch(''); }}><X size={15}/></button>}</div><datalist id="customer-vendor-search-suggestions">{vendorSearchHistory.map((term) => <option value={term} key={`history-${term}`} />)}{categoryOptions.map((category) => <option value={category.name} key={`category-${category.id}`} />)}</datalist></label>
           : <form className="customer-service-search" role="search" onSubmit={submitServiceSearch}>
             <label className="field"><span>Search services</span><div className="customer-search"><Search size={16}/><input type="search" maxLength="120" value={serviceSearchInput} onChange={(event) => setServiceSearchInput(event.target.value)} placeholder="Name, category, vendor, description, or city" /></div></label>
             <div className="customer-service-search-actions"><button className="button" type="submit" disabled={catalogLoading}>Search</button>{serviceSearchInput && <button className="button secondary" type="button" onClick={clearServiceSearch} aria-label="Clear search" title="Clear search"><X size={16}/>Clear</button>}</div>
@@ -360,23 +839,28 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
         <label className="field"><span>Minimum price</span><input type="number" min="0" value={filters.minPrice} onChange={(event) => changeFilter('minPrice', event.target.value)} /></label>
         <label className="field"><span>Maximum price</span><input type="number" min="0" value={filters.maxPrice} onChange={(event) => changeFilter('maxPrice', event.target.value)} /></label>
         <label className="field"><span>Minimum rating</span><select value={filters.minRating} onChange={(event) => changeFilter('minRating', event.target.value)}><option value="">Any rating</option><option value="3">3+ stars</option><option value="4">4+ stars</option><option value="4.5">4.5+ stars</option></select></label>
-        {isVendors && <label className="field"><span>Verification status</span><select value={filters.verified} onChange={(event) => changeFilter('verified', event.target.value)}><option value="true">Verified &amp; approved</option><option value="">All public vendors</option></select></label>}
-        {isVendors ? <label className="field"><span>Sort by</span><select value={filters.sort} onChange={(event) => changeFilter('sort', event.target.value)}><option value="recommended">Recommended</option><option value="highest-rated">Highest rated</option><option value="most-reviewed">Most reviewed</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option></select></label>
+        {isVendors && <><label className="field"><span>Verification status</span><select value={filters.verified} onChange={(event) => changeFilter('verified', event.target.value)}><option value="">{translateText('customerAllApprovedVendors')}</option><option value="true">{translateText('customerVerifiedOnly')}</option></select></label><label className="field"><span>{translateText('customerAvailabilityDate')}</span><input type="date" min={new Date().toISOString().slice(0, 10)} value={filters.availableDate || ''} onChange={(event) => changeFilter('availableDate', event.target.value)} /></label><label className="field"><span>Availability</span><select value={filters.availableOnly} onChange={(event) => changeFilter('availableOnly', event.target.value)}><option value="">Any availability</option><option value="true">{translateText('customerAvailableOnly')}</option></select></label><label className="field"><span>Vendor type</span><select value={filters.featured ? 'featured' : ''} onChange={(event) => changeFilter('featured', event.target.value === 'featured')}><option value="">{translateText('customerAllApprovedVendors')}</option><option value="featured">{translateText('customerFeaturedOnly')}</option></select></label></>}
+        {isVendors ? <label className="field"><span>Sort by</span><select value={filters.sort} onChange={(event) => changeFilter('sort', event.target.value)}><option value="recommended">{translateText('customerSortRecommended')}</option><option value="popular">{translateText('customerSortPopular')}</option><option value="highest-rated">{translateText('customerSortHighestRated')}</option><option value="most-reviewed">{translateText('customerSortMostReviewed')}</option><option value="price-low">{translateText('customerSortPriceLow')}</option><option value="price-high">{translateText('customerSortPriceHigh')}</option><option value="recently-added">{translateText('customerSortRecentlyAdded')}</option></select></label>
           : <><label className="field"><span>Availability</span><select value={filters.availableOnly} onChange={(event) => changeFilter('availableOnly', event.target.value)}><option value="">Any availability</option><option value="true">Available only</option></select></label><label className="field"><span>Sort by</span><select value={filters.sort} onChange={(event) => changeFilter('sort', event.target.value)}><option value="relevance">Relevance</option><option value="price-low">Price: low to high</option><option value="price-high">Price: high to low</option><option value="highest-rated">Highest rated</option></select></label></>}
       </div>
-      {isVendors && <p className="customer-directory-scope"><BadgeCheck size={15}/>Only active vendors approved for public discovery are shown.</p>}
-      {catalogLoading ? <div className="loading"><span className="spinner"/>Loading catalog...</div> : <div className="customer-catalog-grid">{catalogRows.map((item) => {
-        const bookableService = isVendors ? item.services?.find((service) => Number(service.price) > 0) : null;
+      {isVendors && <><div className="customer-vendor-discovery-bar"><div className="customer-vendor-categories" aria-label="Vendor categories"><button type="button" className={`customer-category-chip ${!filters.category ? 'selected' : ''}`} onClick={() => changeFilter('category', '')}>All <span>{categoryOptions.reduce((sum, category) => sum + (Number(category.vendorCount) || 0), 0)}</span></button>{categoryOptions.map((category) => <button type="button" className={`customer-category-chip ${filters.category === category.name ? 'selected' : ''}`} key={category.id} onClick={() => changeFilter('category', filters.category === category.name ? '' : category.name)}>{category.name} <span>{Number(category.vendorCount) || 0}</span></button>)}</div><div className="customer-vendor-history">{vendorSearchHistory.length > 0 && <><span>{translateText('customerRecentVendorSearches')}</span>{vendorSearchHistory.slice(0, 4).map((term) => <button type="button" key={term} onClick={() => { setVendorSearchInput(term); rememberVendorSearch(term); }}>{term}</button>)}</>}</div></div><div className="customer-vendor-results-bar"><span>{catalogPage.total} {translateText(catalogPage.total === 1 ? 'customerVendor' : 'customerVendors')}{filters.category ? ` · ${filters.category}` : ''}</span><div className="customer-vendor-results-actions"><button className="button secondary small" type="button" onClick={() => { const cleared = { search: '', category: '', location: '', minPrice: '', maxPrice: '', minRating: '', availableOnly: '', availableDate: '', verified: '', featured: false, sort: 'recommended' }; setFilters(cleared); setVendorSearchInput(''); setCatalogPage((current) => ({ ...current, page: 1 })); }} disabled={!filters.search && !filters.category && !filters.location && !filters.minPrice && !filters.maxPrice && !filters.minRating && !filters.availableOnly && !filters.availableDate && !filters.verified && !filters.featured}>{translateText('customerClearFilters')}</button><button className="button secondary small" type="button" disabled={comparedVendorIds.length < 2} onClick={() => onNavigatePublic('/compare')}>{translateText('customerCompareVendors')}{comparedVendorIds.length ? ` (${comparedVendorIds.length})` : ''}</button><button className={`button secondary small ${vendorDisplay === 'grid' ? 'active' : ''}`} type="button" aria-pressed={vendorDisplay === 'grid'} onClick={() => setVendorDisplay('grid')}>{translateText('customerGridView')}</button><button className={`button secondary small ${vendorDisplay === 'list' ? 'active' : ''}`} type="button" aria-pressed={vendorDisplay === 'list'} onClick={() => setVendorDisplay('list')}>{translateText('customerListView')}</button></div></div><p className="customer-directory-scope"><BadgeCheck size={15}/>{translateText('customerOnlyApprovedVendors')} {translateText('customerRecommendationBasis')}</p></>}
+      {catalogLoading ? <div className="loading"><span className="spinner"/>{translateText('Loading catalog...')}</div> : <div className={`customer-catalog-grid${isVendors && vendorDisplay === 'list' ? ' customer-catalog-list' : ''}`}>{catalogRows.map((item) => {
+        const bookableService = isVendors ? item.services?.[0] : null;
+        const quoteService = isVendors ? item.services?.[0] : null;
+        const isSaved = isVendors && favorites.some((favorite) => Number(favorite.id) === Number(item.id));
+        const isCompared = isVendors && comparedVendorIds.includes(Number(item.id));
         return <article className="panel customer-catalog-card" key={item.id}>
         {isVendors ? <VendorDirectoryImage vendor={item}/> : (item.coverImageUrl || item.logoUrl || item.images?.[0]?.url) && <img src={item.coverImageUrl || item.logoUrl || item.images?.[0]?.url} alt={item.name || item.title} loading="lazy"/>}
-        <div className="customer-catalog-card-content"><div className="customer-vendor-card-badges"><span className={`pill ${item.verified ? 'verified' : 'active'}`}>{isVendors ? item.verified ? <><BadgeCheck size={12}/> Verified</> : 'Listing' : item.category}</span>{isVendors && item.reviewCount > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(item.rating).toFixed(1)} <small>({item.reviewCount})</small></span>}</div><h3>{isVendors ? item.business_name || item.name : item.title}</h3><p className="customer-vendor-category">{isVendors ? item.category || 'Category not listed' : `${item.vendorName} · ${item.category}`}</p><p className="customer-vendor-location">{isVendors ? item.city || 'Location not listed' : item.city}</p><p className="customer-vendor-description">{item.description || (isVendors ? 'No business description provided.' : 'No service description provided.')}</p>
+        <div className="customer-catalog-card-content"><div className="customer-vendor-card-badges"><span className={`pill ${item.verified ? 'verified' : 'active'}`}>{isVendors ? item.verified ? <><BadgeCheck size={12}/> Verified</> : 'Listing' : item.category}</span><span className="customer-vendor-card-labels">{isVendors && item.isFeatured && <span className="customer-featured-badge"><Sparkles size={12}/>{translateText('customerFeatured')}</span>}{isVendors && item.reviewCount > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(item.rating).toFixed(1)} <small>({item.reviewCount})</small></span>}</span></div><h3>{isVendors ? item.business_name || item.name : item.title}</h3><p className="customer-vendor-category">{isVendors ? item.category || 'Category not listed' : `${item.vendorName} · ${item.category}`}</p><p className="customer-vendor-location">{isVendors ? item.city || 'Location not listed' : item.city}</p><p className="customer-vendor-description">{item.description || (isVendors ? 'No business description provided.' : 'No service description provided.')}</p>
         <div className="customer-vendor-card-price"><small>Starting price</small><strong>{(isVendors ? item.priceFrom : item.price) === null || (isVendors ? item.priceFrom : item.price) === undefined ? 'Price on request' : money(isVendors ? item.priceFrom : item.price, item.currency)}</strong></div>
+          {isVendors && item.available && <span className="customer-availability-badge"><Check size={13}/>{filters.availableDate ? `${translateText('customerAvailablePrefix')} ${filters.availableDate}` : translateText('customerAvailabilityListed')}</span>}
+          {isVendors && Array.isArray(item.portfolio) && item.portfolio.length > 0 && <small className="customer-portfolio-count">{item.portfolio.length} portfolio {item.portfolio.length === 1 ? 'item' : 'items'}</small>}
           {Array.isArray(item.packages) && item.packages.length > 0 && <div className="customer-package-preview">{item.packages.filter(Boolean).slice(0, 2).map((pkg) => <span key={pkg.id}>{pkg.name}: {money(pkg.price, pkg.currency)}</span>)}</div>}
-        </div><div className="customer-catalog-actions">{isVendors ? <><button className="button secondary small" type="button" onClick={() => onNavigatePublic(`/vendors/${item.id}`)}>View details</button>{bookableService && <button className="button small" type="button" onClick={() => setRequestService({ kind: 'booking', service: bookableService })}>Request booking</button>}<button className="button secondary small" type="button" disabled={busy} onClick={() => requestVendorMutation(item.id)}>Save vendor</button></> : <><button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'quote', service: item })}>Request quote</button><button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'save-service', service: item })}>Save service</button><button className="button small" type="button" onClick={() => setRequestService({ kind: 'booking', service: item })}>Request booking</button></>}</div>
+        </div><div className="customer-catalog-actions">{isVendors ? <><button className="button secondary small" type="button" onClick={() => onNavigatePublic(`/vendors/${item.id}`)}>{translateText('customerViewProfile')}</button>{quoteService && <button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'quote', service: quoteService })}>{translateText('customerRequestQuotation')}</button>}{bookableService && <button className="button small" type="button" onClick={() => setRequestService({ kind: 'booking', service: bookableService })}>{translateText('customerBookNow')}</button>}<button className="button secondary small" type="button" disabled={busy} aria-pressed={isSaved} onClick={() => toggleVendorFavorite(item)}>{isSaved ? translateText('customerSaved') : translateText('customerSaveVendor')}</button><button className="button secondary small" type="button" aria-pressed={isCompared} onClick={() => toggleVendorComparison(item.id)}>{isCompared ? translateText('customerRemoveCompare') : translateText('customerCompareVendors')}</button></> : <><button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'quote', service: item })}>Request quote</button><button className="button secondary small" type="button" onClick={() => setRequestService({ kind: 'save-service', service: item })}>Save service</button><button className="button small" type="button" onClick={() => setRequestService({ kind: 'booking', service: item })}>Request booking</button></>}</div>
       </article>;
-      })}{!catalogRows.length && <EmptyState>No matching records. Try changing the filters.</EmptyState>}</div>}
+      })}{!catalogRows.length && <div className="customer-vendor-empty"><EmptyState>{catalogPage.total === 0 && !filters.search && !filters.category && !filters.location && !filters.minPrice && !filters.maxPrice && !filters.minRating && !filters.availableOnly && !filters.availableDate && !filters.featured ? translateText('customerNoApprovedVendors') : translateText('customerNoMatchingRecords')}</EmptyState>{catalogPage.total === 0 && !filters.search && !filters.category && !filters.location && !filters.minPrice && !filters.maxPrice && !filters.minRating && !filters.availableOnly && !filters.availableDate && !filters.featured && <button className="button secondary small" type="button" onClick={() => onNavigate('services')}>{translateText('customerExploreServices')}</button>}</div>}</div>}
       {!catalogLoading && catalogRows.length > 0 && <div className="pagination-row"><span>{catalogPage.total} results</span><button className="button secondary small" type="button" disabled={catalogPage.page <= 1} onClick={() => changeCatalogPage(catalogPage.page - 1)}><ChevronLeft size={16}/> Previous</button><span>Page {catalogPage.page} of {catalogPage.totalPages}</span><button className="button secondary small" type="button" disabled={catalogPage.page >= catalogPage.totalPages} onClick={() => changeCatalogPage(catalogPage.page + 1)}>Next <ChevronRight size={16}/></button></div>}
-      {requestService && <CustomerRequestModal item={requestService} events={events} api={api} mutate={mutate} onClose={() => setRequestService(null)} />}
+      {requestService && <CustomerRequestModal item={requestService} events={events} user={user} api={api} mutate={mutate} busy={busy} onClose={() => setRequestService(null)} />}
     </section>;
   }
 

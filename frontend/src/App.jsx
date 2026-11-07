@@ -15,6 +15,7 @@ import {
   setPlatformSessionHint,
 } from './authSession.js';
 import { adminPathForSlug, adminSlugFromPath } from './adminNavigation.js';
+import { authenticateAdministrator, authenticatePlatformUser, getAdministratorRouteRedirect } from './adminAuthentication.js';
 import { withStableKeys } from './listKeys.js';
 import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageStatistics, getHomepageTestimonials } from './homepageUtils.js';
 import { getHomepageVenueCards } from './homepageVenueUtils.js';
@@ -27,32 +28,41 @@ import ContactTopBar from './ContactTopBar.js';
 import AppFooter from './AppFooter.js';
 import PublicNavigation from './PublicNavigation.jsx';
 import { getEventCategoryTranslationKey, getListingFiltersFromPath, validateCategoryName } from './publicNavigationUtils.js';
-import { CompareVendorsPage, EventCalendarPage, MyFavoritesPage, PopularVenuesPage, RecentlyViewedPage, RecommendationsPage } from './NavigationFeatures.jsx';
-import { getComparedVendorIds, toggleComparedVendor } from './navigationFeatureUtils.js';
+const CompareVendorsPage = React.lazy(() => import('./NavigationFeatures.jsx').then(({ CompareVendorsPage }) => ({ default: CompareVendorsPage })));
+const EventCalendarPage = React.lazy(() => import('./NavigationFeatures.jsx').then(({ EventCalendarPage }) => ({ default: EventCalendarPage })));
+const MyFavoritesPage = React.lazy(() => import('./NavigationFeatures.jsx').then(({ MyFavoritesPage }) => ({ default: MyFavoritesPage })));
+const PopularVenuesPage = React.lazy(() => import('./NavigationFeatures.jsx').then(({ PopularVenuesPage }) => ({ default: PopularVenuesPage })));
+const RecentlyViewedPage = React.lazy(() => import('./NavigationFeatures.jsx').then(({ RecentlyViewedPage }) => ({ default: RecentlyViewedPage })));
+const RecommendationsPage = React.lazy(() => import('./NavigationFeatures.jsx').then(({ RecommendationsPage }) => ({ default: RecommendationsPage })));
+import { getComparedServiceIds, getComparedVendorIds, toggleComparedService, toggleComparedVendor } from './navigationFeatureUtils.js';
 import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, findDemoLogin, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { createDemoDataService } from './demoData.js';
-import { EventCountdown, EventDetailsPage, MyEventBookingsPage, OrganizerEventsManager } from './EventsExperience.jsx';
-import OrganizerWorkspace from './OrganizerWorkspace.jsx';
-import VendorWorkspace from './VendorWorkspace.jsx';
-import CustomerWorkspace from './CustomerWorkspace.jsx';
-import { CustomerBookingDetailsPage } from './CustomerBookings.jsx';
-import ServiceCategoriesPage from './ServiceCategoriesPage.jsx';
+const EventCountdown = React.lazy(() => import('./EventsExperience.jsx').then(({ EventCountdown }) => ({ default: EventCountdown })));
+const EventDetailsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ EventDetailsPage }) => ({ default: EventDetailsPage })));
+const MyEventBookingsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ MyEventBookingsPage }) => ({ default: MyEventBookingsPage })));
+const OrganizerEventsManager = React.lazy(() => import('./EventsExperience.jsx').then(({ OrganizerEventsManager }) => ({ default: OrganizerEventsManager })));
+const OrganizerWorkspace = React.lazy(() => import('./OrganizerWorkspace.jsx'));
+const VendorWorkspace = React.lazy(() => import('./VendorWorkspace.jsx'));
+const CustomerWorkspace = React.lazy(() => import('./CustomerWorkspace.jsx'));
+const CustomerBookingDetailsPage = React.lazy(() => import('./CustomerBookings.jsx').then(({ CustomerBookingDetailsPage }) => ({ default: CustomerBookingDetailsPage })));
+const ServiceCategoriesPage = React.lazy(() => import('./ServiceCategoriesPage.jsx'));
+const AIChat = React.lazy(() => import('./AIChat.jsx'));
 import ErrorBoundary from './ErrorBoundary.jsx';
 import { formatCustomerMoney } from './customerMoney.js';
-import AdminUserManagement from './AdminUserManagement.jsx';
-import AdminRoleManagement from './AdminRoleManagement.jsx';
-import AdminVendorVerification from './AdminVendorVerification.jsx';
-import AdminEventManagement from './AdminEventManagement.jsx';
-import AdminBookingManagement from './AdminBookingManagement.jsx';
-import AdminReviewsComplaints from './AdminReviewsComplaints.jsx';
-import AdminPaymentManagement from './AdminPaymentManagement.jsx';
-import AdminNotifications from './AdminNotifications.jsx';
-import AdminAuditLogs from './AdminAuditLogs.jsx';
-import AdminProfile from './AdminProfile.jsx';
-import AdminSystemSettings from './AdminSystemSettings.jsx';
-import AdminHeroImages from './AdminHeroImages.jsx';
+const AdminUserManagement = React.lazy(() => import('./AdminUserManagement.jsx'));
+const AdminRoleManagement = React.lazy(() => import('./AdminRoleManagement.jsx'));
+const AdminVendorVerification = React.lazy(() => import('./AdminVendorVerification.jsx'));
+const AdminEventManagement = React.lazy(() => import('./AdminEventManagement.jsx'));
+const AdminBookingManagement = React.lazy(() => import('./AdminBookingManagement.jsx'));
+const AdminReviewsComplaints = React.lazy(() => import('./AdminReviewsComplaints.jsx'));
+const AdminPaymentManagement = React.lazy(() => import('./AdminPaymentManagement.jsx'));
+const AdminNotifications = React.lazy(() => import('./AdminNotifications.jsx'));
+const AdminAuditLogs = React.lazy(() => import('./AdminAuditLogs.jsx'));
+const AdminProfile = React.lazy(() => import('./AdminProfile.jsx'));
+const AdminSystemSettings = React.lazy(() => import('./AdminSystemSettings.jsx'));
+const AdminHeroImages = React.lazy(() => import('./AdminHeroImages.jsx'));
 import HomeHeroSlider from './HomeHeroSlider.jsx';
 import './vendorDirectory.css';
 
@@ -115,11 +125,10 @@ const dashboardMenuIcons = {
   reports: ChartNoAxesCombined,
 };
 
-function AuthBrand({ showEventHubLogo = true, showInstitutionLogo = true }) {
-  if (!showEventHubLogo && !showInstitutionLogo) return null;
+function AuthBrand({ showEventHubLogo = true }) {
+  if (!showEventHubLogo) return null;
   return <div className="auth-brand" aria-label="EventHub">
     {showEventHubLogo && <img className="auth-brand-logo" src="/eventhub-logo.png" alt="EventHub" />}
-    {showInstitutionLogo && <img className="auth-institution-logo" src="/institution-logo.png" alt="Institutional logo" />}
   </div>;
 }
 
@@ -202,7 +211,8 @@ function navigateBrowserPath(path) {
 }
 
 async function api(path, options={}) {
-  if (DEMO_AUTH_ENABLED && !path.startsWith('/contact')) {
+  const liveAdministratorRoutes = ['/auth/login', '/auth/me', '/auth/logout'];
+  if (DEMO_AUTH_ENABLED && !path.startsWith('/contact') && !liveAdministratorRoutes.includes(path)) {
     if (options.signal?.aborted) throw Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
     const route = path.split('?')[0];
     const method = options.method || 'GET';
@@ -705,7 +715,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
       <LanguageSelector user={user}/><ThemeToggle/>
       {isAuthenticated ? <details className="public-account" ref={accountMenuRef}>
       <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
-      <div className="public-account-menu"><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
+      <div className="public-account-menu">{role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/ai-chat'); }}>{translate('aiChatAssistant', language)}</button>}<button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
     </details> : <div className="public-auth-actions"><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></div>}</div>
   </div></header>{['error', 'rate-limited'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
 }
@@ -2600,8 +2610,17 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [requestOpen, setRequestOpen] = useState(false);
+  const [bookingOpen, setBookingOpen] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [serviceComparisonSelection] = useState(() => {
+    try { return { ids: getComparedServiceIds(), error: '' }; }
+    catch (issue) { return { ids: [], error: issue.message || 'Service comparison could not be read.' }; }
+  });
+  const [comparedServiceIds, setComparedServiceIds] = useState(serviceComparisonSelection.ids);
+  const [actionError, setActionError] = useState(serviceComparisonSelection.error);
+  const [actionNotice, setActionNotice] = useState('');
   const [reloadToken, setReloadToken] = useState(0);
-  const [requestTitle, setRequestTitle] = useState('publicBookService');
 
   useEffect(() => {
     let active = true;
@@ -2623,6 +2642,52 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
     loadService();
     return () => { active = false; };
   }, [serviceId, reloadToken]);
+
+  useEffect(() => {
+    if (user?.role !== 'customer') {
+      setSaved(false);
+      return undefined;
+    }
+    let active = true;
+    api('/customer/saved-services')
+      .then((response) => {
+        if (active) setSaved((response.data || []).some((item) => Number(item.id) === Number(serviceId)));
+      })
+      .catch((issue) => {
+        if (active) setActionError(issue.message || 'Saved services could not be loaded.');
+      });
+    return () => { active = false; };
+  }, [serviceId, user?.role]);
+
+  async function toggleSavedService() {
+    if (user?.role !== 'customer') return;
+    setFavoriteLoading(true);
+    setActionError('');
+    setActionNotice('');
+    try {
+      await api(saved ? `/customer/saved-services/${service.id}` : '/customer/saved-services', {
+        method: saved ? 'DELETE' : 'POST',
+        ...(saved ? {} : { body: JSON.stringify({ serviceId: Number(service.id) }) }),
+      });
+      setSaved(!saved);
+      setActionNotice(saved ? t('customerServiceRemoved') : t('customerServiceSaved'));
+    } catch (issue) {
+      setActionError(issue.message || 'This service could not be updated in your saved services.');
+    } finally {
+      setFavoriteLoading(false);
+    }
+  }
+
+  function toggleServiceCompare() {
+    setActionError('');
+    try {
+      const result = toggleComparedService(service.id);
+      setComparedServiceIds(result.ids);
+      setActionNotice(result.limitReached ? t('customerCompareLimit') : '');
+    } catch (issue) {
+      setActionError(issue.message || 'Service comparison could not be updated.');
+    }
+  }
 
   if (loading) return <main className="page-shell"><div className="loading" role="status"><span className="spinner"/>{t('loadingServices')}</div></main>;
   if (error || !service) return <main className="page-shell"><div className="empty panel"><strong>Service unavailable</strong><span>{error || 'This service is no longer available.'}</span>{error && <button className="button secondary" type="button" onClick={() => setReloadToken((value) => value + 1)}>{t('retry')}</button>}<button className="button secondary" type="button" onClick={() => onNavigate('/services')}>Back to Services</button></div></main>;
@@ -2649,7 +2714,21 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
       <div><span>Starting price</span><strong>{service.price !== null && service.price !== undefined ? `${service.currency} ${Number(service.price).toLocaleString()}` : t('priceOnRequest')}</strong></div>
       {service.reviewCount > 0 && <div><span>Customer rating</span><strong>{Number(service.rating).toFixed(1)} / 5 ({service.reviewCount})</strong></div>}
       {service.available && <div><span>Availability</span><strong>{t('publicAvailableNow')}</strong></div>}
-    </div><div className="card-actions"><button className="button" type="button" onClick={() => { setRequestTitle('publicBookService'); setRequestOpen(true); }}>{t('publicBookService')}</button><button className="button secondary" type="button" onClick={() => { setRequestTitle('publicContactVendor'); setRequestOpen(true); }}>{t('publicContactVendor')}</button></div></section>
+    </div>{service.vendorProfile?.description && <p className="public-vendor-description">{service.vendorProfile.description}</p>}
+      {actionError && <div className="alert error" role="alert">{actionError}</div>}
+      {actionNotice && <div className="alert success" role="status">{actionNotice}</div>}
+      <div className="card-actions">
+        <button className="button" type="button" onClick={() => {
+          if (!user) onNavigate('/login');
+          else if (user.role === 'customer') setBookingOpen(true);
+          else setActionError(t('customerBookingCustomerOnly'));
+        }}>{t('customerBookService')}</button>
+        <button className="button secondary" type="button" onClick={() => setRequestOpen(true)}>{t('customerRequestQuotation')}</button>
+        {service.vendorId && <button className="button secondary" type="button" onClick={() => onNavigate(`/vendors/${service.vendorId}`)}>{t('publicContactVendor')}</button>}
+        {user?.role === 'customer' && <button className="button secondary" type="button" aria-pressed={saved} disabled={favoriteLoading} onClick={toggleSavedService}>{saved ? t('customerSaved') : t('customerSaveService')}</button>}
+        <button className="button secondary" type="button" aria-pressed={comparedServiceIds.includes(Number(service.id))} onClick={toggleServiceCompare}>{comparedServiceIds.includes(Number(service.id)) ? t('customerRemoveCompare') : t('customerCompareServices')}</button>
+      </div>
+    </section>
     <section className="panel"><div className="panel-header"><h2>Service packages</h2></div>
       {service.packages?.length ? <div className="card-grid">{service.packages.map((item) => <article className="info-card" key={item.id}><h3>{item.name}</h3><p>{item.description || t('customServicePackage')}</p><strong>{item.currency} {Number(item.price).toLocaleString()}</strong><small>Minimum booking: {item.minimumBooking}</small>{item.includedFeatures?.length > 0 && <ul>{item.includedFeatures.map((feature) => <li key={feature}>{feature}</li>)}</ul>}{item.extras?.length > 0 && <div className="public-package-extras"><strong>Optional extras</strong>{item.extras.map((extra) => <p key={extra.name}>{extra.name} · {item.currency} {Number(extra.price).toLocaleString()} {extra.description && `· ${extra.description}`}</p>)}</div>}</article>)}</div> : <p>No packages are published for this service yet.</p>}
     </section>
@@ -2657,7 +2736,10 @@ function ServiceDetailPage({ serviceId, user, onNavigate }) {
     <section className="panel"><div className="panel-header"><h2>Customer reviews</h2></div>
       {reviewItems.length ? <div className="list-stack">{reviewItems.map(({ item: review, key }) => <article className="list-card" key={key}><div><strong>{review.customerName} · {'★'.repeat(review.rating)}</strong><small>{review.comment || 'Rating submitted'}</small></div></article>)}</div> : <p>No published reviews are available for this service yet.</p>}
     </section>
-  </div>{requestOpen && <QuoteRequestModal service={service} user={user} onNavigate={onNavigate} onClose={() => setRequestOpen(false)} title={t(requestTitle)}/>}</main>;
+    {service.relatedServices?.length > 0 && <section className="panel"><div className="panel-header"><h2>{t('customerRelatedServices')}</h2></div><div className="card-grid">{service.relatedServices.map((related) => <article className="info-card" key={related.id}><h3>{related.title}</h3><p>{related.category} · {related.vendorName}</p><p>{related.description}</p><strong>{related.price == null ? t('priceOnRequest') : `${related.currency} ${Number(related.price).toLocaleString()}`}</strong><button className="button secondary small" type="button" onClick={() => onNavigate(`/services/${related.id}`)}>{t('customerViewDetails')}</button></article>)}</div></section>}
+  </div>{requestOpen && <QuoteRequestModal service={service} user={user} onNavigate={onNavigate} onClose={() => setRequestOpen(false)} title={t('customerRequestQuotation')}/>}
+    {bookingOpen && <VendorBookingRequestModal service={service} onNavigate={onNavigate} onClose={() => setBookingOpen(false)} />}
+  </main>;
 }
 
 function VendorMedia({ src, alt, className = '', loading = 'lazy' }) {
@@ -2708,11 +2790,11 @@ function VendorBookingRequestModal({ service, onNavigate, onClose }) {
     setBusy(true);
     setError('');
     try {
-      await api('/platform/bookings', {
+      const response = await api('/platform/bookings', {
         method: 'POST',
         body: JSON.stringify({ eventId: Number(eventId), serviceId: Number(service.id), notes }),
       });
-      setSuccess(true);
+      setSuccess(`Booking request ${response?.data?.reference || ''} was created with status ${response?.data?.status || 'requested'}.`);
     } catch (issue) {
       setError(issue.message || 'The booking request could not be sent.');
     } finally {
@@ -2724,8 +2806,9 @@ function VendorBookingRequestModal({ service, onNavigate, onClose }) {
     <form className="modal" onSubmit={submit} role="dialog" aria-modal="true" aria-label="Request vendor booking">
       <div className="modal-head"><h2>Request a booking</h2><button className="icon-button" type="button" aria-label="Close" disabled={busy} onClick={onClose}>×</button></div>
       <div className="modal-body">
-        {success ? <p role="status">Your booking request was sent. You can track its status in your bookings.</p> : <>
-          <p>{service.title} · {service.vendorName}</p>
+        {success ? <p role="status">{success} You can track it in your bookings.</p> : <>
+          <p>{service.title} · {service.vendorName}{service.price != null ? ` · ${service.currency || 'ETB'} ${Number(service.price).toLocaleString()}` : ''}</p>
+          <p className="muted">The booking API verifies availability and price when you submit. Your request remains pending vendor confirmation.</p>
           {loading ? <div className="loading" role="status"><span className="spinner"/>Loading your events…</div> : events.length ? <label className="field"><span>Event</span><select required value={eventId} onChange={(change) => setEventId(change.target.value)}><option value="">Choose an event</option>{events.map((item) => <option value={item.id} key={item.id}>{item.title} · {new Date(String(item.startDate || item.date).replace(' ', 'T')).toLocaleDateString()}</option>)}</select></label> : <div className="empty panel"><strong>No future events are open for booking.</strong><button className="text-action" type="button" onClick={() => onNavigate('/customer/dashboard?view=events')}>Create or update an event</button></div>}
           {events.length > 0 && <label className="field"><span>Requirements (optional)</span><textarea maxLength={500} value={notes} onChange={(change) => setNotes(change.target.value)}/></label>}
           {error && <div className="alert error" role="alert">{error}</div>}
@@ -3761,7 +3844,7 @@ function LoginPage({ onLogin, demoMode = false, showForgotPassword = false }) {
   }
 
   return <main className="login-wrap"><div className="login-card">
-    <AuthBrand showEventHubLogo={false} showInstitutionLogo={false} />
+    <AuthBrand showEventHubLogo={false} />
     <h1>{t('signIn')}</h1>
     <p className="muted">{t('accessWorkspace')}</p>
     {error && <div className="alert error" role="alert">{error}</div>}
@@ -3831,7 +3914,7 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     }
   }
   return <main className="login-wrap"><div className="login-card registration-card">
-    <AuthBrand showEventHubLogo={false} showInstitutionLogo={false} />
+    <AuthBrand showEventHubLogo={false} />
     <h1>{t('createAccountHeading')}</h1>
     <p className="muted">{t('registerAsRole')}</p>
     {!registrationEnabled && <div className="alert warning" role="status">{t('publicRegistrationDisabled')}</div>}
@@ -4514,9 +4597,9 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
 
 function Login({onLogin}) {
   const language = useLanguage();
-  const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
+  const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [showPassword,setShowPassword]=useState(false); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
   async function submit(event) { event.preventDefault(); setBusy(true); setError(''); try { await onLogin(email,password); } catch (issue) { setError(issue.message); } finally { setBusy(false); } }
-  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><input type="password" autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
+  return <main className="login-wrap"><div className="login-card"><div className="auth-language-row auth-language-visible"><LanguageSelector/></div><AuthBrand/><p className="eyebrow">{translate('platform', language).toUpperCase()}</p><h1>{translate('administratorSignIn', language)}</h1><p className="muted">{translate('useAdminAccount', language)}</p>{error&&<div className="alert error" role="alert">{error}</div>}<form onSubmit={submit}><label className="field"><span>{translate('emailAddress', language)}</span><input type="email" autoComplete="username" required value={email} onChange={(e)=>setEmail(e.target.value)}/></label><label className="field"><span>{translate('password', language)}</span><div className="password-input-wrap"><input type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e)=>setPassword(e.target.value)}/><button className="password-visibility" type="button" aria-label={translate(showPassword ? 'hidePassword' : 'showPassword', language)} onClick={()=>setShowPassword((visible)=>!visible)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button></div></label><button className="button login-button" disabled={busy}>{busy?translate('signingIn', language):translate('signInSecurely', language)}</button></form><p className="login-note">{translateText('Administrator access is verified by the server for every protected request.', language)}</p></div></main>;
 }
 function Overview({ onNavigate }) {
   const language = useLanguage();
@@ -6089,7 +6172,7 @@ export default function App(){
     resolve();
     const listener=()=>resolve();
     window.addEventListener('popstate',listener);
-    if (DEMO_AUTH_ENABLED) {
+    if (DEMO_AUTH_ENABLED && !window.location.pathname.startsWith('/admin')) {
       try {
         const demoProfile = readDemoSession();
         if (demoProfile) {
@@ -6112,7 +6195,8 @@ export default function App(){
   },[resolve]);
 
   useEffect(() => {
-    if (DEMO_AUTH_ENABLED || authSessionState.status === 'loading') return;
+    if ((DEMO_AUTH_ENABLED && !currentPath.split('?')[0].startsWith('/admin'))
+      || authSessionState.status === 'loading') return;
     setChecking(false);
     if (authSessionState.status === 'authenticated') {
       setUser(authSessionState.user);
@@ -6125,14 +6209,15 @@ export default function App(){
       setUser(null);
       setPortal('admin');
     }
-  }, [authSessionState]);
+  }, [authSessionState, currentPath]);
 
   useEffect(() => {
-    if (!checking && !user && currentPath.split('?')[0].startsWith('/admin')) {
-      window.history.replaceState({}, '', '/login');
-      setCurrentPath('/login');
+    const redirectPath = getAdministratorRouteRedirect(currentPath, user, portal);
+    if (!checking && redirectPath) {
+      window.history.replaceState({}, '', redirectPath);
+      setCurrentPath(redirectPath);
     }
-  }, [checking, currentPath, user]);
+  }, [checking, currentPath, user, portal]);
 
   useEffect(() => {
     function handleAuthInvalidated() {
@@ -6151,47 +6236,33 @@ export default function App(){
   }, [portal, user?.id, user?.preferred_language, user?.role, user?.roles]);
 
   async function login(email,password){
-    if (DEMO_AUTH_ENABLED) {
-      const credential = findDemoLogin(email, password);
-      if (!credential) throw new Error('Demo sign-in failed. Choose one of the predefined demo accounts and enter its mock password.');
-      const profile = saveDemoSession(credential);
-      authSessionLoader.setAuthenticated(toDemoUser(profile), profile.role);
-      setUser(toDemoUser(profile));setPortal(profile.role);setGlobalError('');setShowLogin(false);
-      navigatePublic(dashboardPathForRole(profile.role));
-      return;
-    }
-    const adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
-    authSessionLoader.setAuthenticated(adminResponse.user, 'admin');
-    setUser(adminResponse.user);setPortal('admin');setGlobalError('');setShowLogin(false);navigatePublic('/admin');
+    const administrator = await authenticateAdministrator(api, email, password);
+    authSessionLoader.setAuthenticated(administrator, 'admin');
+    setUser(administrator);setPortal('admin');setGlobalError('');setShowLogin(false);navigatePublic('/admin');
   }
   async function loginPublic(email,password){
     if (DEMO_AUTH_ENABLED) {
-      await login(email, password);
+      const credential = findDemoLogin(email, password);
+      if (!credential || credential.role === 'admin') {
+        throw new Error('Administrator accounts must sign in through /admin/login using the server.');
+      }
+      const demoProfile = saveDemoSession(credential);
+      const demoUser = toDemoUser(demoProfile);
+      authSessionLoader.setAuthenticated(demoUser, demoProfile.role);
+      setUser(demoUser);setPortal(demoProfile.role);setGlobalError('');setShowLogin(false);
       const continuation = sessionStorage.getItem('eventhub_after_login');
-      const demoProfile = readDemoSession();
       if (continuation && (continuation === '/' && ['customer', 'organizer'].includes(demoProfile?.role) || /^\/events\/\d+$/.test(continuation) || continuation === '/vendor-application' && ['customer', 'organizer'].includes(demoProfile?.role))) {
         sessionStorage.removeItem('eventhub_after_login');
         navigatePublic(continuation);
+      } else {
+        navigatePublic(dashboardPathForRole(demoProfile.role));
       }
       return;
     }
-    let adminResponse;
-    try {
-      adminResponse = await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
-    } catch (error) {
-      if (error.status !== 401) throw error;
-    }
-    if (adminResponse?.user) {
-      authSessionLoader.setAuthenticated(adminResponse.user, 'admin');
-      setUser(adminResponse.user);setPortal('admin');setGlobalError('');setShowLogin(false);
-      navigatePublic('/admin');
-      return;
-    }
-    const platformResponse = await api('/platform/login',{method:'POST',body:JSON.stringify({email,password})});
-    const role = platformResponse?.data?.user?.role || 'customer';
-    authSessionLoader.setAuthenticated(platformResponse.data.user, role);
-    setUser(platformResponse.data.user);setPortal(role);setGlobalError('');setShowLogin(false);
-    const rolePath = role === 'admin' ? '/admin' : role === 'organizer' ? '/organizer/dashboard' : role === 'vendor' ? '/vendor/dashboard' : '/customer/dashboard';
+    const platformUser = await authenticatePlatformUser(api, email, password);
+    const role = platformUser.role;
+    authSessionLoader.setAuthenticated(platformUser, role);
+    setUser(platformUser);setPortal(role);setGlobalError('');setShowLogin(false);
     const continuation = sessionStorage.getItem('eventhub_after_login');
     const canContinue = continuation && (
       ['customer', 'organizer'].includes(role) && continuation === '/'
@@ -6199,7 +6270,7 @@ export default function App(){
       || role === 'organizer' && continuation === '/vendor-application'
     );
     if (canContinue) sessionStorage.removeItem('eventhub_after_login');
-    navigatePublic(canContinue ? continuation : rolePath);
+    navigatePublic(canContinue ? continuation : dashboardPathForRole(role));
   }
   function completeRegistration(result) {
     const registeredUser = result?.demo ? toDemoUser(result.profile) : result?.data?.user;
@@ -6238,8 +6309,9 @@ export default function App(){
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
     if (!window.confirm(translate('confirmLogout', language))) return;
+    const signedInPortal = portal;
     try {
-      if (DEMO_AUTH_ENABLED) clearDemoSession();
+      if (DEMO_AUTH_ENABLED && portal !== 'admin') clearDemoSession();
       else if (portal === 'admin') await api('/auth/logout',{method:'POST'});
       else if (user) await api('/platform/logout',{method:'POST'});
     } catch (issue) {
@@ -6248,8 +6320,9 @@ export default function App(){
         authSessionLoader.setUnauthenticated();
         setUser(null);
         setPortal('admin');
-        window.history.replaceState({}, '', '/login');
-        setCurrentPath('/login');
+        const loginPath = signedInPortal === 'admin' ? '/admin/login' : '/login';
+        window.history.replaceState({}, '', loginPath);
+        setCurrentPath(loginPath);
       }
       return;
     }
@@ -6263,8 +6336,9 @@ export default function App(){
     } catch (issue) {
       console.error('Post-login navigation state could not be cleared:', issue);
     }
-    window.history.replaceState({}, '', '/login');
-    setCurrentPath('/login');
+    const loginPath = signedInPortal === 'admin' ? '/admin/login' : '/login';
+    window.history.replaceState({}, '', loginPath);
+    setCurrentPath(loginPath);
   }
 
   const publicRoutes = {
@@ -6285,23 +6359,30 @@ export default function App(){
   };
 
   const routePath = currentPath.split('?')[0];
+  const isAiChatRoute = routePath === '/ai-chat' || /^\/ai-chat\/\d+$/.test(routePath);
   const eventRoute = routePath.match(/^\/events\/(\d+)$/);
   const serviceRoute = routePath.match(/^\/services\/(\d+)$/);
   const vendorRoute = routePath.match(/^\/vendors\/(\d+)$/);
   const customerBookingRoute = routePath.match(/^\/customer\/bookings\/(\d+)$/);
   const roleDashboardRoute = /^\/(customer|organizer|vendor)\/dashboard(?:\/|$)/.test(routePath);
-  const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || roleDashboardRoute || Boolean(customerBookingRoute);
+  const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || isAiChatRoute || roleDashboardRoute || Boolean(customerBookingRoute);
   if (checking && requiresSession) return <div className="loading full-screen"><img className="loading-brand-symbol" src="/eventhub-symbol.png" alt="EventHub"/><span className="spinner"/>Checking your session…</div>;
   if (requiresSession && !user && ['error', 'rate-limited'].includes(authSessionState.status)) {
     return <SessionRecoveryPage sessionState={authSessionState}/>;
   }
   if (platformAvailability?.maintenanceMode && !(user && portal === 'admin') && routePath !== '/login' && !routePath.startsWith('/admin')) {
-    return <MaintenancePage platformName={platformAvailability.platformName} message={platformAvailability.maintenanceMessage} onAdminSignIn={() => navigatePublic('/login')} />;
+    return <MaintenancePage platformName={platformAvailability.platformName} message={platformAvailability.maintenanceMessage} onAdminSignIn={() => navigatePublic('/admin/login')} />;
   }
   if (customerBookingRoute) {
     if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
     if (user.role !== 'customer') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="alert error">Booking details are available to customer accounts.</div></main></PublicPageLayout>;
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CustomerBookingDetailsPage bookingId={customerBookingRoute[1]} api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  }
+  if (isAiChatRoute) {
+    if (!user) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} />;
+    if (user.role === 'admin') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('aiChatUnavailable', language)}</div></main></PublicPageLayout>;
+    if (DEMO_AUTH_ENABLED) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><main className="page-shell"><div className="info-card wide" role="alert">{translate('aiChatDemoUnavailable', language)}</div></main></PublicPageLayout>;
+    return <AIChat user={user} currentPath={currentPath} onNavigate={navigatePublic}/>;
   }
   if (routePath === '/search') {
     const params = new URLSearchParams(currentPath.split('?')[1] || '');
@@ -6353,7 +6434,7 @@ export default function App(){
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><MyEventBookingsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
   if(!user){
-    if (currentPath.startsWith('/admin')) return DEMO_AUTH_ENABLED ? <LoginPage onLogin={login} demoMode /> : <Login onLogin={login}/>;
+    if (routePath === '/admin/login') return <Login onLogin={login}/>;
     if (roleDashboardRoute) return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED}/>;
     if (routePath === '/login') return <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword/>;
     if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/>;

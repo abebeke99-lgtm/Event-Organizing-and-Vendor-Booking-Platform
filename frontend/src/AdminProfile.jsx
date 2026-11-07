@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Camera, KeyRound, ShieldCheck, UserRound } from 'lucide-react';
+import { Camera, Eye, EyeOff, KeyRound, ShieldCheck, UserRound } from 'lucide-react';
 import apiClient from './api/axios.js';
 import { translateText } from './language.js';
 import './adminProfile.css';
@@ -25,12 +25,14 @@ export default function AdminProfile({ user, onUserChange }) {
   const [emailDraft, setEmailDraft] = useState('');
   const [pendingEmail, setPendingEmail] = useState('');
   const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
+  const [showEmailCurrentPassword, setShowEmailCurrentPassword] = useState(false);
   const [emailOtp, setEmailOtp] = useState('');
   const [emailVerificationSent, setEmailVerificationSent] = useState(false);
   const [changingEmail, setChangingEmail] = useState(false);
   const [verifyingEmail, setVerifyingEmail] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [password, setPassword] = useState(passwordInitial);
+  const [visiblePasswords, setVisiblePasswords] = useState({});
   const [photo, setPhoto] = useState(null);
   const [photoPreview, setPhotoPreview] = useState('');
   const [savedPhoto, setSavedPhoto] = useState('');
@@ -42,6 +44,22 @@ export default function AdminProfile({ user, onUserChange }) {
   const [notice, setNotice] = useState('');
   const [photoError, setPhotoError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
+
+  function passwordVisibilityControl(key) {
+    const visible = Boolean(visiblePasswords[key]);
+    const label = translateText(visible ? 'Hide password' : 'Show password');
+    return (
+      <button
+        className="admin-profile-password-toggle"
+        type="button"
+        aria-label={label}
+        aria-pressed={visible}
+        onClick={() => setVisiblePasswords((current) => ({ ...current, [key]: !current[key] }))}
+      >
+        {visible ? <EyeOff size={17} aria-hidden="true"/> : <Eye size={17} aria-hidden="true"/>}
+      </button>
+    );
+  }
 
   useEffect(() => {
     let active = true;
@@ -327,7 +345,12 @@ export default function AdminProfile({ user, onUserChange }) {
                 {!emailVerificationSent ? <>
                   <label className="field">
                     <span>Current password</span>
-                    <input required type="password" autoComplete="current-password" maxLength={256} value={emailCurrentPassword} disabled={changingEmail} onChange={(event) => setEmailCurrentPassword(event.target.value)} />
+                    <span className="admin-profile-password-input">
+                      <input required type={showEmailCurrentPassword ? 'text' : 'password'} autoComplete="current-password" maxLength={256} value={emailCurrentPassword} disabled={changingEmail} onChange={(event) => setEmailCurrentPassword(event.target.value)} />
+                      <button className="admin-profile-password-toggle" type="button" aria-label={translateText(showEmailCurrentPassword ? 'Hide password' : 'Show password')} aria-pressed={showEmailCurrentPassword} onClick={() => setShowEmailCurrentPassword((visible) => !visible)}>
+                        {showEmailCurrentPassword ? <EyeOff size={17} aria-hidden="true"/> : <Eye size={17} aria-hidden="true"/>}
+                      </button>
+                    </span>
                   </label>
                   <button className="button secondary" type="submit" disabled={changingEmail || emailDraft.trim().toLowerCase() === String(profile.email || '').toLowerCase()}>
                     {changingEmail ? 'Sending code…' : 'Update email'}
@@ -361,19 +384,28 @@ export default function AdminProfile({ user, onUserChange }) {
               <form className="admin-profile-form" onSubmit={changePassword}>
                 <label className="field">
                   <span>Current password</span>
-                  <input required type="password" autoComplete="current-password" maxLength={256} value={password.currentPassword} onChange={(event) => setPassword((current) => ({ ...current, currentPassword: event.target.value }))}/>
+                  <span className="admin-profile-password-input">
+                    <input required type={visiblePasswords.current ? 'text' : 'password'} autoComplete="current-password" maxLength={256} value={password.currentPassword} onChange={(event) => setPassword((current) => ({ ...current, currentPassword: event.target.value }))}/>
+                    {passwordVisibilityControl('current')}
+                  </span>
                 </label>
                 <div className="admin-profile-fields">
                   <label className="field">
                     <span>New password</span>
-                    <input required type="password" autoComplete="new-password" minLength={12} maxLength={16} value={password.newPassword} onChange={(event) => setPassword((current) => ({ ...current, newPassword: event.target.value }))}/>
+                    <span className="admin-profile-password-input">
+                      <input required type={visiblePasswords.new ? 'text' : 'password'} autoComplete="new-password" minLength={16} maxLength={72} value={password.newPassword} onChange={(event) => setPassword((current) => ({ ...current, newPassword: event.target.value }))}/>
+                      {passwordVisibilityControl('new')}
+                    </span>
                   </label>
                   <label className="field">
                     <span>Confirm new password</span>
-                    <input required type="password" autoComplete="new-password" minLength={12} maxLength={16} value={password.confirmPassword} onChange={(event) => setPassword((current) => ({ ...current, confirmPassword: event.target.value }))}/>
+                    <span className="admin-profile-password-input">
+                      <input required type={visiblePasswords.confirm ? 'text' : 'password'} autoComplete="new-password" minLength={16} maxLength={72} value={password.confirmPassword} onChange={(event) => setPassword((current) => ({ ...current, confirmPassword: event.target.value }))}/>
+                      {passwordVisibilityControl('confirm')}
+                    </span>
                   </label>
                 </div>
-                <p className="admin-profile-hint">Use 12–16 characters with uppercase and lowercase letters and at least one number.</p>
+                <p className="admin-profile-hint">{translateText('Use at least 16 characters, with uppercase and lowercase letters and at least one number. The maximum is 72 UTF-8 bytes.')}</p>
                 <button className="button" type="submit" disabled={changingPassword}>{changingPassword ? 'Updating…' : 'Update password'}</button>
               </form>
             </section>

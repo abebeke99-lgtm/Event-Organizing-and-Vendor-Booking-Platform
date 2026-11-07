@@ -1,19 +1,57 @@
 import nodemailer from 'nodemailer';
 
 export function getPasswordResetEmailConfig(environment = process.env) {
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM } = environment;
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM, SMTP_SECURE } = environment;
   const port = Number(SMTP_PORT);
+  const secure = SMTP_SECURE === undefined || SMTP_SECURE === ''
+    ? port === 465
+    : SMTP_SECURE === 'true';
   if (!SMTP_HOST?.trim() || /[\r\n]/.test(SMTP_HOST) || !Number.isInteger(port) || port < 1 || port > 65535
+    || !['', 'true', 'false', undefined].includes(SMTP_SECURE)
     || !SMTP_USER?.trim() || !SMTP_PASSWORD || !SMTP_FROM?.trim() || /[\r\n]/.test(SMTP_FROM)) return null;
 
   return {
     host: SMTP_HOST.trim(),
     port,
-    secure: port === 465,
+    secure,
     user: SMTP_USER.trim(),
     password: SMTP_PASSWORD,
     from: SMTP_FROM.trim(),
   };
+}
+
+export function createSmtpTransport(environment = process.env, transportFactory = nodemailer.createTransport) {
+  const config = getPasswordResetEmailConfig(environment);
+  if (!config) throw new Error('SMTP configuration is incomplete or invalid.');
+  return transportFactory({
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    requireTLS: !config.secure,
+    auth: { user: config.user, pass: config.password },
+    tls: { rejectUnauthorized: true },
+  });
+}
+
+export async function verifySmtpConnection(environment = process.env, transportFactory = nodemailer.createTransport) {
+  const transporter = createSmtpTransport(environment, transportFactory);
+  try {
+    await transporter.verify();
+  } finally {
+    transporter.close?.();
+  }
+}
+
+export function getSmtpDiagnostic(error) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  if (code === 'EAUTH') return 'SMTP authentication failed (EAUTH).';
+  if (['ETLS', 'ESOCKET', 'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(code)) {
+    return 'SMTP TLS or network negotiation failed.';
+  }
+  if (['ECONNECTION', 'ETIMEDOUT', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENOTFOUND'].includes(code)) {
+    return 'SMTP server connection failed.';
+  }
+  return 'SMTP delivery failed; check the provider configuration and server logs.';
 }
 
 export function buildPasswordResetOtpEmail({ email, name, otp }, environment = process.env) {
@@ -44,17 +82,13 @@ export async function sendPasswordResetOtpEmail(
   environment = process.env,
   transportFactory = nodemailer.createTransport
 ) {
-  const config = getPasswordResetEmailConfig(environment);
-  if (!config) throw new Error('Password reset email is not configured.');
-
-  const transporter = transportFactory({
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    requireTLS: !config.secure,
-    auth: { user: config.user, pass: config.password },
-  });
-  const result = await transporter.sendMail(buildPasswordResetOtpEmail(message, environment));
+  const transporter = createSmtpTransport(environment, transportFactory);
+  let result;
+  try {
+    result = await transporter.sendMail(buildPasswordResetOtpEmail(message, environment));
+  } finally {
+    transporter.close?.();
+  }
   const accepted = (result.accepted || []).some((address) => {
     const value = typeof address === 'string' ? address : address.address;
     return String(value || '').toLowerCase() === message.email.toLowerCase();

@@ -1,5 +1,5 @@
 import nodemailer from 'nodemailer';
-import { getPasswordResetEmailConfig } from './passwordResetEmail.js';
+import { createSmtpTransport, getPasswordResetEmailConfig } from './passwordResetEmail.js';
 
 function escapeHtml(value) {
   return String(value || '').replace(/[&<>"']/g, (character) => ({
@@ -30,20 +30,16 @@ export async function sendAdminEmailChangeOtpEmail(
   environment = process.env,
   transportFactory = nodemailer.createTransport,
 ) {
-  const config = getPasswordResetEmailConfig(environment);
-  if (!config) throw new Error('Email change verification is not configured.');
-
-  const transporter = transportFactory({
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    requireTLS: !config.secure,
-    auth: { user: config.user, pass: config.password },
-  });
-  const result = await transporter.sendMail({
-    ...buildAdminEmailChangeOtpMessage(message, environment),
-    from: config.from,
-  });
+  const transporter = createSmtpTransport(environment, transportFactory);
+  let result;
+  try {
+    result = await transporter.sendMail({
+      ...buildAdminEmailChangeOtpMessage(message, environment),
+      from: getPasswordResetEmailConfig(environment).from,
+    });
+  } finally {
+    transporter.close?.();
+  }
   const accepted = (result.accepted || []).some((address) => {
     const value = typeof address === 'string' ? address : address.address;
     return String(value || '').toLowerCase() === message.email.toLowerCase();
@@ -59,20 +55,19 @@ export async function sendAdminEmailChangeNotice(
   const config = getPasswordResetEmailConfig(environment);
   if (!config) throw new Error('Email change notifications are not configured.');
 
-  const transporter = transportFactory({
-    host: config.host,
-    port: config.port,
-    secure: config.secure,
-    requireTLS: !config.secure,
-    auth: { user: config.user, pass: config.password },
-  });
-  const result = await transporter.sendMail({
-    from: config.from,
-    to: message.email,
-    subject: 'Your EventHub account email was changed',
-    text: 'The email address for your EventHub account was changed. If you did not make this change, contact support and secure your account immediately.',
-    html: '<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">Account email changed</h1><p>The email address for your EventHub account was changed.</p><p>If you did not make this change, contact support and secure your account immediately.</p><p style="margin-top:28px;color:#758198">EventHub</p></div>',
-  });
+  const transporter = createSmtpTransport(environment, transportFactory);
+  let result;
+  try {
+    result = await transporter.sendMail({
+      from: config.from,
+      to: message.email,
+      subject: 'Your EventHub account email was changed',
+      text: 'The email address for your EventHub account was changed. If you did not make this change, contact support and secure your account immediately.',
+      html: '<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">Account email changed</h1><p>The email address for your EventHub account was changed.</p><p>If you did not make this change, contact support and secure your account immediately.</p><p style="margin-top:28px;color:#758198">EventHub</p></div>',
+    });
+  } finally {
+    transporter.close?.();
+  }
   const accepted = (result.accepted || []).some((address) => {
     const value = typeof address === 'string' ? address : address.address;
     return String(value || '').toLowerCase() === message.email.toLowerCase();

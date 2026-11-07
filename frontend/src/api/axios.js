@@ -69,7 +69,7 @@ apiClient.interceptors.response.use(undefined, async (error) => {
   const isSessionProbe = /\/(?:auth|platform)\/me(?:\?|$)/.test(requestPath);
   const isPlatformSessionProbe = /\/platform\/me(?:\?|$)/.test(requestPath);
   const isLoginRequest = /\/(?:auth|platform)\/login(?:\?|$)/.test(requestPath);
-  const isPlatformRequest = /^\/(?:platform|vendor|customer|organizer)(?:\/|$)/.test(requestPath);
+  const isPlatformRequest = /^\/(?:platform|vendor|customer|organizer|ai)(?:\/|$)/.test(requestPath);
 
   if (status === 401 && isPlatformRequest && !isSessionProbe && !isLoginRequest
     && typeof window !== 'undefined' && !invalidationQueued) {

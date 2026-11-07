@@ -18,6 +18,7 @@ import { publicMarketplaceMessages } from './i18n/modules/publicMarketplace.js';
 import { appDashboardMessages } from './i18n/modules/appDashboard.js';
 import { runtimeMessages } from './i18n/modules/runtimeMessages.js';
 import { heroSlidesMessages } from './i18n/modules/heroSlides.js';
+import { aiChatMessages } from './i18n/modules/aiChat.js';
 
 const messages = {
   en: {
@@ -876,6 +877,7 @@ const messages = {
     ...adminSystemSettingsMessages.en,
     ...publicMarketplaceMessages.en,
     ...heroSlidesMessages.en,
+    ...aiChatMessages.en,
     ...appDashboardMessages.en,
     ...runtimeMessages.en,
   },
@@ -1735,6 +1737,7 @@ const messages = {
     ...adminSystemSettingsMessages.am,
     ...publicMarketplaceMessages.am,
     ...heroSlidesMessages.am,
+    ...aiChatMessages.am,
     ...appDashboardMessages.am,
     ...runtimeMessages.am,
   },

@@ -27,6 +27,8 @@ async function execute(sql, values = []) {
     return [[{ total_events: 2, upcoming_events: 1, ongoing_events: 0, allocated_budget: '10000.00' }], []];
   }
   if (sql.includes('FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?')) {
+    assert.match(sql, /SUM\(b\.status IN/);
+    assert.match(sql, /SUM\(b\.status =/);
     return [[{ total_bookings: 4, pending_bookings: 1, confirmed_bookings: 1, completed_bookings: 2 }], []];
   }
   if (sql.includes('FROM event_expenses x JOIN events e')) return [[{ planned_expenses: '2500.00', actual_expenses: '1500.00' }], []];

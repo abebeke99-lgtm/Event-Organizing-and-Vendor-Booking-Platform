@@ -55,9 +55,9 @@ router.get('/overview', asyncHandler(async (req, res) => {
   );
   const [[bookingStats]] = await database.execute(
     `SELECT COUNT(*) AS total_bookings,
-            SUM(status IN ('requested', 'under_review', 'quoted')) AS pending_bookings,
-            SUM(status IN ('accepted', 'confirmed', 'in_progress')) AS confirmed_bookings,
-            SUM(status = 'completed') AS completed_bookings
+            SUM(b.status IN ('requested', 'under_review', 'quoted')) AS pending_bookings,
+            SUM(b.status IN ('accepted', 'confirmed', 'in_progress')) AS confirmed_bookings,
+            SUM(b.status = 'completed') AS completed_bookings
      FROM bookings b JOIN events e ON e.id = b.event_id WHERE e.organizer_id = ?`,
     [organizerId],
   );
