@@ -28,6 +28,10 @@ const copy = {
     services: 'Browse services',
     failed: 'I could not get a response right now. Please try again shortly.',
     noProvider: 'AI chat is temporarily unavailable. Please try again later.',
+    retry: 'Retry',
+    rateLimited: 'Too many chat requests. Please wait a minute and try again.',
+    timedOut: 'The chat took too long to respond. Please try again.',
+    networkError: 'Could not reach EventHub AI. Check your connection and try again.',
     links: 'Explore on EventHub',
   },
   am: {
@@ -53,6 +57,10 @@ const copy = {
     services: 'አገልግሎቶችን ይመልከቱ',
     failed: 'አሁን ምላሽ ማግኘት አልቻልኩም። እባክዎ ቆይተው ይሞክሩ።',
     noProvider: 'የAI ውይይት ለጊዜው አይገኝም። እባክዎ ቆይተው ይሞክሩ።',
+    retry: 'እንደገና ይሞክሩ',
+    rateLimited: 'ብዙ የውይይት ጥያቄዎች ተልከዋል። እባክዎ አንድ ደቂቃ ጠብቀው ይሞክሩ።',
+    timedOut: 'ውይይቱ ምላሽ ለመስጠት ብዙ ጊዜ ወስዷል። እባክዎ እንደገና ይሞክሩ።',
+    networkError: 'ከEventHub AI ጋር መገናኘት አልተቻለም። ግንኙነትዎን ያረጋግጡ እና እንደገና ይሞክሩ።',
     links: 'በEventHub ይመልከቱ',
   },
 };
@@ -93,16 +101,21 @@ export default function AIChatWidget({ user, onNavigate }) {
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('checking');
   const [error, setError] = useState('');
+  const [retryPrompt, setRetryPrompt] = useState('');
   const inputRef = useRef(null);
   const scrollRef = useRef(null);
+  const requestController = useRef(null);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
-  function refreshStatus() {
+  async function refreshStatus() {
     setStatus('checking');
-    apiClient.get('/ai/status')
-      .then((response) => setStatus(response.data?.data?.configured ? 'configured' : 'offline'))
-      .catch(() => setStatus('offline'));
+    try {
+      const response = await apiClient.get('/ai/health', { timeout: 7000 });
+      setStatus(response.data?.online === true ? 'online' : 'offline');
+    } catch {
+      setStatus('offline');
+    }
   }
 
   useEffect(() => {
@@ -121,50 +134,74 @@ export default function AIChatWidget({ user, onNavigate }) {
   }, [messages, hydratedKey, storageKey]);
 
   useEffect(() => {
-    refreshStatus();
-  }, []);
+    if (open) void refreshStatus();
+  }, [open]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, sending, open, minimized]);
 
-  async function sendMessage(event, selectedText = draft) {
+  async function sendMessage(event, selectedText = draft, { retry = false } = {}) {
     event?.preventDefault();
     const message = selectedText.trim();
-    if (!message || sending) return;
+    if (!message || message.length > 2000 || sending) return;
     const previousMessages = messagesRef.current;
-    const userMessage = createMessage('user', message);
-    setMessages((current) => [...current, userMessage]);
+    if (!retry) setMessages((current) => [...current, createMessage('user', message)]);
     setDraft('');
     setError('');
     setSending(true);
+    const controller = new AbortController();
+    requestController.current = controller;
     try {
-      const response = await apiClient.post('/ai/assist', {
-        message,
+      const priorMessages = retry
+        && previousMessages.at(-1)?.role === 'user'
+        && previousMessages.at(-1)?.content === message
+        ? previousMessages.slice(0, -1)
+        : previousMessages;
+      const history = priorMessages.slice(-(19));
+      const response = await apiClient.post('/ai/chat', {
+        messages: [...history.map(({ role, content }) => ({ role, content: content.slice(0, 2000) })), { role: 'user', content: message }],
         language,
-        history: previousMessages.slice(-8).map(({ role, content }) => ({ role, content })),
-      }, { timeout: 65000 });
-      const result = response.data?.data;
-      if (typeof result?.content !== 'string' || !result.content.trim()) {
+      }, { timeout: 35000, signal: controller.signal });
+      const reply = response.data?.reply;
+      if (typeof reply !== 'string' || !reply.trim()) {
         throw new Error('The AI response was empty.');
       }
-      setMessages((current) => [...current, createMessage('assistant', result.content, result.references || [])]);
+      setMessages((current) => [...current, createMessage('assistant', reply)]);
       setStatus('online');
+      setRetryPrompt('');
     } catch (issue) {
-      const missingConfiguration = issue.status === 503 && /not configured/i.test(issue.message || '');
-      setError(issue.status === 503
-        ? text.noProvider
-        : text.failed);
-      setStatus(missingConfiguration ? 'offline' : 'configured');
+      if (issue.code !== 'ERR_CANCELED') {
+        setRetryPrompt(message);
+        const timedOut = issue.status === 504 || issue.code === 'ECONNABORTED' || issue.code === 'ETIMEDOUT';
+        setError(issue.status === 429
+          ? text.rateLimited
+          : timedOut
+            ? text.timedOut
+            : issue.status === 503
+              ? issue.message || text.noProvider
+              : !issue.status
+                ? text.networkError
+                : issue.message || text.failed);
+        void refreshStatus();
+      }
     } finally {
-      setSending(false);
-      inputRef.current?.focus();
+      if (requestController.current === controller) {
+        requestController.current = null;
+        setSending(false);
+        inputRef.current?.focus();
+      }
     }
   }
 
   function clearConversation() {
+    requestController.current?.abort();
+    requestController.current = null;
+    messagesRef.current = [];
     setMessages([]);
     setError('');
+    setRetryPrompt('');
+    setSending(false);
     try {
       window.sessionStorage.removeItem(storageKey);
     } catch (issue) {
@@ -172,13 +209,7 @@ export default function AIChatWidget({ user, onNavigate }) {
     }
   }
 
-  const statusText = status === 'checking'
-    ? text.checking
-    : status === 'online'
-      ? text.online
-      : status === 'configured'
-        ? text.configured
-        : text.offline;
+  const statusText = status === 'checking' ? text.checking : status === 'online' ? text.online : text.offline;
 
   return <div className="ai-chat-widget">
     {open && <section className={`ai-widget-panel ${minimized ? 'is-minimized' : ''}`} aria-label={text.title}>
@@ -214,8 +245,7 @@ export default function AIChatWidget({ user, onNavigate }) {
           </article>)}
           {sending && <div className="ai-widget-typing" role="status" aria-label={text.assistant}><i/><i/><i/></div>}
         </div>
-        {error && <div className="ai-widget-error" role="alert">{error}<button type="button" aria-label={text.close} onClick={() => setError('')}><X size={14}/></button></div>}
-        {status === 'offline' && !error && <div className="ai-widget-error" role="status">{text.noProvider}</div>}
+        {error && <div className="ai-widget-error" role="alert">{error}{retryPrompt && <button className="ai-widget-retry" type="button" onClick={() => void sendMessage(undefined, retryPrompt, { retry: true })} disabled={sending}>{text.retry}</button>}<button type="button" aria-label={text.close} onClick={() => setError('')}><X size={14}/></button></div>}
         <div className="ai-widget-quick-actions">
           <button type="button" onClick={() => onNavigate('/events')}><CalendarDays size={14}/>{text.events}</button>
           <button type="button" onClick={() => onNavigate('/vendors')}><Store size={14}/>{text.vendors}</button>
@@ -234,16 +264,15 @@ export default function AIChatWidget({ user, onNavigate }) {
             }}
             placeholder={text.placeholder}
             aria-label={text.placeholder}
-            maxLength={4000}
+            maxLength={2000}
             rows={1}
-            disabled={sending || status === 'offline'}
+            disabled={sending}
           />
-          <button type="submit" aria-label={text.send} disabled={!draft.trim() || sending || status === 'offline'}><Send size={17}/></button>
+          <button type="submit" aria-label={text.send} disabled={!draft.trim() || sending}><Send size={17}/></button>
         </form>
       </>}
     </section>}
     <button className={`ai-widget-launcher ${open ? 'is-open' : ''}`} type="button" aria-label={text.open} title={text.open} aria-expanded={open} onClick={() => {
-      if (!open && status === 'offline') refreshStatus();
       setOpen((value) => !value);
       setMinimized(false);
     }}>

@@ -9,6 +9,10 @@ const PORT = configuredPort ? Number(configuredPort) : 4000;
 const HOST = '0.0.0.0';
 const configurationErrors = getStartupConfigurationErrors();
 
+if (!process.env.OPENAI_API_KEY?.trim()) {
+  console.warn('AI chat is unavailable: set OPENAI_API_KEY in backend/.env to enable the EventHub AI endpoints.');
+}
+
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   console.error('PORT must be an integer between 1 and 65535.');
   process.exitCode = 1;

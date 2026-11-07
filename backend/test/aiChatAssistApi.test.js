@@ -16,6 +16,7 @@ const customer = {
   permission_keys: '',
 };
 const completionRequests = [];
+const completionOptions = [];
 let completionError = null;
 let requestSequence = 0;
 
@@ -29,10 +30,16 @@ const database = {
 };
 
 const aiClient = {
+  models: {
+    async retrieve(model) {
+      return { id: model };
+    },
+  },
   chat: {
     completions: {
-      async create(request) {
+      async create(request, options) {
         completionRequests.push(request);
+        completionOptions.push(options);
         if (completionError) throw completionError;
         return { choices: [{ message: { content: 'I found a published service in the EventHub catalogue.' } }] };
       },
@@ -115,6 +122,16 @@ test('public AI status exposes configuration without authentication or secrets',
   assert.deepEqual(await response.json(), { data: { configured: true } });
 });
 
+test('public health check is guest-accessible and only reports a configured provider online', async () => {
+  const onlineResponse = await request('/api/ai/health');
+  assert.equal(onlineResponse.status, 200);
+  assert.deepEqual(await onlineResponse.json(), { online: true });
+
+  const offlineResponse = await request('/api/ai/health', { base: unconfiguredBaseUrl });
+  assert.equal(offlineResponse.status, 200);
+  assert.deepEqual(await offlineResponse.json(), { online: false });
+});
+
 test('missing backend key reports unavailable and never returns a fabricated answer', async () => {
   const status = await request('/api/ai/status', { base: unconfiguredBaseUrl });
   assert.deepEqual(await status.json(), { data: { configured: false } });
@@ -125,6 +142,50 @@ test('missing backend key reports unavailable and never returns a fabricated ans
   });
   assert.equal(response.status, 503);
   assert.match((await response.json()).error, /OPENAI_API_KEY/);
+
+  const chatResponse = await request('/api/ai/chat', {
+    method: 'POST',
+    body: { messages: [{ role: 'user', content: 'Find events near me' }] },
+    base: unconfiguredBaseUrl,
+  });
+  assert.equal(chatResponse.status, 503);
+  assert.match((await chatResponse.json()).error, /OPENAI_API_KEY/);
+});
+
+test('public chat accepts guest messages, grounds the prompt, and returns a reply', async () => {
+  const before = completionRequests.length;
+  const response = await request('/api/ai/chat', {
+    method: 'POST',
+    body: {
+      messages: [
+        { role: 'user', content: 'Find catering' },
+        { role: 'assistant', content: 'What kind of event?' },
+        { role: 'user', content: 'Find a vendor near me' },
+      ],
+      location: 'Addis Ababa',
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    reply: 'I found a published service in the EventHub catalogue.',
+  });
+  assert.equal(completionRequests.length, before + 1);
+  assert.match(completionRequests.at(-1).messages[0].content, /^You are EventHub AI, an assistant for an event planning and vendor booking platform\./);
+  assert.match(completionRequests.at(-1).messages[0].content, /Published catering service/);
+  assert.match(completionRequests.at(-1).messages[0].content, /The user is a visitor/);
+  assert.match(completionRequests.at(-1).messages[0].content, /Addis Ababa/);
+  assert.equal(completionRequests.at(-1).messages.at(-1).content, 'Find a vendor near me');
+  assert.equal(completionOptions.at(-1).timeout, 30_000);
+});
+
+test('public chat retains authenticated role context for signed-in users', async () => {
+  const response = await request('/api/ai/chat', {
+    method: 'POST',
+    authenticated: true,
+    body: { messages: [{ role: 'user', content: 'Help me find an event' }] },
+  });
+  assert.equal(response.status, 200);
+  assert.match(completionRequests.at(-1).messages[0].content, /The user is a customer/);
 });
 
 test('visitor assistant grounds answers in public catalogue data and links records', async () => {
@@ -158,6 +219,26 @@ test('assistant validates messages and does not call the provider for invalid in
   const before = completionRequests.length;
   const response = await request('/api/ai/assist', { method: 'POST', body: { message: '  ' } });
   assert.equal(response.status, 400);
+  assert.equal(completionRequests.length, before);
+});
+
+test('public chat validates message count, size, and final user role', async () => {
+  const before = completionRequests.length;
+  const tooManyMessages = await request('/api/ai/chat', {
+    method: 'POST',
+    body: { messages: Array.from({ length: 21 }, () => ({ role: 'user', content: 'Hello' })) },
+  });
+  const tooLong = await request('/api/ai/chat', {
+    method: 'POST',
+    body: { messages: [{ role: 'user', content: 'x'.repeat(2001) }] },
+  });
+  const wrongLastRole = await request('/api/ai/chat', {
+    method: 'POST',
+    body: { messages: [{ role: 'assistant', content: 'Hello' }] },
+  });
+  assert.equal(tooManyMessages.status, 400);
+  assert.equal(tooLong.status, 400);
+  assert.equal(wrongLastRole.status, 400);
   assert.equal(completionRequests.length, before);
 });
 

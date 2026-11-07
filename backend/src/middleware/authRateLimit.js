@@ -1,6 +1,12 @@
 import { rateLimit } from 'express-rate-limit';
 
-export function createAuthRateLimiter({ windowMs, limit, message, skipSuccessfulRequests = false }) {
+export function createAuthRateLimiter({
+  windowMs,
+  limit,
+  message,
+  skipSuccessfulRequests = false,
+  onLimit,
+}) {
   return rateLimit({
     windowMs,
     limit,
@@ -8,6 +14,7 @@ export function createAuthRateLimiter({ windowMs, limit, message, skipSuccessful
     standardHeaders: true,
     legacyHeaders: false,
     handler(req, res) {
+      onLimit?.(req);
       const resetTime = req.rateLimit?.resetTime;
       const retryAfterSeconds = resetTime instanceof Date
         ? Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000))
