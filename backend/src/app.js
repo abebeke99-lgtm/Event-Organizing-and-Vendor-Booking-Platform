@@ -48,6 +48,7 @@ export function createApp({
   otpVerifier,
   paymentProvider = null,
   aiClient = null,
+  aiChatServices = {},
   heroSlidesDirectory,
 } = {}) {
   const app = express();
@@ -115,7 +116,7 @@ export function createApp({
   });
   app.use('/api/payments/webhook', paymentWebhookRoutes);
   app.use(express.json({ limit: '100kb' }));
-  app.use('/api/ai', requirePlatformAvailable, createAiChatRouter({ database, client: aiClient }));
+  app.use('/api/ai', requirePlatformAvailable, createAiChatRouter({ ...aiChatServices, database, client: aiClient }));
   app.get('/', (req, res) => res.json({
     status: 'ok',
     service: 'event-organizing-and-vendor-booking-api',

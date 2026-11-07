@@ -41,8 +41,8 @@ function createDatabase() {
     if (sql.includes('FROM system_settings')) {
       return [[{ setting_key: 'public_registration_enabled', setting_value: 'true' }], []];
     }
-    if (sql.includes('FROM admin_sessions s')) {
-      return [values[0] === hashToken(adminToken) ? [{ ...adminRow }] : [], []];
+    if (sql.includes("AND r.is_admin = TRUE AND r.is_active = TRUE")) {
+      return [sql.includes('FROM admin_sessions s') && values.includes(hashToken(adminToken)) ? [{ ...adminRow }] : [], []];
     }
     if (sql.startsWith('SELECT COUNT(*) AS total FROM users u')) {
       if (failUserList) throw new Error('test database failure');

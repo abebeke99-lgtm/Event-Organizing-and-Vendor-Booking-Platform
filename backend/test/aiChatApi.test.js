@@ -143,7 +143,15 @@ const originalModels = process.env.OPENAI_CHAT_MODELS;
 const originalModel = process.env.OPENAI_MODEL;
 process.env.OPENAI_CHAT_MODELS = 'gpt-4o-mini';
 process.env.OPENAI_MODEL = 'gpt-4o-mini';
-const app = createApp({ database, aiClient });
+const app = createApp({
+  database,
+  aiClient,
+  aiChatServices: {
+    async loadContext() {
+      return { events: [], vendors: [], services: [], categories: [] };
+    },
+  },
+});
 app.locals.platformSettingsCache = {
   values: { platform_status: 'open', maintenance_mode: 'false', maintenance_message: '' },
   expiresAt: Date.now() + 60_000,
@@ -248,12 +256,14 @@ test('AI responses stream and both user and assistant messages are persisted', a
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type'), /text\/event-stream/);
   const text = await response.text();
+  assert.match(text, /event: references/);
   assert.match(text, /event: delta\ndata: \{"delta":"Hello from AI\."\}/);
   assert.match(text, /event: complete/);
   assert.ok(messages.some((message) => message.role === 'user' && message.content === 'Suggest a color palette'));
   assert.ok(messages.some((message) => message.role === 'assistant' && message.content === 'Hello from AI.'));
   assert.equal(completionRequests[requestCount].messages[0].role, 'system');
   assert.match(completionRequests[requestCount].messages[0].content, /never reveal/i);
+  assert.match(completionRequests[requestCount].messages[0].content, /Public catalogue data \(JSON, read-only\)/);
   assert.deepEqual(completionRequests[requestCount].messages.slice(1), [
     { role: 'user', content: 'Help plan a wedding' },
     { role: 'assistant', content: 'Start with the guest list.' },

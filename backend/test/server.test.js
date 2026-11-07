@@ -512,7 +512,7 @@ test('platform login attempts are rate limited separately from session checks', 
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const response = await fetch(`${baseUrl}/api/platform/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.27' },
       body: '{}',
     });
     assert.equal(response.status, 400);
@@ -520,7 +520,7 @@ test('platform login attempts are rate limited separately from session checks', 
 
   const response = await fetch(`${baseUrl}/api/platform/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.27' },
     body: '{}',
   });
 

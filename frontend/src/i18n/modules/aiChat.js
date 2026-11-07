@@ -71,6 +71,7 @@ export const aiChatMessages = {
     aiChatStopVoice: 'Stop voice input',
     aiChatVoiceUnsupported: 'Voice input is not supported by this browser.',
     aiChatVoiceError: 'Voice input stopped unexpectedly. Please try again.',
+    aiChatReferences: 'Explore on EventHub',
   },
   am: {
     aiChatAssistant: 'የAI ረዳት',
@@ -144,5 +145,6 @@ export const aiChatMessages = {
     aiChatStopVoice: 'የድምፅ ግቤትን አቁም',
     aiChatVoiceUnsupported: 'ይህ አሳሽ የድምፅ ግቤትን አይደግፍም።',
     aiChatVoiceError: 'የድምፅ ግቤቱ በድንገት ቆሟል። እንደገና ይሞክሩ።',
+    aiChatReferences: 'በEventHub ይመልከቱ',
   },
 };

@@ -50,6 +50,7 @@ const CustomerWorkspace = React.lazy(() => import('./CustomerWorkspace.jsx'));
 const CustomerBookingDetailsPage = React.lazy(() => import('./CustomerBookings.jsx').then(({ CustomerBookingDetailsPage }) => ({ default: CustomerBookingDetailsPage })));
 const ServiceCategoriesPage = React.lazy(() => import('./ServiceCategoriesPage.jsx'));
 const AIChat = React.lazy(() => import('./AIChat.jsx'));
+import AIChatWidget from './AIChatWidget.jsx';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import { formatCustomerMoney } from './customerMoney.js';
 const AdminUserManagement = React.lazy(() => import('./AdminUserManagement.jsx'));
@@ -1962,12 +1963,13 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
     </main>
     <AppFooter />
     <BackToTopButton />
+    <AIChatWidget user={user} onNavigate={onNavigate}/>
     {requestService && <QuoteRequestModal service={requestService} user={user} onNavigate={onNavigate} onClose={() => setRequestService(null)} />}
   </>;
 }
 
 function PublicPageLayout({ currentPath, user, onNavigate, onLogout, children }) {
-  return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />{children}<AppFooter /></>;
+  return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />{children}<AppFooter /><AIChatWidget user={user} onNavigate={onNavigate}/></>;
 }
 
 function getBrowseEventStatus(event) {
@@ -6384,11 +6386,11 @@ export default function App(){
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><MyEventBookingsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
   if(!user){
-    if (routePath === '/login') return <LoginPage onLogin={loginPublic} showForgotPassword />;
-    if (routePath === '/register') return <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/>;
-    if (routePath === '/forgot-password') return <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />;
-    if (routePath === '/verify-reset-otp') return <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />;
-    if (routePath === '/reset-password') return <ResetPasswordPage onSubmit={resetPassword} />;
+    if (routePath === '/login') return <><LoginPage onLogin={loginPublic} showForgotPassword /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/register') return <><RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/forgot-password') return <><ForgotPasswordPage onSubmit={requestPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/verify-reset-otp') return <><VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/reset-password') return <><ResetPasswordPage onSubmit={resetPassword} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (currentPath === '/privacy') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>;
     if (currentPath === '/terms') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><TermsPage /></PublicPageLayout>;
     if (currentPath === '/help') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>;

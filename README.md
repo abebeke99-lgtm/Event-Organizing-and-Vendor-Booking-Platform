@@ -70,7 +70,11 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 ## EventHub AI Assistant
 
-Signed-in customer, organizer, and vendor accounts can open **AI Assistant** from the account menu. Conversations and messages are stored in MySQL and scoped to their owner. Responses stream from the server through Server-Sent Events; the OpenAI key is only read by the backend and is never sent to the browser. Administrator and browser-demo sessions are not supported by this feature.
+The floating EventHub AI chat is available on public pages to visitors and signed-in users. Visitor-widget history is temporary and stored in the browser's current tab session. Signed-in customers, organizers, and vendors can also open **AI Assistant** from the account menu for persistent MySQL conversations scoped to their account; administrator conversation history is not enabled. The persistent chat streams responses through Server-Sent Events, while the public widget uses a bounded JSON response.
+
+The assistant reads published public events, active services, verified vendors, and active service categories through the existing catalogue services. It only receives public listing data and role context: it cannot read private bookings, payment details, other users' accounts, or vendor-only records. Booking/payment status explanations come from the platform's existing workflow states; there is no separate FAQ database table. The assistant is read-only and cannot submit or change bookings, quotations, payments, refunds, or accounts. Both chat paths use server-side prompt-injection safeguards and disclose no provider credentials.
+
+The public API endpoints are `GET /api/ai/status` (provider configuration state only) and `POST /api/ai/assist` (visitor or authenticated help, rate-limited). Existing authenticated conversation/history endpoints remain under `/api/ai/conversations`.
 
 Configure these backend environment variables to enable AI responses:
 
@@ -78,7 +82,7 @@ Configure these backend environment variables to enable AI responses:
 - `OPENAI_MODEL`: default model identifier (defaults to `gpt-4o-mini`).
 - `OPENAI_CHAT_MODELS`: comma-separated server-approved model IDs exposed in the model selector (defaults to `gpt-4o-mini`).
 
-Run `npm run migrate` after reviewing the additive `backend/migrations/038_ai_chat.sql` migration and taking an appropriate backup. Without `OPENAI_API_KEY`, chat history and the page remain available but generating responses returns a clear configuration notice. Model access and pricing depend on the OpenAI account. This initial integration does not include file/image uploads, voice, web search, custom assistants, or shared chat links.
+Set the key only in the backend environment (for local development, `backend/.env`; in production, the backend hosting provider's secret settings), then restart/redeploy the API. Without `OPENAI_API_KEY`, the widget reports the service offline and response endpoints return HTTP 503; no mock answer is returned. Model access and pricing depend on the OpenAI account. If an existing database has not applied the pre-existing additive `backend/migrations/038_ai_chat.sql` migration, review it and back up the database before running `npm run migrate`; this chatbot enhancement adds no database tables or migrations.
 
 AI chat also blocks common requests to disclose credentials, hidden instructions, private configuration, or other users' data before calling the provider. Credential-shaped values are redacted from chat input, stored titles/messages, model context, streamed output, and rendered message text; the model receives a fixed security policy that treats conversation content as untrusted. These checks are defense in depth and pattern-based, not a substitute for keeping secrets out of user messages or for access controls.
 
@@ -87,7 +91,7 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 ### Render backend
 
 - Blueprint: repository `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
-- Set these environment variable names in Render: `NODE_ENV`, `WEB_ORIGIN`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL`, `DB_SSL_CA`, `COOKIE_SECURE`, `COOKIE_SAME_SITE`, and (when enabling AI Assistant) `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS`. Production requires TLS and a verified CA, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Keep credentials and CA material only in secure dashboard settings.
+- Set these environment variable names in Render: `NODE_ENV`, `WEB_ORIGIN`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL`, `DB_SSL_CA`, `COOKIE_SECURE`, `COOKIE_SAME_SITE`, and (when enabling AI Assistant) `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS`. To configure the provider key, open the backend service in the Render Dashboard, go to **Environment**, add `OPENAI_API_KEY` as a secret value, then save and redeploy. Verify availability with `GET /api/ai/status`; it returns only whether the key is configured. Production requires TLS and a verified CA, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Keep credentials and CA material only in secure dashboard settings.
 - Hero slide files are stored under `backend/uploads/hero-slides`. Configure persistent shared storage for this directory in production (especially across deploys or multiple API instances); the database stores only generated filenames and the API serves the image bytes.
 - `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and checks `SELECT DATABASE()` against `DB_NAME`; readiness failures return a safe reason code. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
 - Run `npm run db:check` only in an environment configured with the real DB credentials and CA. It performs read-only checks and no schema/data changes.

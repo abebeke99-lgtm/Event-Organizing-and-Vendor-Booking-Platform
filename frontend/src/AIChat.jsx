@@ -257,6 +257,10 @@ export default function AIChat({ user, currentPath, onNavigate }) {
           setMessages((items) => items.map((item) => item.id === assistantId
             ? { ...item, content: item.content + parsed.data.delta }
             : item));
+        } else if (parsed.event === 'references' && Array.isArray(parsed.data.references)) {
+          setMessages((items) => items.map((item) => item.id === assistantMessage.id
+            ? { ...item, references: parsed.data.references }
+            : item));
         } else if (parsed.event === 'complete') {
           completed = true;
           completedGeneration = true;
@@ -481,6 +485,12 @@ export default function AIChat({ user, currentPath, onNavigate }) {
                   a: ({ children, href, ...props }) => <a href={href} target="_blank" rel="noreferrer noopener" {...props}>{children}</a>,
                 }}>{redactAiChatSecrets(message.content)}</ReactMarkdown>
                 : message.pending ? <span className="ai-typing"><i/><i/><i/></span> : ''}</div>
+              {message.role === 'assistant' && message.references?.length > 0 && <div className="ai-chat-references">
+                <span>{t('aiChatReferences')}</span>
+                {message.references.slice(0, 6).map((reference) => <button type="button" key={`${reference.href}-${reference.id}`} onClick={() => onNavigate(reference.href)}>
+                  {reference.title || reference.name}
+                </button>)}
+              </div>}
               <div className="ai-message-actions">
                 {message.role === 'assistant' && message.content && <>
                   <button type="button" className="ai-copy-button" onClick={() => void copyMessage(message)}>{copiedMessageId === message.id ? <Check size={14}/> : <Copy size={14}/>} {t(copiedMessageId === message.id ? 'aiChatCopied' : 'aiChatCopy')}</button>

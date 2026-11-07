@@ -69,7 +69,10 @@ export function optionalPlatformUser(req, res, next) {
   }
   loadPlatformUser(req, { includeAdmins: true })
     .then((user) => {
-      if (!user) clearPlatformCookie(res);
+      if (!user) {
+        clearPlatformCookie(res);
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
       req.platformUser = user;
       return next();
     })

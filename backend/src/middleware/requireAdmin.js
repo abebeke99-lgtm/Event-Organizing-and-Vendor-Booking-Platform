@@ -2,6 +2,24 @@ import { pool } from '../db.js';
 import { ROLE_PERMISSION_MATRIX } from '../lib/rbac.js';
 import { hashToken } from '../lib/security.js';
 
+function clearAdminCookie(res) {
+  res.clearCookie('admin_session', {
+    httpOnly: true,
+    secure: process.env.COOKIE_SECURE === 'true',
+    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
+    path: '/',
+  });
+}
+
+function clearPlatformCookie(res) {
+  res.clearCookie('platform_session', {
+    httpOnly: true,
+    secure: process.env.COOKIE_SECURE === 'true',
+    sameSite: process.env.COOKIE_SAME_SITE || 'strict',
+    path: '/',
+  });
+}
+
 async function findAdministrator(req) {
   const clauses = [];
   const values = [];
@@ -31,6 +49,21 @@ async function findAdministrator(req) {
   return rows[0] || null;
 }
 
+async function hasActivePlatformSession(req) {
+  const database = req.app?.locals?.database || pool;
+  const [rows] = await database.execute(
+    `SELECT 1
+     FROM user_sessions s
+     JOIN users u ON u.id = s.user_id AND u.status = 'active'
+     JOIN user_roles ur ON ur.user_id = u.id
+     JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
+     WHERE s.token_hash = ? AND s.expires_at > NOW()
+     LIMIT 1`,
+    [hashToken(req.cookies.platform_session)],
+  );
+  return rows.length > 0;
+}
+
 function attachAdministrator(req, administrator) {
   req.admin = { ...administrator, role: 'admin' };
   req.user = {
@@ -46,6 +79,7 @@ export async function requireAdmin(req, res, next) {
   try {
     const administrator = await findAdministrator(req);
     if (!administrator) {
+      if (req.cookies?.admin_session) clearAdminCookie(res);
       if (req.cookies?.platform_session) {
         const database = req.app?.locals?.database || pool;
         const [accounts] = await database.execute(
@@ -58,6 +92,7 @@ export async function requireAdmin(req, res, next) {
           [hashToken(req.cookies.platform_session)],
         );
         if (accounts.length) return res.status(403).json({ error: 'Access denied.' });
+        clearPlatformCookie(res);
       }
       return res.status(401).json({ error: 'Authentication required.' });
     }
@@ -75,9 +110,23 @@ export function optionalAdmin(req, res, next) {
   }
   findAdministrator(req)
     .then((administrator) => {
-      req.admin = administrator;
-      if (administrator) attachAdministrator(req, administrator);
-      return next();
+      if (administrator) {
+        attachAdministrator(req, administrator);
+        return next();
+      }
+
+      if (req.cookies.admin_session) clearAdminCookie(res);
+      if (!req.cookies.platform_session) {
+        return res.status(401).json({ error: 'Authentication required.' });
+      }
+      return hasActivePlatformSession(req).then((hasSession) => {
+        if (!hasSession) {
+          clearPlatformCookie(res);
+          return res.status(401).json({ error: 'Authentication required.' });
+        }
+        req.admin = null;
+        return next();
+      });
     })
     .catch(next);
 }

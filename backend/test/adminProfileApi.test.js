@@ -42,6 +42,18 @@ async function execute(sql, values = []) {
       has_active_admin_role: 1,
     } : null].filter(Boolean)];
   }
+  if (sql.includes('WHERE LOWER(u.email) = ?')) {
+    return [[profile.email === values[0] ? {
+      id: profile.id,
+      full_name: profile.full_name,
+      email: profile.email,
+      password_hash: passwordHash,
+      status: profile.status,
+      role: 'admin',
+      is_admin: 1,
+      role_is_active: 1,
+    } : null].filter(Boolean)];
+  }
   if (sql.includes('FROM admin_sessions s')) {
     return [adminSessions.has(values[0]) ? [{
       id: profile.id,
@@ -393,6 +405,7 @@ test('password change requires the current password and rotates administrator se
 });
 
 test('administrator email changes stay pending until OTP verification and then use the new login identity', async () => {
+  passwordHash = await bcrypt.hash('!@#$%^&*()_+', 4);
   adminSessions.add(hashToken(initialToken));
   emailChangeChallenge = null;
   emailChangeEmail = '';

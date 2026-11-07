@@ -47,6 +47,10 @@ html[data-theme="dark"] .ai-chat-app{background:#0b0b0b;color:#ececec}html[data-
 .ai-message-text pre code{padding:0;background:transparent;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
 .ai-message-text a{color:#4d54b7;text-decoration:underline;text-underline-offset:2px}
 .ai-message-actions{display:flex;flex-wrap:wrap;gap:3px;margin-top:8px}
+.ai-chat-references{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #eee}
+.ai-chat-references>span{width:100%;color:#777;font-size:10px}
+.ai-chat-references button{max-width:100%;overflow:hidden;padding:5px 8px;border:1px solid #e1e0f0;border-radius:7px;background:#fff;color:#5051a1;text-overflow:ellipsis;white-space:nowrap;font:inherit;font-size:11px;cursor:pointer}
+.ai-chat-references button:hover{background:#f5f4ff;border-color:#cfceee}
 .ai-copy-button{margin-top:0;cursor:pointer}
 .ai-copy-button svg{flex:0 0 auto}
 .ai-composer-wrap{width:min(820px,calc(100% - 48px));padding-bottom:18px}
@@ -70,6 +74,8 @@ html[data-theme="dark"] .ai-message-text pre{background:#171717;border-color:#34
 html[data-theme="dark"] .ai-message-text :not(pre)>code,html[data-theme="dark"] .ai-message-text th{background:#292929}
 html[data-theme="dark"] .ai-message-text th,html[data-theme="dark"] .ai-message-text td{border-color:#414141}
 html[data-theme="dark"] .ai-message-text a{color:#a7a5ff}
+html[data-theme="dark"] .ai-chat-references{border-color:#343434}
+html[data-theme="dark"] .ai-chat-references button{border-color:#41414b;background:#202025;color:#c5c2ff}
 html[data-theme="dark"] .ai-tool-button,html[data-theme="dark"] .ai-attachment-chip,html[data-theme="dark"] .ai-editing-note{background:#212121;border-color:#383838;color:#ddd}
 html[data-theme="dark"] .ai-tool-button:hover,html[data-theme="dark"] .ai-tool-button.listening{background:#27253d;border-color:#474373;color:#c5c2ff}
 html[data-theme="dark"] .ai-message-text .hljs{color:#e6e6e6;background:transparent}

@@ -20,6 +20,7 @@ import { isStrongPassword } from '../lib/authFlow.js';
 import { isValidCategoryName } from '../lib/categoryName.js';
 import { calculateDashboardSummary, createBookingSnapshot } from '../lib/bookingRules.js';
 import { buildPublicEventCategoriesQuery, buildPublicEventListingQuery, getPublicEvents, mapDatabaseEvent, resolveEventCategoryFilter, sanitizeText } from '../lib/eventCatalog.js';
+import { publicEventFrom, publicEventOwnerFrom, publicEventSelect, publicEventWhere, upcomingPublicEventWhere } from '../lib/publicEventSql.js';
 import { getPublicServiceById, listPublicServices } from '../lib/serviceCatalog.js';
 import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
 import { createEventSchema, dateTimeSchema, toMysqlDateTime } from '../lib/eventInput.js';
@@ -128,57 +129,6 @@ const bookingSelect = `
   JOIN users cu ON cu.id = e.organizer_id
   JOIN vendor_profiles vp ON vp.id = b.vendor_id`;
 
-const publicEventOwnerFrom = `
-  FROM events e
-  JOIN users u ON u.id = e.organizer_id`;
-const publicEventFrom = `${publicEventOwnerFrom}
-  LEFT JOIN (
-    SELECT tt.event_id,
-           MIN(CASE
-             WHEN (tt.sales_start IS NULL OR tt.sales_start <= NOW())
-               AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
-             THEN tt.price
-           END) AS starting_price,
-           SUM(CASE
-             WHEN (tt.sales_start IS NULL OR tt.sales_start <= NOW())
-               AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
-             THEN GREATEST(tt.capacity - tt.sold_quantity - COALESCE(reserved.quantity, 0), 0)
-             ELSE 0
-           END) AS available_quantity,
-           SUM(CASE
-              WHEN tt.price = 0
-                AND (tt.sales_start IS NULL OR tt.sales_start <= NOW())
-                AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
-              THEN GREATEST(tt.capacity - tt.sold_quantity - COALESCE(reserved.quantity, 0), 0)
-              ELSE 0
-           END) AS free_available_quantity
-    FROM event_ticket_types tt
-    LEFT JOIN (
-      SELECT ticket_type_id, SUM(quantity) AS quantity
-      FROM event_ticket_bookings
-      WHERE booking_status = 'pending_payment'
-        AND created_at >= NOW() - INTERVAL 15 MINUTE
-      GROUP BY ticket_type_id
-    ) reserved ON reserved.ticket_type_id = tt.id
-    WHERE tt.status = 'active'
-    GROUP BY tt.event_id
-  ) t ON t.event_id = e.id`;
-
-const publicEventSelect = `
-  SELECT e.id, e.title, e.event_type, e.description, e.notes, e.city, e.venue, e.cover_image_url,
-         e.gallery_images, e.start_date, e.end_date, e.budget, e.capacity, e.status,
-         e.published_at, e.created_at, u.full_name AS organizer_name,
-         e.is_featured,
-         COALESCE((SELECT SUM(etb.quantity) FROM event_ticket_bookings etb
-                   WHERE etb.event_id = e.id AND etb.booking_status = 'confirmed'), 0) AS popularity_count,
-         t.starting_price,
-         COALESCE(t.available_quantity, 0) AS available_quantity,
-         COALESCE(t.free_available_quantity, 0) AS free_available_quantity
-  ${publicEventFrom}`;
-const publicEventWhere = `WHERE (e.status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
-  OR (e.status = 'completed' AND e.published_at IS NOT NULL))`;
-const upcomingPublicEventWhere = `WHERE e.start_date >= NOW() AND (e.status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
-  OR (e.status = 'completed' AND e.published_at IS NOT NULL))`;
 const dateOnlySchema = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
   .refine((value) => {
