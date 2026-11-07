@@ -151,6 +151,9 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
     windowMs: 60 * 1000,
     limit: 20,
     message: 'Too many AI requests. Please try again shortly.',
+    onLimit() {
+      logAiChatFailure('legacy assist rate limit', { code: 'TOO_MANY_REQUESTS', status: 429 });
+    },
   });
   const publicChatLimiter = createAuthRateLimiter({
     windowMs: 60 * 1000,
@@ -281,13 +284,18 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
       }).strict()).max(8).optional(),
     }).strict().safeParse(req.body);
     if (!body.success) {
+      logAiChatFailure('legacy assist input validation', { code: 'INVALID_INPUT', status: 400 });
       return res.status(400).json({ error: 'Enter a message of up to 4,000 characters.' });
     }
     if (!openai) {
+      logAiChatFailure('legacy assist request (missing API key)', { code: 'MISSING_API_KEY', status: 503 });
       return res.status(503).json({ error: 'AI chat is not configured. Set OPENAI_API_KEY on the backend.' });
     }
     const model = getModel();
-    if (!model) return res.status(503).json({ error: 'No valid AI model is configured on the backend.' });
+    if (!model) {
+      logAiChatFailure('legacy assist request (invalid model)', { code: 'INVALID_MODEL', status: 503 });
+      return res.status(503).json({ error: 'No valid AI model is configured on the backend.' });
+    }
     const language = getLanguage(req, body.data.language);
     const blockedRequest = isSensitiveDisclosureRequest(body.data.message);
     if (blockedRequest) {
@@ -304,7 +312,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
     try {
       context = await loadContext(database, body.data.message);
     } catch (error) {
-      console.error('AI public catalogue lookup failed:', error?.code || error?.name || 'Unknown database error');
+      logAiChatFailure('legacy assist public catalogue lookup', error);
       return res.status(503).json({ error: 'EventHub listings are temporarily unavailable. Please try again shortly.' });
     }
     const role = req.platformUser?.role || 'visitor';
@@ -329,6 +337,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
       });
       const content = completion.choices?.[0]?.message?.content;
       if (typeof content !== 'string' || !content.trim()) {
+        logAiChatFailure('legacy assist empty provider response', { code: 'EMPTY_RESPONSE', status: 502 });
         return res.status(502).json({ error: 'The AI returned an empty response. Please try again.' });
       }
       const safeContent = redactSensitiveContent(content.trim());
@@ -349,6 +358,10 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
       const failure = getProviderFailure(error);
       const retryAfter = providerRetryAfter(error);
       if (retryAfter) res.set('Retry-After', String(retryAfter));
+      logAiChatFailure('legacy assist provider request', {
+        code: error?.code || error?.error?.code || error?.name,
+        status: error?.status || failure.status,
+      });
       res.status(failure.status).json({ error: failure.message });
     }
   });
