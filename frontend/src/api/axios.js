@@ -1,32 +1,12 @@
 import axios from 'axios';
 import { clearPlatformSessionHint, getRetryAfterMilliseconds } from '../authSession.js';
 import { getLanguage } from '../language.js';
+import { resolveApiBaseUrl } from './apiUrl.js';
 
 const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : import.meta.env;
 
-function resolveApiBaseUrl() {
-  const configuredUrl = (viteEnvironment.VITE_API_URL || '').trim();
-  if (!configuredUrl) {
-    if (viteEnvironment.PROD) {
-      throw new Error('VITE_API_URL must be configured to the deployed API origin or its /api base path.');
-    }
-    return 'http://127.0.0.1:4000/api';
-  }
-
-  const parsedUrl = new URL(configuredUrl);
-  const path = parsedUrl.pathname.replace(/\/$/, '');
-  if (parsedUrl.search || parsedUrl.hash || (path && path !== '/api')) {
-    throw new Error('VITE_API_URL must be an API origin or end in /api, without query or fragment.');
-  }
-  if (viteEnvironment.PROD && parsedUrl.protocol !== 'https:') {
-    throw new Error('Production VITE_API_URL must use HTTPS.');
-  }
-
-  return `${parsedUrl.origin}/api`;
-}
-
 const apiClient = axios.create({
-  baseURL: resolveApiBaseUrl(),
+  baseURL: resolveApiBaseUrl(viteEnvironment.VITE_API_URL, Boolean(viteEnvironment.PROD)),
   withCredentials: true,
   timeout: 15_000,
 });

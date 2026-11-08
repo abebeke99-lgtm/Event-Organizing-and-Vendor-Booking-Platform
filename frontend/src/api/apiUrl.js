@@ -1,0 +1,33 @@
+const LOCAL_API_URL = 'http://127.0.0.1:4000/api';
+
+export function resolveApiBaseUrl(configuredUrl, isProduction) {
+  const value = (configuredUrl || '').trim();
+  if (!value) {
+    if (isProduction) {
+      throw new Error('VITE_API_URL must be configured to the deployed API origin or its /api base path.');
+    }
+    return LOCAL_API_URL;
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(value);
+  } catch {
+    throw new Error('VITE_API_URL must be a valid API origin or end in /api, without query or fragment.');
+  }
+
+  const path = parsedUrl.pathname.replace(/\/$/, '');
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)
+    || parsedUrl.username
+    || parsedUrl.password
+    || parsedUrl.search
+    || parsedUrl.hash
+    || (path && path !== '/api')) {
+    throw new Error('VITE_API_URL must be an API origin or end in /api, without credentials, query, or fragment.');
+  }
+  if (isProduction && parsedUrl.protocol !== 'https:') {
+    throw new Error('Production VITE_API_URL must use HTTPS.');
+  }
+
+  return `${parsedUrl.origin}/api`;
+}

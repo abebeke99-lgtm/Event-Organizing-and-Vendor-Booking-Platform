@@ -57,7 +57,7 @@ Do not put database credentials, API keys, passwords, or other secrets in any `V
 
 ## 3. Verify the deployment
 
-The health endpoint responds with HTTP 200 and `{ "ok": true, "db": true }` when the API can query MySQL. If it responds with `db: false`, its `reason` field is a safe diagnostic code and the Render logs contain sanitized connection details. A successful HTTP status by itself does not prove the database is connected.
+The health endpoint responds with HTTP 200 and `{ "ok": true, "db": true }` when the API can query MySQL. It responds with HTTP 503 and `{ "ok": false, "db": false, "reason": "..." }` when MySQL is unavailable; `reason` is a safe diagnostic code and Render logs contain sanitized connection details. The Render health check must pass before the service is considered ready.
 
 Run the read-only local deployment checks from PowerShell after confirming the service URL in the Render Dashboard. The Render URL is deliberately required rather than assuming that a hostname belongs to this project:
 

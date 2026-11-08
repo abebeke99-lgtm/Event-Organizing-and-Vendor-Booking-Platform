@@ -114,7 +114,7 @@ export function createApp({
       return res.json({ ok: true, db: true });
     } catch (error) {
       console.error('Database health check failed:', formatDatabaseError(error));
-      return res.json({ ok: true, db: false, reason: getDatabaseFailureCode(error) });
+      return res.status(503).json({ ok: false, db: false, reason: getDatabaseFailureCode(error) });
     }
   }));
   app.get('/api/platform/availability', asyncHandler(async (req, res) => {

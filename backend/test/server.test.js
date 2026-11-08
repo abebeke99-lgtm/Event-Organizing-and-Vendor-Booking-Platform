@@ -470,7 +470,7 @@ test('unconfigured origins cannot submit API writes', async () => {
   assert.deepEqual(await response.json(), { error: 'Request origin is not allowed.' });
 });
 
-test('database health route remains available and checks database connectivity', async () => {
+test('database health route returns ready only after a successful database query', async () => {
   const response = await fetch(`${baseUrl}/api/health`);
 
   assert.equal(response.status, 200);
@@ -478,7 +478,7 @@ test('database health route remains available and checks database connectivity',
   assert.equal(healthQueryCount, 1);
 });
 
-test('database health route reports a safe failure code when the query fails', async () => {
+test('database health route returns unavailable and a safe failure code when the query fails', async () => {
   const unavailableApp = createApp({
     database: {
       async query() {
@@ -505,8 +505,8 @@ test('database health route reports a safe failure code when the query fails', a
       console.error = originalConsoleError;
     }
 
-    assert.equal(response.status, 200);
-    assert.deepEqual(body, { ok: true, db: false, reason: 'DB_CONNECT_FAILED' });
+    assert.equal(response.status, 503);
+    assert.deepEqual(body, { ok: false, db: false, reason: 'DB_CONNECT_FAILED' });
     assert.equal(Object.hasOwn(body, 'error'), false);
     assert.doesNotMatch(JSON.stringify(body), /health-test-secret/);
     assert.doesNotMatch(loggedErrors.join(' '), /health-test-secret/);
