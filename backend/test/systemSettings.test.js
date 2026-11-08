@@ -95,6 +95,27 @@ test('system settings loader only queries recognized keys using SQL parameters',
   assert.equal(settings.maintenance_mode, false);
 });
 
+test('system settings loader uses PostgreSQL placeholders and result rows', async () => {
+  let query;
+  const settings = await loadSystemSettings({
+    dialect: 'postgres',
+    async query(statement, values) {
+      query = { statement, values };
+      return {
+        rows: [
+          { setting_key: 'platform_status', setting_value: 'maintenance' },
+          { setting_key: 'maintenance_mode', setting_value: false },
+        ],
+      };
+    },
+  }, ['platform_status', 'maintenance_mode', 'unknown_key']);
+
+  assert.match(query.statement, /setting_key IN \(\$1, \$2\)/);
+  assert.deepEqual(query.values, ['platform_status', 'maintenance_mode']);
+  assert.equal(settings.platform_status, 'maintenance');
+  assert.equal(settings.maintenance_mode, false);
+});
+
 test('maintenance middleware blocks public operations with the configured message', async () => {
   const req = {
     path: '/events',
@@ -135,4 +156,11 @@ test('maintenance middleware allows logout and propagates database errors', asyn
     app: { locals: { database: { async execute() { throw databaseError; } } } },
   }, createMiddlewareResponse(), (error) => { forwardedError = error; });
   assert.equal(forwardedError, databaseError);
+});
+
+test('maintenance middleware leaves platform availability reachable', async () => {
+  const req = { path: '/availability', app: { locals: {} } };
+  let continued = false;
+  await requirePlatformAvailable(req, createMiddlewareResponse(), () => { continued = true; });
+  assert.equal(continued, true);
 });

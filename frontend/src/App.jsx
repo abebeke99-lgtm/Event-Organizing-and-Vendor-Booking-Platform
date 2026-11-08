@@ -431,10 +431,13 @@ function SessionStatusNotice({ sessionState }) {
 }
 
 function SessionRecoveryPage({ sessionState }) {
+  const waking = sessionState.status === 'waking';
   return <main className="login-wrap"><section className="login-card">
     <AuthBrand />
-    <h1>Session verification unavailable</h1>
-    <p className="muted">We could not verify your account. Your public browsing remains available; retry before opening a protected workspace.</p>
+    <h1>{waking ? 'Server is waking up' : 'Session verification unavailable'}</h1>
+    <p className="muted">{waking
+      ? 'The database is starting after inactivity. Your session has not been cleared; wait a moment and retry.'
+      : 'We could not verify your account. Your public browsing remains available; retry before opening a protected workspace.'}</p>
     <SessionStatusNotice sessionState={sessionState}/>
     <a className="auth-home-link" href="/">Back to Home</a>
   </section></main>;
@@ -730,7 +733,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
       <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
       <div className="public-account-menu">{role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/ai-chat'); }}>{translate('aiChatAssistant', language)}</button>}<button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
     </details> : <div className="public-auth-actions"><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></div>}</div>
-  </div></header>{['error', 'rate-limited'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
+  </div></header>{['error', 'rate-limited', 'waking'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
 }
 
 function LanguageSelector({ user, isAdmin = false }) {
@@ -4248,6 +4251,21 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
     }
   }
 
+  async function downloadVendorVerificationDocument(document) {
+    try {
+      const file = await api(`/vendor/verification/documents/${document.id}`, { responseType: 'blob' });
+      if (!file?.size) throw new Error('The verification document is empty or unavailable.');
+      const objectUrl = URL.createObjectURL(file);
+      const link = window.document.createElement('a');
+      link.href = objectUrl;
+      link.download = document.original_name || 'verification-document';
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (issue) {
+      setError(issue.message || 'Unable to download the verification document.');
+    }
+  }
+
   useEffect(() => {
     async function load() {
       try {
@@ -4277,7 +4295,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
       case 'profile':
         return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BUSINESS PROFILE</p><h2>Business information</h2><p className="muted">Manage your public-facing vendor identity and service coverage.</p></div><button className="button secondary">Preview public profile</button></div><div className="panel profile-panel"><div className="profile-avatar">{data.profile?.businessName?.slice(0,1) || 'G'}</div><div><h3>{data.profile?.businessName}</h3><p className="muted">{data.profile?.businessType}</p><p>{data.profile?.serviceLocation}</p></div></div><div className="panel" style={{padding:'20px'}}><div className="field"><span>Business name</span><input value={data.profile?.businessName || ''} readOnly /></div><div className="field"><span>Business description</span><textarea rows="4" value={data.profile?.description || ''} readOnly /></div><div className="field"><span>Website</span><input value={data.profile?.website || ''} readOnly /></div></div></div>;
       case 'verification':
-        return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">VENDOR VERIFICATION</p><h2>Verification status</h2><p className="muted">Track your vendor application, submitted documents, and review updates.</p></div></div><div className="metric-grid"><article className="metric-card"><p>Status</p><strong>{data.verification?.status || 'Pending'}</strong><span>{data.verification?.reasons?.[0] || data.verification?.reviewProgress || 'Under review'}</span></article><article className="metric-card"><p>Submitted</p><strong>{data.verification?.submittedAt ? new Date(data.verification.submittedAt).toLocaleDateString() : '—'}</strong><span>Application date</span></article></div><div className="panel" style={{padding:'20px'}}><h3>Verification documents</h3>{['pending','under_review','information_requested'].includes(data.verification?.status) && <label className="field"><span>{documentBusy ? 'Uploading…' : 'Add documents (PDF, JPEG, or PNG; up to 5 MB each)'}</span><input type="file" accept="application/pdf,image/jpeg,image/png" multiple disabled={documentBusy} onChange={uploadVendorVerificationDocuments}/></label>}<div className="list-stack">{(data.verification?.documents || []).map((doc) => <div key={doc.id} className="list-card"><div><strong>{doc.original_name}</strong><small>{doc.content_type} · {Math.ceil(doc.file_size / 1024)} KB · Private document</small></div><span className="pill active">Submitted</span></div>)}</div>{(data.verification?.history || []).length > 0 && <><h3>Verification history</h3><div className="list-stack">{data.verification.history.map((entry, index) => <div key={`${entry.created_at}-${index}`} className="list-card"><div><strong>{entry.from_status ? `${entry.from_status.replaceAll('_', ' ')} → ` : ''}{entry.to_status.replaceAll('_', ' ')}</strong><small>{entry.reason} · {new Date(entry.created_at).toLocaleString()}</small></div></div>)}</div></>}</div></div>;
+        return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">VENDOR VERIFICATION</p><h2>Verification status</h2><p className="muted">Track your vendor application, submitted documents, and review updates.</p></div></div><div className="metric-grid"><article className="metric-card"><p>Status</p><strong>{data.verification?.status || 'Pending'}</strong><span>{data.verification?.reasons?.[0] || data.verification?.reviewProgress || 'Under review'}</span></article><article className="metric-card"><p>Submitted</p><strong>{data.verification?.submittedAt ? new Date(data.verification.submittedAt).toLocaleDateString() : '—'}</strong><span>Application date</span></article></div><div className="panel" style={{padding:'20px'}}><h3>Verification documents</h3>{['pending','under_review','information_requested'].includes(data.verification?.status) && <label className="field"><span>{documentBusy ? 'Uploading…' : 'Add documents (PDF, JPEG, or PNG; up to 5 MB each)'}</span><input type="file" accept="application/pdf,image/jpeg,image/png" multiple disabled={documentBusy} onChange={uploadVendorVerificationDocuments}/></label>}<div className="list-stack">{(data.verification?.documents || []).map((doc) => <div key={doc.id} className="list-card"><div><strong>{doc.original_name}</strong><small>{doc.content_type} · {Math.ceil(doc.file_size / 1024)} KB · Private document</small></div><button className="button secondary small" type="button" onClick={() => downloadVendorVerificationDocument(doc)}>Download</button></div>)}</div>{(data.verification?.history || []).length > 0 && <><h3>Verification history</h3><div className="list-stack">{data.verification.history.map((entry, index) => <div key={`${entry.created_at}-${index}`} className="list-card"><div><strong>{entry.from_status ? `${entry.from_status.replaceAll('_', ' ')} → ` : ''}{entry.to_status.replaceAll('_', ' ')}</strong><small>{entry.reason} · {new Date(entry.created_at).toLocaleString()}</small></div></div>)}</div></>}</div></div>;
       case 'services':
         return <div className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">MY SERVICES</p><h2>Service portfolio</h2><p className="muted">Search, filter, view, and manage all services owned by your business.</p></div><button className="button">+ Add service</button></div><div className="table-wrap"><table><thead><tr><th>Name</th><th>Category</th><th>Status</th><th>Price</th><th>Bookings</th></tr></thead><tbody>{(data.services || []).map((service) => <tr key={service.id}><td>{service.name}</td><td>{service.category}</td><td><span className="pill active">{service.status}</span></td><td>{new Intl.NumberFormat('en-ET', { style:'currency', currency:'ETB', maximumFractionDigits:0 }).format(service.price)}</td><td>{service.bookings}</td></tr>)}</tbody></table></div></div>;
       case 'add-edit-services':
@@ -6314,7 +6332,7 @@ export default function App(){
   const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || routePath === '/my-favorites' || isAiChatRoute || roleDashboardRoute || Boolean(customerBookingRoute);
   if (routePath === '/admin/login') return <Navigate to="/login" replace />;
   if (checking && requiresSession) return <div className="loading full-screen"><img className="loading-brand-symbol" src="/eventhub-symbol.png" alt="EventHub"/><span className="spinner"/>Checking your session…</div>;
-  if (requiresSession && !user && ['error', 'rate-limited'].includes(authSessionState.status)) {
+  if (requiresSession && !user && ['error', 'rate-limited', 'waking'].includes(authSessionState.status)) {
     return <SessionRecoveryPage sessionState={authSessionState}/>;
   }
   if (routePath.startsWith('/admin') && (!user || String(user.role || '').toLowerCase() !== 'admin')) {

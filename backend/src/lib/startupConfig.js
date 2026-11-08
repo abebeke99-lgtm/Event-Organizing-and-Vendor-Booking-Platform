@@ -1,4 +1,5 @@
 import { getDatabaseConfigurationErrors } from './databaseConfig.js';
+import { getPostgresConfigurationErrors } from './postgresConfig.js';
 
 function isValidOriginList(value, isProduction) {
   const origins = value.split(',').map((origin) => origin.trim());
@@ -15,7 +16,12 @@ function isValidOriginList(value, isProduction) {
 }
 
 export function getStartupConfigurationErrors(environment = process.env) {
-  const errors = [...getDatabaseConfigurationErrors(environment)];
+  const databaseDialect = environment.DB_DIALECT?.trim() || 'mysql';
+  const errors = databaseDialect === 'postgres'
+    ? getPostgresConfigurationErrors(environment, { purpose: 'runtime' })
+    : databaseDialect === 'mysql'
+      ? getDatabaseConfigurationErrors(environment)
+      : [`DB_DIALECT (set to mysql or postgres)`];
   const isProduction = environment.NODE_ENV === 'production';
 
   if (!environment.NODE_ENV?.trim()) {

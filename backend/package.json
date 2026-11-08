@@ -8,6 +8,10 @@
     "migrate": "node src/lib/migrate.js",
     "db:init": "node scripts/db-init.js",
     "db:check": "node scripts/check-db.js",
+    "db:check:neon-test": "node scripts/check-neon-test-db.js",
+    "migrate:neon-test": "node scripts/migrate-neon-test.js",
+    "audit": "npm run audit:postgres-queries",
+    "audit:postgres-queries": "node scripts/audit-postgres-query-inventory.js",
     "smtp:check": "node scripts/check-smtp.js",
     "seed:users": "node scripts/seed-users.js",
     "seed:vendor-menu": "node scripts/seed-vendor-menu.js",
@@ -29,6 +33,10 @@
     "mysql2": "^3.12.0",
     "nodemailer": "^10.3.1",
     "openai": "^6.49.0",
+    "pg": "^8.23.1",
     "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@babel/parser": "^7.29.11"
   }
 }

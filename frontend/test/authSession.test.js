@@ -172,6 +172,56 @@ test('network failures remain recoverable and do not cause automatic retries', a
     },
   });
 
+  test('initial auth probes retry 503 responses with backoff and eventually authenticate', async () => {
+    let adminCalls = 0;
+    const delays = [];
+    const loader = createAuthSessionLoader({
+      async getAdminSession() {
+        adminCalls += 1;
+        if (adminCalls < 3) throw httpError(503);
+        return { user: { id: 21, role: 'admin' } };
+      },
+      async getPlatformSession() {
+        return { data: { user: null } };
+      },
+      sleep: async (milliseconds) => delays.push(milliseconds),
+    });
+
+    const result = await loader.load();
+
+    assert.equal(result.status, 'authenticated');
+    assert.equal(adminCalls, 3);
+    assert.deepEqual(delays, [500, 1000]);
+  });
+
+  test('persistent 503 shows waking state and does not clear a platform session hint', async () => {
+    let clearedSessions = 0;
+    let adminCalls = 0;
+    const delays = [];
+    const loader = createAuthSessionLoader({
+      async getAdminSession() {
+        adminCalls += 1;
+        throw httpError(503);
+      },
+      async getPlatformSession() {
+        throw httpError(401);
+      },
+      hasPlatformSession: () => true,
+      clearPlatformSession() {
+        clearedSessions += 1;
+      },
+      sleep: async (milliseconds) => delays.push(milliseconds),
+    });
+
+    const result = await loader.load();
+
+    assert.equal(result.status, 'waking');
+    assert.match(result.message, /Server is waking up/);
+    assert.equal(adminCalls, 3);
+    assert.deepEqual(delays, [500, 1000]);
+    assert.equal(clearedSessions, 0);
+  });
+
   const failed = await loader.load();
   const unchanged = await loader.load();
 

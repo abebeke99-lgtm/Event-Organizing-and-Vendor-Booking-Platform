@@ -1,5 +1,14 @@
 const LOCAL_API_URL = 'http://127.0.0.1:4000/api';
 
+function isLoopbackHost(hostname) {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1') return true;
+  const octets = host.split('.');
+  return octets.length === 4
+    && octets.every((octet) => /^\d+$/.test(octet) && Number(octet) <= 255)
+    && Number(octets[0]) === 127;
+}
+
 export function resolveApiBaseUrl(configuredUrl, isProduction) {
   const value = (configuredUrl || '').trim();
   if (!value) {
@@ -27,6 +36,9 @@ export function resolveApiBaseUrl(configuredUrl, isProduction) {
   }
   if (isProduction && parsedUrl.protocol !== 'https:') {
     throw new Error('Production VITE_API_URL must use HTTPS.');
+  }
+  if (isProduction && isLoopbackHost(parsedUrl.hostname)) {
+    throw new Error('Production VITE_API_URL must not use a localhost or loopback host.');
   }
 
   return `${parsedUrl.origin}/api`;

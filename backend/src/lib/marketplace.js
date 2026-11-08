@@ -20,7 +20,7 @@ function toNumber(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function mapVendor(row, services = [], media = []) {
+export function mapVendor(row, services = [], media = []) {
   const mediaUrl = (entry) => `/api/platform/vendors/${toNumber(row.id)}/media/${toNumber(entry.id)}`;
   const startingPriceOptions = services.flatMap((service) => [
     ...(service.price === null ? [] : [{ price: service.price, currency: service.currency, serviceId: service.id }]),
@@ -59,7 +59,7 @@ function mapVendor(row, services = [], media = []) {
   };
 }
 
-function mapService(row) {
+export function mapService(row) {
   return {
     id: toNumber(row.id),
     title: String(row.title || '').trim(),

@@ -230,6 +230,18 @@ test('startup configuration validation reports missing environment variable name
   assert.equal(new Set(errors).size, errors.length);
 });
 
+test('PostgreSQL startup validates the pooled runtime URL without requiring migration credentials', () => {
+  const configuration = {
+    DB_DIALECT: 'postgres',
+    DATABASE_URL: 'postgresql://test-user:test-password@ep-eventhub-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+    WEB_ORIGIN: 'http://localhost:5173',
+    COOKIE_SECURE: 'false',
+    COOKIE_SAME_SITE: 'lax',
+    NODE_ENV: 'test',
+  };
+  assert.deepEqual(getStartupConfigurationErrors(configuration), []);
+});
+
 test('production startup requires HTTPS origin and cross-site secure cookies', () => {
   const configuration = {
     DB_HOST: 'db.example.test',
@@ -515,6 +527,53 @@ test('database health route returns unavailable and a safe failure code when the
     await new Promise((resolve, reject) => {
       unavailableServer.close((error) => error ? reject(error) : resolve());
       unavailableServer.closeAllConnections();
+    });
+  }
+});
+
+test('PostgreSQL health route reports the PostgreSQL response shape', async () => {
+  const postgresApp = createApp({
+    databaseDialect: 'postgres',
+    database: { async query() { return { rows: [{ '?column?': 1 }] }; } },
+  });
+  const postgresServer = postgresApp.listen(0, '127.0.0.1');
+  await once(postgresServer, 'listening');
+  try {
+    const response = await fetch(`http://127.0.0.1:${postgresServer.address().port}/api/health`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { status: 'ok', db: true });
+  } finally {
+    await new Promise((resolve, reject) => {
+      postgresServer.close((error) => error ? reject(error) : resolve());
+      postgresServer.closeAllConnections();
+    });
+  }
+});
+
+test('transient PostgreSQL auth database failures return 503 instead of 401 or 500', async () => {
+  const postgresApp = createApp({
+    databaseDialect: 'postgres',
+    database: {
+      async query() {
+        throw Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNRESET' });
+      },
+      async execute() {
+        throw Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNRESET' });
+      },
+    },
+  });
+  const postgresServer = postgresApp.listen(0, '127.0.0.1');
+  await once(postgresServer, 'listening');
+  try {
+    const response = await fetch(`http://127.0.0.1:${postgresServer.address().port}/api/auth/me`, {
+      headers: { Cookie: 'admin_session=test-session' },
+    });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { message: 'Database is waking up, please retry' });
+  } finally {
+    await new Promise((resolve, reject) => {
+      postgresServer.close((error) => error ? reject(error) : resolve());
+      postgresServer.closeAllConnections();
     });
   }
 });

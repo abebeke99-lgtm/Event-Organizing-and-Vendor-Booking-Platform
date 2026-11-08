@@ -25,6 +25,20 @@ test('production API URL must use HTTPS', () => {
   );
 });
 
+test('production API URL must not target localhost or loopback addresses', () => {
+  for (const value of [
+    'https://localhost/api',
+    'https://api.localhost/api',
+    'https://127.0.0.1/api',
+    'https://[::1]/api',
+  ]) {
+    assert.throws(
+      () => resolveApiBaseUrl(value, true),
+      /must not use a localhost or loopback host/,
+    );
+  }
+});
+
 test('API URL rejects credentials, unexpected paths, queries, and fragments', () => {
   for (const value of [
     'https://user:password@api.example.test/api',

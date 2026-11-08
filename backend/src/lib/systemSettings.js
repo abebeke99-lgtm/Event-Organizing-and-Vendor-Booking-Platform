@@ -139,11 +139,18 @@ export function mergeSystemSettings(rows = []) {
 export async function loadSystemSettings(database, keys = Object.keys(SYSTEM_SETTING_SCHEMAS)) {
   const supportedKeys = keys.filter((key) => Object.hasOwn(SYSTEM_SETTING_SCHEMAS, key));
   if (!supportedKeys.length) return {};
-  const placeholders = supportedKeys.map(() => '?').join(', ');
-  const [rows] = await database.execute(
-    `SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (${placeholders})`,
-    supportedKeys,
-  );
+  const isPostgres = database?.dialect === 'postgres';
+  const placeholders = supportedKeys.map((_, index) => isPostgres ? `$${index + 1}` : '?').join(', ');
+  const result = isPostgres
+    ? await database.query(
+        `SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (${placeholders})`,
+        supportedKeys,
+      )
+    : await database.execute(
+        `SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (${placeholders})`,
+        supportedKeys,
+      );
+  const rows = isPostgres ? result.rows : result[0];
   return mergeSystemSettings(rows);
 }
 

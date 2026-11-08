@@ -30,16 +30,14 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     await verifyDatabaseConnection();
     databaseConnected = true;
   } catch (error) {
-    console.warn(
-      `MySQL connection failed [${getDatabaseFailureCode(error)}]; the API will start and report db:false at /api/health:`,
-      formatDatabaseError(error),
-    );
+    const dialect = process.env.DB_DIALECT === 'postgres' ? 'PostgreSQL' : 'MySQL';
+    console.warn(`${dialect} connection failed [${getDatabaseFailureCode(error)}]; the API will start with database health unavailable:`, formatDatabaseError(error));
   }
 
   if (!process.exitCode) {
-    if (databaseConnected) console.log('MySQL connected.');
+    if (databaseConnected) console.log(process.env.DB_DIALECT === 'postgres' ? 'Database connected.' : 'MySQL connected.');
     const paymentProvider = await loadPaymentProvider();
-    const app = createApp({ paymentProvider });
+    const app = createApp({ paymentProvider, databaseDialect: process.env.DB_DIALECT || 'mysql' });
     const server = app.listen(PORT, HOST, () => {
       console.log(`Admin API listening on ${HOST}:${PORT}`);
     });

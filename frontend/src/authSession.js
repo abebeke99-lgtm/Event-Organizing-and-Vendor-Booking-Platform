@@ -57,6 +57,8 @@ export function createAuthSessionLoader({
   hasPlatformSession = () => true,
   clearPlatformSession = () => {},
   now = Date.now,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  sessionRetryAttempts = 3,
 }) {
   let snapshot = { status: 'loading' };
   let inFlight = null;
@@ -68,10 +70,21 @@ export function createAuthSessionLoader({
     for (const listener of listeners) listener();
   }
 
+  async function getSessionWithRetry(getSession) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await getSession();
+      } catch (error) {
+        if (error?.status !== 503 || attempt >= sessionRetryAttempts) throw error;
+        await sleep(500 * (2 ** (attempt - 1)));
+      }
+    }
+  }
+
   async function resolveSession() {
     const [adminResult, platformResult] = await Promise.allSettled([
-      getAdminSession(),
-      hasPlatformSession() ? getPlatformSession() : Promise.resolve({ user: null }),
+      getSessionWithRetry(getAdminSession),
+      hasPlatformSession() ? getSessionWithRetry(getPlatformSession) : Promise.resolve({ user: null }),
     ]);
     const adminResponse = adminResult.status === 'fulfilled' ? adminResult.value : null;
     const platformResponse = platformResult.status === 'fulfilled' ? platformResult.value : null;
@@ -94,11 +107,18 @@ export function createAuthSessionLoader({
     const errors = [adminResult, platformResult]
       .filter((result) => result.status === 'rejected')
       .map((result) => result.reason);
+    const rateLimitError = errors.find((error) => error?.status === 429);
+    if (rateLimitError) return getErrorResult(rateLimitError, now);
+    const wakingError = errors.find((error) => error?.status === 503);
+    if (wakingError) {
+      return {
+        status: 'waking',
+        message: 'Server is waking up. Please wait a moment, then retry.',
+      };
+    }
     if (platformResult.status === 'rejected' && platformResult.reason?.status === 401) {
       clearPlatformSession();
     }
-    const rateLimitError = errors.find((error) => error?.status === 429);
-    if (rateLimitError) return getErrorResult(rateLimitError, now);
     const requestError = errors.find((error) => error?.status !== 401);
     if (requestError) return getErrorResult(requestError, now);
 
@@ -110,7 +130,7 @@ export function createAuthSessionLoader({
     if (snapshot.status === 'rate-limited' && now() < snapshot.retryAt) {
       return Promise.resolve(snapshot);
     }
-    if (!force && ['authenticated', 'unauthenticated', 'error'].includes(snapshot.status)) {
+    if (!force && ['authenticated', 'unauthenticated', 'error', 'waking'].includes(snapshot.status)) {
       return Promise.resolve(snapshot);
     }
 

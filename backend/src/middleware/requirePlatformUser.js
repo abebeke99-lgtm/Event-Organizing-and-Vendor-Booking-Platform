@@ -5,6 +5,36 @@ import { getCookieOptions } from '../lib/cookieOptions.js';
 
 async function loadPlatformUser(req, { includeAdmins = false } = {}) {
   const database = req.app?.locals?.database || pool;
+  if (req.app?.locals?.databaseDialect === 'postgres') {
+    const adminRoleFilter = includeAdmins ? '' : 'AND r.is_admin = FALSE';
+    const result = await database.query(
+      `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status,
+         CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator')
+           THEN 'admin' ELSE LOWER(r.name) END AS role,
+         ARRAY_REMOVE(ARRAY_AGG(DISTINCT p.permission_key), NULL) AS permission_keys
+       FROM user_sessions s
+       JOIN users u ON u.id = s.user_id
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       LEFT JOIN role_permissions rp ON rp.role_id = r.id
+       LEFT JOIN permissions p ON p.id = rp.permission_id
+       WHERE s.token_hash = $1 AND s.expires_at > NOW() AND u.status = 'active'
+         AND r.is_active = TRUE ${adminRoleFilter}
+       GROUP BY u.id, r.name, r.is_admin
+       ORDER BY CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN 1
+         WHEN LOWER(r.name) = 'organizer' THEN 2 WHEN LOWER(r.name) = 'vendor' THEN 3
+         WHEN LOWER(r.name) = 'customer' THEN 4 ELSE 5 END
+       LIMIT 1`,
+      [hashToken(req.cookies.platform_session)],
+    );
+    const user = result.rows[0];
+    if (!user) return null;
+
+    const allowedPermissions = new Set(getRolePermissionPolicy(user.role));
+    const permissions = (user.permission_keys || [])
+      .filter((permission) => allowedPermissions.has(permission) && !isCriticalPermission(permission));
+    return { ...user, name: user.full_name, permissions };
+  }
   const adminRoleFilter = includeAdmins ? '' : 'AND r.is_admin = FALSE';
   const [rows] = await database.execute(
     `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status,

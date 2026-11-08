@@ -28,9 +28,18 @@ import heroSlidesRoutes, { adminRouter as adminHeroSlidesRoutes, requireHeroSlid
 import { requestContextMiddleware } from './lib/requestContext.js';
 import { localizationMiddleware } from './lib/localization.js';
 import { createAiChatRouter } from './routes/aiChat.js';
+import { isTransientPostgresError } from './lib/postgresRetry.js';
+import { formatPostgresError } from './postgresDb.js';
+import { createPostgresAuthRouter } from './routes/postgresAuth.js';
+import { createPostgresPublicEventsRouter } from './routes/postgresPublicEvents.js';
+import { createPostgresMarketplaceRouter } from './routes/postgresMarketplace.js';
+import { createPostgresBookingRouters } from './routes/postgresBookings.js';
+import { createPostgresVendorRouter } from './routes/postgresVendor.js';
+import { createPostgresProfilePhotoRouter } from './routes/postgresProfilePhoto.js';
 
 export function createApp({
   database = pool,
+  databaseDialect = process.env.DB_DIALECT || 'mysql',
   emailConfigured,
   emailSender,
   emailChangeEmailConfigured,
@@ -54,6 +63,7 @@ export function createApp({
   app.use(requestContextMiddleware);
   app.use(localizationMiddleware);
   app.locals.database = database;
+  app.locals.databaseDialect = databaseDialect;
   app.locals.heroSlidesDirectory = heroSlidesDirectory;
   app.locals.passwordReset = { emailConfigured, emailSender, otpGenerator, otpHasher };
   app.locals.adminEmailChange = {
@@ -97,9 +107,10 @@ export function createApp({
     }
     next();
   });
-  app.use('/api/payments/webhook', paymentWebhookRoutes);
+  if (databaseDialect !== 'postgres') {
+    app.use('/api/payments/webhook', paymentWebhookRoutes);
+  }
   app.use(express.json({ limit: '100kb' }));
-  app.use('/api/ai', requirePlatformAvailable, createAiChatRouter({ ...aiChatServices, database, client: aiClient }));
   app.get('/', (req, res) => res.json({
     status: 'ok',
     service: 'event-organizing-and-vendor-booking-api',
@@ -111,65 +122,90 @@ export function createApp({
   app.get('/api/health', asyncHandler(async (_req, res) => {
     try {
       await database.query('SELECT 1');
-      return res.json({ ok: true, db: true });
+      return res.json(databaseDialect === 'postgres' ? { status: 'ok', db: true } : { ok: true, db: true });
     } catch (error) {
-      console.error('Database health check failed:', formatDatabaseError(error));
-      return res.status(503).json({ ok: false, db: false, reason: getDatabaseFailureCode(error) });
+      console.error('Database health check failed:', databaseDialect === 'postgres'
+        ? formatPostgresError(error)
+        : formatDatabaseError(error));
+      return res.status(503).json(databaseDialect === 'postgres'
+        ? { status: 'ok', db: false }
+        : { ok: false, db: false, reason: getDatabaseFailureCode(error) });
     }
   }));
-  app.get('/api/platform/availability', asyncHandler(async (req, res) => {
-    const settings = await loadSystemSettings(database);
-    updateSystemSettingsCache(app, settings);
-    const platformState = getSystemLockState(settings);
-    res.json({
-      data: {
-        platformName: settings.platform_name,
-        platformDescription: settings.platform_description,
-        maintenanceMode: platformState.locked,
-        maintenanceMessage: settings.maintenance_message,
-        publicRegistrationEnabled: settings.public_registration_enabled,
-        defaultRegistrationRole: settings.default_registration_role,
-        supportEmail: settings.support_email,
-        supportPhone: settings.support_phone,
-        brandingLogoUrl: settings.branding_logo_url,
-        platformLocale: settings.platform_locale,
-        platformCurrency: settings.platform_currency,
-        reportTimezone: settings.report_timezone,
-      },
-    });
-  }));
-  app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'), organizerRoutes);
-  app.use('/api/platform', requirePlatformAvailable, platformRoutes);
-  app.use('/api/hero-slides', heroSlidesRoutes);
-  app.use('/api/about', requirePlatformAvailable, aboutRoutes);
-  app.use('/api/contact', requirePlatformAvailable, contactRoutes);
-  app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), vendorRoutes);
-  app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer'), customerRoutes);
-  app.use('/api/auth', createAuthRouter({
-    database,
-    emailConfigured,
-    emailSender,
-    passwordHasher,
-    otpGenerator,
-    otpHasher,
-    otpVerifier,
-  }));
-  app.use('/api/users/me/avatar', userAvatarRoutes);
-  app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
-  app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
-  app.use('/api/admin/hero-slides', requireHeroSlideAdmin, adminHeroSlidesRoutes);
-  app.use('/api/admin', requireAdmin);
-  app.use('/api/admin', adminAuditLogRoutes);
-  app.use('/api/admin', adminPaymentRoutes);
-  app.use('/api/admin/reports', adminReportsRoutes);
-  app.use('/api/admin', adminReviewsComplaintsRoutes);
-  app.use('/api/admin', adminNotificationsRoutes);
-  app.use('/api/admin', adminRoutes);
+  if (databaseDialect === 'postgres') {
+    const postgresBookingRouters = createPostgresBookingRouters({ database });
+    app.use('/api/platform', requirePlatformAvailable, createPostgresMarketplaceRouter({ database }));
+    app.use('/api/platform', requirePlatformAvailable, postgresBookingRouters.platform);
+    app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), postgresBookingRouters.vendor);
+    app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), createPostgresVendorRouter({ database }));
+    app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), postgresBookingRouters.customer);
+    app.use('/api/platform/profile/photo', requirePlatformAvailable, createPostgresProfilePhotoRouter({ database }));
+    app.use('/api/platform', requirePlatformAvailable, createPostgresPublicEventsRouter({ database }));
+    app.use('/api/platform', requirePlatformAvailable, createPostgresAuthRouter({ database }));
+    app.use('/api/auth', createPostgresAuthRouter({ database, adminNamespace: true }));
+  } else {
+    app.use('/api/ai', requirePlatformAvailable, createAiChatRouter({ ...aiChatServices, database, client: aiClient }));
+    app.get('/api/platform/availability', asyncHandler(async (req, res) => {
+      const settings = await loadSystemSettings(database);
+      updateSystemSettingsCache(app, settings);
+      const platformState = getSystemLockState(settings);
+      res.json({
+        data: {
+          platformName: settings.platform_name,
+          platformDescription: settings.platform_description,
+          maintenanceMode: platformState.locked,
+          maintenanceMessage: settings.maintenance_message,
+          publicRegistrationEnabled: settings.public_registration_enabled,
+          defaultRegistrationRole: settings.default_registration_role,
+          supportEmail: settings.support_email,
+          supportPhone: settings.support_phone,
+          brandingLogoUrl: settings.branding_logo_url,
+          platformLocale: settings.platform_locale,
+          platformCurrency: settings.platform_currency,
+          reportTimezone: settings.report_timezone,
+        },
+      });
+    }));
+    app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'), organizerRoutes);
+    app.use('/api/platform', requirePlatformAvailable, platformRoutes);
+    app.use('/api/hero-slides', heroSlidesRoutes);
+    app.use('/api/about', requirePlatformAvailable, aboutRoutes);
+    app.use('/api/contact', requirePlatformAvailable, contactRoutes);
+    app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), vendorRoutes);
+    app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer'), customerRoutes);
+    app.use('/api/auth', createAuthRouter({
+      database,
+      emailConfigured,
+      emailSender,
+      passwordHasher,
+      otpGenerator,
+      otpHasher,
+      otpVerifier,
+    }));
+    app.use('/api/users/me/avatar', userAvatarRoutes);
+    app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
+    app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
+    app.use('/api/admin/hero-slides', requireHeroSlideAdmin, adminHeroSlidesRoutes);
+    app.use('/api/admin', requireAdmin);
+    app.use('/api/admin', adminAuditLogRoutes);
+    app.use('/api/admin', adminPaymentRoutes);
+    app.use('/api/admin/reports', adminReportsRoutes);
+    app.use('/api/admin', adminReviewsComplaintsRoutes);
+    app.use('/api/admin', adminNotificationsRoutes);
+    app.use('/api/admin', adminRoutes);
+  }
   app.use((req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
-    console.error(`Request failed: ${req.method} ${req.originalUrl}: ${formatDatabaseError(error)}`);
-    console.error(error.stack || error);
+    const databaseUnavailable = databaseDialect === 'postgres' && isTransientPostgresError(error);
+    const formattedError = databaseDialect === 'postgres'
+      ? formatPostgresError(error)
+      : formatDatabaseError(error);
+    console.error(`Request failed: ${req.method} ${req.originalUrl}: ${formattedError}`);
+    if (databaseDialect !== 'postgres') console.error(error.stack || error);
+    if (databaseUnavailable) {
+      return res.status(503).json({ message: 'Database is waking up, please retry' });
+    }
     const status = Number.isInteger(error.status) ? error.status : 500;
     res.status(status).json({ message: error.expose ? error.message : 'The request could not be completed.' });
   });

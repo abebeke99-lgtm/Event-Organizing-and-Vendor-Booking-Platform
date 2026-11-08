@@ -244,6 +244,7 @@ getRoute('/overview', async (req, res) => {
     averageRating: ratings.length ? Number((ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length).toFixed(2)) : 0,
     unreadMessages: messages.filter((message) => !message.read_at).length,
     notifications: notificationRows[0].length,
+    unreadNotifications: notificationRows[0].length,
   });
 });
 
@@ -313,7 +314,10 @@ getRoute('/verification', async (req, res) => {
     submittedAt: vendor.created_at,
     reviewProgress: vendor.verification_status.replaceAll('_', ' '),
     reasons: vendor.verification_reason ? [vendor.verification_reason] : [],
-    documents,
+    documents: documents.map((document) => ({
+      ...document,
+      downloadUrl: `/api/vendor/verification/documents/${Number(document.id)}`,
+    })),
     history,
   });
 });
@@ -350,6 +354,25 @@ router.post('/verification/documents', vendorVerificationDocumentParser, asyncHa
     data: { id: result.insertId, original_name: name, content_type: contentType, file_size: req.body.length },
   });
 }));
+
+getRoute('/verification/documents/:id', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Document ID is invalid.' });
+  const [[document]] = await databaseFor(req).execute(
+    `SELECT content, content_type, file_size
+     FROM vendor_verification_documents WHERE id = ? AND vendor_id = ?`,
+    [id.data, req.vendor.id],
+  );
+  if (!document) return res.status(404).json({ error: 'Verification document not found.' });
+  res.set({
+    'Content-Type': document.content_type,
+    'Content-Length': document.file_size,
+    'Content-Disposition': 'attachment',
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  return res.send(document.content);
+});
 
 getPermissionRoute('/services', 'services.manage_own', async (req, res) => {
   const [rows] = await databaseFor(req).execute(

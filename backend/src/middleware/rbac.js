@@ -47,7 +47,7 @@ export function requireModuleUnlocked(moduleKey) {
 }
 
 export async function requirePlatformAvailable(req, res, next) {
-  if (req.path === '/logout') return next();
+  if (['/logout', '/availability'].includes(req.path)) return next();
   try {
     const now = Date.now();
     let settings = req.app.locals?.platformSettingsCache;

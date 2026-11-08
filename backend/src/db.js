@@ -2,8 +2,12 @@ import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseConfig } from './lib/databaseConfig.js';
+import { formatPostgresError, getPostgresFailureCode } from './postgresDb.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
+
+export const isPostgresDialect = process.env.DB_DIALECT === 'postgres';
+const postgresModule = isPostgresDialect ? await import('./postgresPool.js') : null;
 
 export {
   createDatabaseConfig,
@@ -12,6 +16,7 @@ export {
 } from './lib/databaseConfig.js';
 
 export function formatDatabaseError(error, password = process.env.DB_PASSWORD) {
+  if (isPostgresDialect) return formatPostgresError(error);
   const details = [
     typeof error?.code === 'string' ? error.code : error?.name,
     Number.isInteger(error?.errno) ? `errno=${error.errno}` : null,
@@ -30,12 +35,15 @@ export function formatDatabaseError(error, password = process.env.DB_PASSWORD) {
   return details.join(': ') || 'Unknown database error';
 }
 
-export const pool = mysql.createPool(createDatabaseConfig());
+export const pool = isPostgresDialect ? postgresModule.getPostgresRuntimePool() : mysql.createPool(createDatabaseConfig());
 
 export async function verifyDatabaseConnection(database = pool, expectedDatabase) {
   await database.query('SELECT 1');
   if (expectedDatabase) {
-    const [rows] = await database.query('SELECT DATABASE() AS database_name');
+    const result = await database.query(
+      isPostgresDialect ? 'SELECT current_database() AS database_name' : 'SELECT DATABASE() AS database_name',
+    );
+    const rows = isPostgresDialect ? result.rows : result[0];
     if (rows[0]?.database_name !== expectedDatabase) {
       throw new Error('Connected database does not match DB_NAME.');
     }
@@ -43,6 +51,7 @@ export async function verifyDatabaseConnection(database = pool, expectedDatabase
 }
 
 export function getDatabaseFailureCode(error) {
+  if (isPostgresDialect) return getPostgresFailureCode(error);
   if (error?.message === 'Connected database does not match DB_NAME.') return 'DB_NAME_MISMATCH';
   if (['ER_ACCESS_DENIED_ERROR', 'ER_DBACCESS_DENIED_ERROR', 'ER_ACCESS_DENIED_NO_PASSWORD_ERROR'].includes(error?.code)) {
     return 'DB_AUTH_FAILED';
@@ -55,6 +64,20 @@ export function getDatabaseFailureCode(error) {
 }
 
 export async function inTransaction(work) {
+  if (isPostgresDialect) {
+    const connection = await pool.connect();
+    try {
+      await connection.query('BEGIN');
+      const result = await work(connection);
+      await connection.query('COMMIT');
+      return result;
+    } catch (error) {
+      await connection.query('ROLLBACK');
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
