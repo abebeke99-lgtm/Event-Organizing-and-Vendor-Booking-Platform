@@ -2,6 +2,7 @@ services:
   - type: web
     name: event-organizing-and-vendor-booking
     runtime: node
+    repo: https://github.com/abebeke99-lgtm/Event-Organizing-and-Vendor-Booking-Platform
     branch: main
     rootDir: .
     buildCommand: npm ci
@@ -11,6 +12,8 @@ services:
       - key: NODE_ENV
         sync: false
       - key: WEB_ORIGIN
+        sync: false
+      - key: DATABASE_URL
         sync: false
       - key: DB_HOST
         sync: false
@@ -26,9 +29,29 @@ services:
         sync: false
       - key: DB_SSL_CA
         sync: false
+      - key: DB_SSL_CA_BASE64
+        sync: false
       - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: OPENAI_CHAT_MODELS
         sync: false
       - key: COOKIE_SECURE
         sync: false
       - key: COOKIE_SAME_SITE
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SMTP_SECURE
         sync: false

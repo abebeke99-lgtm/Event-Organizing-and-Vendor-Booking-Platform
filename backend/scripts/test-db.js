@@ -9,16 +9,16 @@ const configurationErrors = getDatabaseConfigurationErrors(process.env, { requir
 
 function commonCause(error) {
   if (['ER_ACCESS_DENIED_ERROR', 'ER_DBACCESS_DENIED_ERROR', 'ER_ACCESS_DENIED_NO_PASSWORD_ERROR'].includes(error?.code)) {
-    return 'Check DB_USER and DB_PASSWORD in the local backend environment.';
+    return 'Check DATABASE_URL or the configured DB_USER and DB_PASSWORD.';
   }
   if (error?.code === 'ER_BAD_DB_ERROR') {
     return 'The configured database does not exist; verify DB_NAME before creating it.';
   }
   if (error?.code === 'ECONNREFUSED' || error?.code === 'ENOTFOUND') {
-    return 'Check that MySQL is running and DB_HOST/DB_PORT point to the intended server.';
+    return 'Check the configured MySQL host and port, and confirm the database allows this connection.';
   }
   if (error?.code === 'DB_TLS_FAILED' || /certificate|tls|ssl/i.test(error?.message || '')) {
-    return 'For Aiven, verify DB_SSL=true and the valid DB_SSL_CA PEM in the secure production environment.';
+    return 'Verify DB_SSL=true and the provider CA configuration; do not disable certificate verification.';
   }
   return 'Check the local MySQL service, selected environment, and database configuration.';
 }
@@ -27,7 +27,8 @@ if (configurationErrors.length) {
   console.error(`FAIL Configuration: set valid values for ${configurationErrors.join(', ')}`);
   process.exitCode = 1;
 } else {
-  const { formatDatabaseError, getDatabaseFailureCode, pool } = await import('../src/db.js');
+  const { createDatabaseConfig, formatDatabaseError, getDatabaseFailureCode, pool } = await import('../src/db.js');
+  const expectedDatabase = createDatabaseConfig().database;
   try {
     const [probe] = await pool.query('SELECT 1 AS result');
     if (Number(probe[0]?.result) !== 1) throw new Error('SELECT 1 returned an unexpected result.');
@@ -35,12 +36,12 @@ if (configurationErrors.length) {
     console.log('PASS SELECT 1');
 
     const [databaseRows] = await pool.query('SELECT DATABASE() AS database_name');
-    if (databaseRows[0]?.database_name !== process.env.DB_NAME) {
+    if (databaseRows[0]?.database_name !== expectedDatabase) {
       const mismatch = new Error('Connected database does not match DB_NAME.');
       mismatch.code = 'DB_NAME_MISMATCH';
       throw mismatch;
     }
-    console.log('PASS SELECT DATABASE() matches DB_NAME');
+    console.log('PASS SELECT DATABASE() matches configured database');
 
     const [tableRows] = await pool.query('SHOW TABLES');
     const tables = tableRows.map((row) => Object.values(row)[0]);

@@ -10,11 +10,16 @@ if (missingVariables.length) {
   console.error(`FAIL Configuration: set valid values for ${[...new Set(missingVariables)].join(', ')}`);
   process.exitCode = 1;
 } else {
-  const { formatDatabaseError, getDatabaseFailureCode, pool } = await import('../src/db.js');
-  await checkDatabase({ formatDatabaseError, getDatabaseFailureCode, pool });
+  const { createDatabaseConfig, formatDatabaseError, getDatabaseFailureCode, pool } = await import('../src/db.js');
+  await checkDatabase({
+    expectedDatabase: createDatabaseConfig().database,
+    formatDatabaseError,
+    getDatabaseFailureCode,
+    pool,
+  });
 }
 
-async function checkDatabase({ formatDatabaseError, getDatabaseFailureCode, pool }) {
+async function checkDatabase({ expectedDatabase, formatDatabaseError, getDatabaseFailureCode, pool }) {
   let step = tlsEnabled ? 'TLS-verified connection and SELECT 1' : 'MySQL connection and SELECT 1';
   try {
     const [result] = await pool.query('SELECT 1 AS result');
@@ -23,12 +28,12 @@ async function checkDatabase({ formatDatabaseError, getDatabaseFailureCode, pool
     console.log('PASS SELECT 1');
     step = 'SELECT DATABASE()';
     const [rows] = await pool.query('SELECT DATABASE() AS database_name');
-    if (rows[0]?.database_name !== process.env.DB_NAME) {
+    if (rows[0]?.database_name !== expectedDatabase) {
       const error = new Error('Connected database does not match DB_NAME.');
       error.code = 'DB_NAME_MISMATCH';
       throw error;
     }
-    console.log('PASS SELECT DATABASE() matches DB_NAME');
+    console.log('PASS SELECT DATABASE() matches configured database');
   } catch (error) {
     console.error(`FAIL ${step} [${getDatabaseFailureCode(error)}]: ${formatDatabaseError(error)}`);
     process.exitCode = 1;

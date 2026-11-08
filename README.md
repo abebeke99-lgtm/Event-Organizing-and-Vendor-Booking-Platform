@@ -66,7 +66,7 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 - MySQL is the configured database, accessed through `mysql2`.
 - Admin and platform authentication, public marketplace listings, and customer/vendor dashboard reads are backed by MySQL. Event creation now stores organizer-owned draft events transactionally with an audit record. Some dashboard controls and payment-provider workflows remain incomplete; payment records do not represent a real payment integration.
-- Configure `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true` and a valid PEM CA certificate in `DB_SSL_CA`; certificate verification remains enabled.
+- Configure either `DATABASE_URL` or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true`; certificate verification remains enabled, with an optional provider CA in `DB_SSL_CA` or `DB_SSL_CA_BASE64`.
 
 ## EventHub AI Assistant
 
@@ -90,28 +90,30 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 
 ### Render backend
 
-- Blueprint: repository `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
-- Set these environment variable names in Render: `NODE_ENV`, `WEB_ORIGIN`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_SSL`, `DB_SSL_CA`, `COOKIE_SECURE`, `COOKIE_SAME_SITE`, and (when enabling AI Assistant) `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS`. To configure the provider key, open the backend service in the Render Dashboard, go to **Environment**, add `OPENAI_API_KEY` as a secret value, then save and redeploy. Verify provider access with `GET /api/ai/health` and configuration with `GET /api/ai/status`. Production requires TLS and a verified CA, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Keep credentials and CA material only in secure dashboard settings.
+- Blueprint: the existing GitHub repository's `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
+- Required Render variables: `NODE_ENV=production`, `WEB_ORIGIN` (exact HTTPS frontend origin), `DB_SSL=true`, `COOKIE_SECURE=true`, `COOKIE_SAME_SITE=none`, and either `DATABASE_URL` or all five of `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. Render supplies `PORT`; Express binds to `0.0.0.0`. Set secrets only in the Render Dashboard.
+- Optional Render variables: `DB_SSL_CA` or `DB_SSL_CA_BASE64` only if a provider CA is needed; `FRONTEND_URL` for email links; `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_SECURE` for password-reset email; `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS` for AI Assistant; `PAYMENT_PROVIDER_ADAPTER` only when a real payment adapter is configured; `PLATFORM_STATUS` and `MAINTENANCE_MODE` for explicit platform status overrides. Do not set `SESSION_SECRET`; it is reserved and unused. Do not create fake administrator accounts or run database initialization, migration, or seed commands against production.
+- To enable AI, configure the secret `OPENAI_API_KEY` in Render's **Environment** settings, then save and redeploy. Verify provider access with `GET /api/ai/health` and configuration with `GET /api/ai/status`. TLS certificate verification remains enabled, with Node's system CA store or the optional provider CA.
 - Hero slide files are stored under `backend/uploads/hero-slides`. Configure persistent shared storage for this directory in production (especially across deploys or multiple API instances); the database stores only generated filenames and the API serves the image bytes.
-- `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and checks `SELECT DATABASE()` against `DB_NAME`; readiness failures return a safe reason code. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
+- `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and returns HTTP 200 with `db: true` when MySQL is available, or `db: false` and a safe `reason` code when it is unavailable. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
 - Run `npm run db:check` only in an environment configured with the real DB credentials and CA. It performs read-only checks and no schema/data changes.
 - Confirm deploy version at `/api/version`. To rebuild without cached artifacts, use **Clear build cache & deploy** in Render.
 
 ### Netlify frontend
 
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
-- Set `VITE_API_URL` in Netlify to the Render API origin only (no `/api` suffix or trailing slash). It is a public build-time setting, not a secret. The client appends `/api` and sends credentialed requests.
+- Required: `VITE_API_URL` set to the actual Render service HTTPS URL ending in `/api` (for example `https://your-service.onrender.com/api`) and `VITE_DEMO_AUTH=false`. These are public build-time settings, not secrets. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
 - Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
 - Optionally set `VITE_CONTACT_PHONE` in the frontend build environment to show a `tel:` link in the public top bar; leave it empty to hide the phone. For local development, set these values in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
 - After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.
 
-Run `.\scripts\check-deploy.ps1` from PowerShell to print live endpoint status codes and compare the Render commit against local `git rev-parse HEAD`.
+Run `.\scripts\check-deploy.ps1` from PowerShell to check live endpoint status, MySQL readiness, and credentialed CORS, and compare the Render commit against local `git rev-parse HEAD`. Pass `-RenderUrl` and `-NetlifyUrl` if either service hostname differs from the defaults.
 
 | Symptom | Likely cause | Dashboard action |
 |---|---|---|
-| Render `/` returns 404 | Wrong Render service, root directory, branch, or stale deployment | Confirm repository, `main`, root directory, `npm run start`; redeploy latest commit |
-| Render `/api/health` returns 503 | Missing/invalid DB settings, denied access, TLS/CA failure, or DB name mismatch | Check reason code and Render logs; correct the named DB settings and Aiven grants/CA |
+| Render root or `/api/version` returns 404, or health returns 503 | The hostname is not serving this repository's deployed Express service, or the service is unavailable | Confirm the Blueprint source is this repository on `main`, verify the service URL in Render, inspect the deploy logs, and update Netlify `VITE_API_URL` if the hostname changed |
+| Render `/api/health` reports `"db": false` | Missing/invalid DB settings, denied access, network rules, or TLS/CA failure | Check the safe `reason` code and Render logs; correct the named DB settings and database network-access rules |
 | Netlify SPA route returns 404 | Fallback file absent from deployed publish directory or wrong publish path | Confirm `frontend/dist`, verify `_redirects` there, then clear cache and deploy |
 | Netlify bundle is stale | Wrong branch/repository, failed build, or old deploy still published | Verify deployed commit/build logs and run **Clear cache and deploy site** |
 

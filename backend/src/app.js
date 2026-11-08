@@ -13,7 +13,7 @@ import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { requirePlatformRole } from './middleware/requirePlatformUser.js';
 import { getSystemLockState } from './lib/rbac.js';
-import { formatDatabaseError, pool } from './db.js';
+import { formatDatabaseError, getDatabaseFailureCode, pool } from './db.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { requirePlatformAvailable } from './middleware/rbac.js';
 import { loadSystemSettings, updateSystemSettingsCache } from './lib/systemSettings.js';
@@ -114,7 +114,7 @@ export function createApp({
       return res.json({ ok: true, db: true });
     } catch (error) {
       console.error('Database health check failed:', formatDatabaseError(error));
-      return res.json({ ok: true, db: false });
+      return res.json({ ok: true, db: false, reason: getDatabaseFailureCode(error) });
     }
   }));
   app.get('/api/platform/availability', asyncHandler(async (req, res) => {

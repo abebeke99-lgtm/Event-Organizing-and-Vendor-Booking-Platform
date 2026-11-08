@@ -1,73 +1,70 @@
 # Production deployment
 
-## 1. Provision MySQL
+The production stack is a Render Node/Express API, the existing Netlify React/Vite site, and the already initialized managed MySQL database. The API cannot connect to MySQL running only on an XAMPP machine. Do not run `db:init`, migrations, seeds, or other data-changing commands as part of deployment.
 
-Create a managed MySQL database with a database and application user. Configure the provider's network access so Render can connect, and enable TLS. Render cannot reach a MySQL instance running only on your XAMPP machine.
+## 1. Deploy the Render API
 
-Use the provider's MySQL URL as `DATABASE_URL`, or record the separate host, port, database name, user, and password. A custom CA is optional: if `DB_SSL=true` and no CA is supplied, Node verifies the server with the system CA store. If your provider gives you a CA, set `DB_SSL_CA` to its PEM contents (escaped `\n` is accepted) or set `DB_SSL_CA_BASE64`.
+In Render, create or update a Blueprint from this repository's `main` branch. `render.yaml` pins the service to this repository, uses the repository root, installs the npm workspaces with `npm ci`, starts the backend with `npm run start`, and uses `/api/health` as its health-check path. Confirm the service URL assigned by Render; the Blueprint's service name is `event-organizing-and-vendor-booking`.
 
-## 2. Initialize the database and seed accounts
-
-Create a private `backend/.env` from `backend/.env.example` and fill in the cloud database connection settings. Do not commit `.env` or paste credentials into source control. From the repository root, run:
-
-```powershell
-npm run db:init
-```
-
-This runs the existing idempotent migrations, applies `backend/schema.sql`, and applies `backend/seed.sql` to the already-created database; it does not try to create a database on the provider.
-
-Set four unique passwords in the current PowerShell session, then create the four demo accounts:
-
-```powershell
-$secure = Read-Host 'Admin demo password' -AsSecureString
-$env:SEED_ADMIN_PASSWORD = [System.Net.NetworkCredential]::new('', $secure).Password
-$secure = Read-Host 'Organizer demo password' -AsSecureString
-$env:SEED_ORGANIZER_PASSWORD = [System.Net.NetworkCredential]::new('', $secure).Password
-$secure = Read-Host 'Vendor demo password' -AsSecureString
-$env:SEED_VENDOR_PASSWORD = [System.Net.NetworkCredential]::new('', $secure).Password
-$secure = Read-Host 'Customer demo password' -AsSecureString
-$env:SEED_CUSTOMER_PASSWORD = [System.Net.NetworkCredential]::new('', $secure).Password
-npm run seed:users
-```
-
-Each password must be 12-72 UTF-8 bytes. The seed script stores bcrypt hashes and does not print passwords. The demo emails are `admin@eventflow.test`, `organizer@eventflow.test`, `vendor@eventflow.test`, and `customer@eventflow.test`.
-
-## 3. Configure and deploy the Render backend
-
-Set these Render environment variables:
+Set these **required** Render environment variables:
 
 - `NODE_ENV=production`
-- `PORT` (normally supplied by Render)
-- Either `DATABASE_URL` or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`
-- `DB_SSL=true`; optionally set `DB_SSL_CA` or `DB_SSL_CA_BASE64`
-- `WEB_ORIGIN=https://infobekele.netlify.app` (comma-separate additional exact origins if needed)
+- `WEB_ORIGIN=https://infobekele.netlify.app` (comma-separate additional exact HTTPS frontend origins if needed; do not use `*`)
 - `COOKIE_SECURE=true`
 - `COOKIE_SAME_SITE=none`
-- `OPENAI_API_KEY` if the AI chat should be enabled
+- `DB_SSL=true`
+- One database credential option:
+  - `DATABASE_URL`: the managed MySQL connection URL; or
+  - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`
 
-The backend listens on Render's `PORT` and `0.0.0.0`. Database outages do not prevent the HTTP server from starting; `/api/health` reports the connection state. Deploy the `main` branch after setting the variables.
+Render supplies `PORT`; Express listens on that port and `0.0.0.0`. Put all database credentials in Render's environment settings, not in Git or chat.
 
-## 4. Configure and deploy Netlify
+These settings are **optional**:
 
-Set the Netlify environment variables:
+- `DB_SSL_CA` or `DB_SSL_CA_BASE64`: provider CA certificate when it is not trusted by Node's system CA store. Certificate verification remains enabled.
+- `FRONTEND_URL`: public frontend URL used in email links. Set to `https://infobekele.netlify.app`.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURE`: configure only when password-reset email is required. Keep credentials private.
+- `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_CHAT_MODELS`: configure only when enabling the AI assistant. `OPENAI_API_KEY` is a backend secret.
+- `PAYMENT_PROVIDER_ADAPTER`: optional server-side payment adapter module; do not set it unless a real provider adapter is configured.
+- `PLATFORM_STATUS` and `MAINTENANCE_MODE`: optional platform status overrides; leave unset for the normal open state.
 
-- `VITE_API_URL=https://event-organizing-and-vendor-booking.onrender.com/api`
-- `VITE_DEMO_AUTH=false`
+Do not configure `SESSION_SECRET`: database-backed random session tokens are used; the variable is reserved for a future integration. Do not configure `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_NAME`, `ADMIN_BOOTSTRAP_PASSWORD`, `SEED_ADMIN_PASSWORD`, `SEED_ORGANIZER_PASSWORD`, `SEED_VENDOR_PASSWORD`, or `SEED_CUSTOMER_PASSWORD` for a normal deployment. Do not create demo or fake administrator accounts. No database initialization, migration, seed, reset, or schema operation is needed for the already initialized production database.
 
-Redeploy the frontend after changing these values so Vite includes the API URL in the build. `frontend/public/_redirects` provides the React Router fallback for refreshed routes.
+`RENDER_GIT_COMMIT` is supplied by Render. `GIT_COMMIT` is an optional fallback for other hosts. `API_PORT` and `VITE_API_PROXY_TARGET` are local Vite development settings, while `TEST_USER_EMAIL`, `TEST_USER_NAME`, `TEST_USER_ROLE`, and `TEST_USER_PASSWORD` are local-only test-user inputs; do not set these on production services.
 
-## 5. Verify the deployment
+## 2. Configure and deploy the Netlify frontend
+
+Use the repository root as the base directory, `npm ci && npm run build` as the build command, and `frontend/dist` as the publish directory. The SPA fallback is `frontend/public/_redirects`.
+
+Set these **required** Netlify build environment variables:
+
+- `VITE_API_URL`: the actual Render service HTTPS URL ending in `/api`, for example `https://<your-render-service>.onrender.com/api`. Replace the example with the URL shown in the Render dashboard. The frontend accepts either the API origin or an origin ending in `/api` and appends exactly one `/api`.
+- `VITE_DEMO_AUTH=false`: production uses real API authentication; demo authentication is development-only.
+
+The checked-in `netlify.toml` uses the Blueprint's expected Render hostname. If Render assigns a different service URL, update `VITE_API_URL` in Netlify and rebuild/redeploy the site; a Vite build embeds this public URL.
+
+These **optional** public build-time variables only affect contact/profile links:
+
+- `VITE_TELEGRAM_URL`
+- `VITE_YOUTUBE_URL`
+- `VITE_FACEBOOK_URL`
+- `VITE_LINKEDIN_URL`
+- `VITE_CONTACT_PHONE`
+
+Do not put database credentials, API keys, passwords, or other secrets in any `VITE_*` setting.
+
+## 3. Verify the deployment
+
+The health endpoint responds with HTTP 200 and `{ "ok": true, "db": true }` when the API can query MySQL. If it responds with `db: false`, its `reason` field is a safe diagnostic code and the Render logs contain sanitized connection details. A successful HTTP status by itself does not prove the database is connected.
+
+Run the read-only local deployment checks from PowerShell after the Render URL and Netlify site are updated. Pass `-RenderUrl` and `-NetlifyUrl` if either host differs from the defaults:
 
 ```powershell
-curl.exe -i https://event-organizing-and-vendor-booking.onrender.com/api/health
-curl.exe -i https://event-organizing-and-vendor-booking.onrender.com/api/ai/health
+npm run db:check
+.\scripts\check-deploy.ps1
+# .\scripts\check-deploy.ps1 -RenderUrl "https://your-service.onrender.com" -NetlifyUrl "https://your-site.netlify.app"
 ```
 
-The first endpoint returns `{ "ok": true, "db": true }` when MySQL is reachable. The AI endpoint reports its own readiness and requires the provider key. Then verify in a browser:
+`npm run db:check` performs only `SELECT 1` and `SELECT DATABASE()`; it does not change data. The deployment script checks the Render service routes, database health, frontend CORS, Netlify routes, and deployed Render commit. Also verify browser login/registration against real accounts without creating test or fake users.
 
-- Sign in as each of the four seeded roles.
-- Confirm login and `/api/platform/me` or `/api/auth/me` work from the Netlify origin.
-- Confirm no CORS or unexpected 401 errors appear in the browser console.
-- Confirm the AI widget reports Online when its provider key is configured.
-
-The application uses database-backed random session tokens; it does not currently consume a JWT or session-signing secret. `SESSION_SECRET` in the example file is reserved for a future integration and is not required by this release.
+`GET /api/health` confirms API/database connectivity; `GET /api/version` reports the deployed commit. Password-reset email requires the optional SMTP settings. AI endpoints require the optional OpenAI key. Payment processing requires a real provider adapter; ordinary payment records are not a payment gateway integration.

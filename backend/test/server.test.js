@@ -98,6 +98,19 @@ test('DATABASE_URL supplies the MySQL connection credentials', () => {
   assert.deepEqual(config.ssl, { rejectUnauthorized: true });
 });
 
+test('production configuration accepts DATABASE_URL with verified TLS and secure cross-site cookies', () => {
+  const configuration = {
+    DATABASE_URL: 'mysql://validation-user@db.example.test/events',
+    DB_SSL: 'true',
+    WEB_ORIGIN: 'https://infobekele.netlify.app',
+    COOKIE_SECURE: 'true',
+    COOKIE_SAME_SITE: 'none',
+    NODE_ENV: 'production',
+  };
+
+  assert.deepEqual(getStartupConfigurationErrors(configuration), []);
+});
+
 test('database TLS accepts a base64-encoded custom CA', () => {
   const certificateAuthority = rootCertificates[0];
   const config = createDatabaseConfig({
@@ -435,7 +448,7 @@ test('database health route remains available and checks database connectivity',
   assert.equal(healthQueryCount, 1);
 });
 
-test('database health route remains successful and reports db false when the query fails', async () => {
+test('database health route reports a safe failure code when the query fails', async () => {
   const unavailableApp = createApp({
     database: {
       async query() {
@@ -463,7 +476,7 @@ test('database health route remains successful and reports db false when the que
     }
 
     assert.equal(response.status, 200);
-    assert.deepEqual(body, { ok: true, db: false });
+    assert.deepEqual(body, { ok: true, db: false, reason: 'DB_CONNECT_FAILED' });
     assert.equal(Object.hasOwn(body, 'error'), false);
     assert.doesNotMatch(JSON.stringify(body), /health-test-secret/);
     assert.doesNotMatch(loggedErrors.join(' '), /health-test-secret/);
