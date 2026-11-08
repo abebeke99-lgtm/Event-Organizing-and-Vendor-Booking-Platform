@@ -102,13 +102,13 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 ### Netlify frontend
 
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
-- Required: `VITE_API_URL` set to the actual Render service HTTPS URL ending in `/api` (for example `https://your-service.onrender.com/api`) and `VITE_DEMO_AUTH=false`. These are public build-time settings, not secrets. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
+- Required: `VITE_API_URL` set in Netlify to the actual Render service HTTPS URL confirmed in the Render Dashboard, ending in `/api`, and `VITE_DEMO_AUTH=false`. These are public build-time settings, not secrets. No unverified Render hostname is baked into the repository. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
 - Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
 - Optionally set `VITE_CONTACT_PHONE` in the frontend build environment to show a `tel:` link in the public top bar; leave it empty to hide the phone. For local development, set these values in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
 - After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.
 
-Run `.\scripts\check-deploy.ps1` from PowerShell to check live endpoint status, MySQL readiness, and credentialed CORS, and compare the Render commit against local `git rev-parse HEAD`. Pass `-RenderUrl` and `-NetlifyUrl` if either service hostname differs from the defaults.
+Run `.\scripts\check-deploy.ps1 -RenderUrl "https://<confirmed-render-service>.onrender.com"` from PowerShell to check live endpoint status, MySQL readiness, credentialed CORS, and compare the Render commit against local `git rev-parse HEAD`. The Render URL is required so the script does not assume an unverified service hostname; optionally pass `-NetlifyUrl` if the frontend origin differs.
 
 | Symptom | Likely cause | Dashboard action |
 |---|---|---|

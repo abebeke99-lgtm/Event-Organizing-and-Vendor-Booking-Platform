@@ -4,6 +4,5 @@ command = "npm ci && npm run build"
 publish = "frontend/dist"
 
 [build.environment]
-VITE_API_URL = "https://event-organizing-and-vendor-booking.onrender.com/api"
 VITE_DEMO_AUTH = "false"
 # The single SPA fallback is maintained in frontend/public/_redirects.

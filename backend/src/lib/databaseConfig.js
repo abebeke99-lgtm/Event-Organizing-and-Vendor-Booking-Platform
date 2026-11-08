@@ -1,5 +1,6 @@
 import { X509Certificate } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 
 function decodeCertificateAuthority(environment) {
   const base64 = environment.DB_SSL_CA_BASE64?.trim();
@@ -51,6 +52,12 @@ function parseDatabaseUrl(value) {
   }
 }
 
+function isLoopbackHost(value) {
+  const host = value.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1') return true;
+  return isIP(host) === 4 && Number(host.split('.')[0]) === 127;
+}
+
 function getDatabaseCredentials(environment) {
   const databaseUrl = environment.DATABASE_URL?.trim();
   if (databaseUrl) return parseDatabaseUrl(databaseUrl);
@@ -69,6 +76,7 @@ export function getDatabaseConfigurationErrors(
 ) {
   const errors = [];
   const databaseUrl = environment.DATABASE_URL?.trim();
+  const isProduction = environment.NODE_ENV === 'production';
   if (databaseUrl) {
     if (!parseDatabaseUrl(databaseUrl)) errors.push('DATABASE_URL (set a valid mysql://user:password@host:port/database URL)');
   } else {
@@ -84,6 +92,15 @@ export function getDatabaseConfigurationErrors(
     const port = Number(environment.DB_PORT);
     if (environment.DB_PORT && (!Number.isInteger(port) || port < 1 || port > 65535)) {
       errors.push('DB_PORT (or set DATABASE_URL to a valid port)');
+    }
+  }
+
+  if (isProduction) {
+    const databaseHost = databaseUrl
+      ? parseDatabaseUrl(databaseUrl)?.host
+      : environment.DB_HOST?.trim();
+    if (databaseHost && isLoopbackHost(databaseHost)) {
+      errors.push(`${databaseUrl ? 'DATABASE_URL' : 'DB_HOST'} (must use the remote production database host)`);
     }
   }
 

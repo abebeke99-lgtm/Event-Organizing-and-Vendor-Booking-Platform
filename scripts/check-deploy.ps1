@@ -1,5 +1,6 @@
 param(
-  [string]$RenderUrl = 'https://event-organizing-and-vendor-booking.onrender.com',
+  [Parameter(Mandatory = $true)]
+  [string]$RenderUrl,
   [string]$NetlifyUrl = 'https://infobekele.netlify.app'
 )
 

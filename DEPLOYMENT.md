@@ -43,7 +43,7 @@ Set these **required** Netlify build environment variables:
 - `VITE_API_URL`: the actual Render service HTTPS URL ending in `/api`, for example `https://<your-render-service>.onrender.com/api`. Replace the example with the URL shown in the Render dashboard. The frontend accepts either the API origin or an origin ending in `/api` and appends exactly one `/api`.
 - `VITE_DEMO_AUTH=false`: production uses real API authentication; demo authentication is development-only.
 
-The checked-in `netlify.toml` uses the Blueprint's expected Render hostname. If Render assigns a different service URL, update `VITE_API_URL` in Netlify and rebuild/redeploy the site; a Vite build embeds this public URL.
+Set `VITE_API_URL` in the Netlify Dashboard to the HTTPS URL confirmed in the Render Dashboard, ending in `/api`. No unverified Render hostname is baked into the repository. Redeploy after setting or changing it; a Vite build embeds this public URL.
 
 These **optional** public build-time variables only affect contact/profile links:
 
@@ -59,14 +59,13 @@ Do not put database credentials, API keys, passwords, or other secrets in any `V
 
 The health endpoint responds with HTTP 200 and `{ "ok": true, "db": true }` when the API can query MySQL. If it responds with `db: false`, its `reason` field is a safe diagnostic code and the Render logs contain sanitized connection details. A successful HTTP status by itself does not prove the database is connected.
 
-Run the read-only local deployment checks from PowerShell after the Render URL and Netlify site are updated. Pass `-RenderUrl` and `-NetlifyUrl` if either host differs from the defaults:
+Run the read-only local deployment checks from PowerShell after confirming the service URL in the Render Dashboard. The Render URL is deliberately required rather than assuming that a hostname belongs to this project:
 
 ```powershell
-npm run db:check
-.\scripts\check-deploy.ps1
-# .\scripts\check-deploy.ps1 -RenderUrl "https://your-service.onrender.com" -NetlifyUrl "https://your-site.netlify.app"
+.\scripts\check-deploy.ps1 -RenderUrl "https://<confirmed-render-service>.onrender.com"
+# Optionally pass -NetlifyUrl "https://your-site.netlify.app" if the site origin differs.
 ```
 
-`npm run db:check` performs only `SELECT 1` and `SELECT DATABASE()`; it does not change data. The deployment script checks the Render service routes, database health, frontend CORS, Netlify routes, and deployed Render commit. Also verify browser login/registration against real accounts without creating test or fake users.
+`npm run db:check` performs only `SELECT 1` and `SELECT DATABASE()`; it does not change data, but requires the real database environment and must only be run where those credentials are already configured. The deployment script checks the Render service routes, database health, frontend CORS, Netlify routes, and deployed Render commit. Also verify browser login/registration against real accounts without creating test or fake users.
 
 `GET /api/health` confirms API/database connectivity; `GET /api/version` reports the deployed commit. Password-reset email requires the optional SMTP settings. AI endpoints require the optional OpenAI key. Payment processing requires a real provider adapter; ordinary payment records are not a payment gateway integration.

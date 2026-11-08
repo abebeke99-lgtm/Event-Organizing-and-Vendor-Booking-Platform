@@ -98,6 +98,23 @@ test('DATABASE_URL supplies the MySQL connection credentials', () => {
   assert.deepEqual(config.ssl, { rejectUnauthorized: true });
 });
 
+test('production database configuration rejects loopback database hosts', () => {
+  const productionDatabaseSettings = { NODE_ENV: 'production', DB_SSL: 'true' };
+  assert.ok(getDatabaseConfigurationErrors({
+    ...databaseCredentials,
+    ...productionDatabaseSettings,
+    DB_HOST: '127.0.0.12',
+  }).some((error) => error.startsWith('DB_HOST ')));
+  assert.ok(getDatabaseConfigurationErrors({
+    DATABASE_URL: 'mysql://validation-user:placeholder-only@[::1]/events',
+    ...productionDatabaseSettings,
+  }).some((error) => error.startsWith('DATABASE_URL ')));
+  assert.deepEqual(getDatabaseConfigurationErrors({
+    ...databaseCredentials,
+    ...productionDatabaseSettings,
+  }), []);
+});
+
 test('production configuration accepts DATABASE_URL with verified TLS and secure cross-site cookies', () => {
   const configuration = {
     DATABASE_URL: 'mysql://validation-user@db.example.test/events',
