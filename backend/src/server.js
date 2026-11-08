@@ -20,7 +20,7 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   console.error('Required configuration is incomplete or invalid:', configurationErrors.join(', '));
   process.exitCode = 1;
 } else {
-  const [{ formatDatabaseError, pool, verifyDatabaseConnection }, { createApp }, { loadPaymentProvider }] = await Promise.all([
+  const [{ formatDatabaseError, getDatabaseFailureCode, pool, verifyDatabaseConnection }, { createApp }, { loadPaymentProvider }] = await Promise.all([
     import('./db.js'),
     import('./app.js'),
     import('./lib/paymentProvider.js'),
@@ -30,7 +30,10 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     await verifyDatabaseConnection();
     databaseConnected = true;
   } catch (error) {
-    console.warn('MySQL is temporarily unavailable; the API will start and report db:false at /api/health:', formatDatabaseError(error));
+    console.warn(
+      `MySQL connection failed [${getDatabaseFailureCode(error)}]; the API will start and report db:false at /api/health:`,
+      formatDatabaseError(error),
+    );
   }
 
   if (!process.exitCode) {

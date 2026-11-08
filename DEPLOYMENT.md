@@ -19,6 +19,8 @@ Set these **required** Render environment variables:
 
 Render supplies `PORT`; Express listens on that port and `0.0.0.0`. Put all database credentials in Render's environment settings, not in Git or chat.
 
+In the Render Dashboard, open the service's **Environment** page. Confirm the fixed production settings above are present (they are supplied by the Blueprint). Set either the `DATABASE_URL` secret, or all five `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` values for the already initialized database; leave the unused credential option unset. Set `DB_SSL=true`. Add `DB_SSL_CA` or `DB_SSL_CA_BASE64` only if the database provider requires a custom CA. Save changes and deploy. Never paste credentials into chat or source files.
+
 These settings are **optional**:
 
 - `DB_SSL_CA` or `DB_SSL_CA_BASE64`: provider CA certificate when it is not trusted by Node's system CA store. Certificate verification remains enabled.

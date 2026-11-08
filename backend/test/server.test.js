@@ -198,18 +198,19 @@ test('database failure diagnostics map to safe reason codes', () => {
 });
 
 test('startup configuration validation reports missing environment variable names only', () => {
-  assert.deepEqual(getStartupConfigurationErrors({})
-    .map((error) => error.split(/[ (]/)[0]), [
+  const errors = getStartupConfigurationErrors({});
+  assert.deepEqual(errors.map((error) => error.split(/[ (]/)[0]), [
     'DB_HOST',
     'DB_PORT',
     'DB_NAME',
     'DB_USER',
     'DB_PASSWORD',
+    'NODE_ENV',
     'WEB_ORIGIN',
     'COOKIE_SECURE',
     'COOKIE_SAME_SITE',
-    'NODE_ENV',
   ]);
+  assert.equal(new Set(errors).size, errors.length);
 });
 
 test('production startup requires HTTPS origin and cross-site secure cookies', () => {
@@ -244,6 +245,18 @@ test('SameSite none is rejected unless Secure cookies are enabled', () => {
     NODE_ENV: 'test',
   });
   assert.ok(errors.includes('COOKIE_SECURE (set to true when COOKIE_SAME_SITE is none)'));
+});
+
+test('production configuration reports each missing cookie setting once', () => {
+  const errors = getStartupConfigurationErrors({
+    ...databaseCredentials,
+    DB_SSL: 'true',
+    NODE_ENV: 'production',
+  });
+
+  assert.equal(errors.filter((error) => error.startsWith('COOKIE_SECURE ')).length, 1);
+  assert.equal(errors.filter((error) => error.startsWith('COOKIE_SAME_SITE ')).length, 1);
+  assert.equal(new Set(errors).size, errors.length);
 });
 
 test('cookie options use Secure and SameSite=None in production and insecure Lax locally', () => {
