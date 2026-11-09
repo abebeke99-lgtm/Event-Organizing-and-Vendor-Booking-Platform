@@ -9,6 +9,7 @@
     "db:init": "node scripts/db-init.js",
     "db:check": "node scripts/check-db.js",
     "db:check:neon-test": "node scripts/check-neon-test-db.js",
+    "test:neon-pool": "node scripts/test-neon-pool-concurrency.js",
     "migrate:neon-test": "node scripts/migrate-neon-test.js",
     "audit": "npm run audit:postgres-queries",
     "audit:postgres-queries": "node scripts/audit-postgres-query-inventory.js",

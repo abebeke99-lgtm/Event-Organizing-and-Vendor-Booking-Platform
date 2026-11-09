@@ -15,7 +15,11 @@ import {
   setPlatformSessionHint,
 } from './authSession.js';
 import { adminPathForSlug, adminSlugFromPath } from './adminNavigation.js';
-import { authenticatePlatformUser, dashboardPathForRole } from './adminAuthentication.js';
+import {
+  authenticateAdministrator,
+  authenticatePlatformUser,
+  dashboardPathForRole,
+} from './adminAuthentication.js';
 import { withStableKeys } from './listKeys.js';
 import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageStatistics, getHomepageTestimonials } from './homepageUtils.js';
 import { getHomepageVenueCards } from './homepageVenueUtils.js';
@@ -3837,7 +3841,7 @@ function AuthHomeLink() {
   return <a className="auth-home-link" href="/"><ArrowLeft size={16} aria-hidden="true" /><span>Back to Home</span></a>;
 }
 
-function LoginPage({ onLogin, showForgotPassword = true }) {
+function LoginPage({ onLogin, showForgotPassword = true, administrator = false }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
@@ -3861,8 +3865,8 @@ function LoginPage({ onLogin, showForgotPassword = true }) {
   }
 
   return <AuthLayout><section className="login-card">
-    <h1>{t('signIn')}</h1>
-    <p className="muted">{t('accessWorkspace')}</p>
+    <h1>{administrator ? t('administratorSignIn') : t('signIn')}</h1>
+    <p className="muted">{administrator ? t('useAdminAccount') : t('accessWorkspace')}</p>
     {error && <div className="alert error" role="alert">{error}</div>}
     <form className="login-form" onSubmit={submit}>
       <label className="auth-field">
@@ -3888,9 +3892,9 @@ function LoginPage({ onLogin, showForgotPassword = true }) {
       <button type="submit" className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button>
     </form>
 
-    <div className="login-account-links">
+    {!administrator && <div className="login-account-links">
       <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button>
-    </div>
+    </div>}
     <div className="auth-home-footer"><AuthHomeLink /></div>
   </section></AuthLayout>;
 }
@@ -4187,14 +4191,15 @@ function Navigate({ to, replace = false }) {
 function ProtectedRoute({ user, allowedRoles, onNavigate, children }) {
   if (!user) {
     const continuation = `${window.location.pathname}${window.location.search}`;
-    if (continuation !== '/login') {
+    const loginPath = allowedRoles.includes('admin') ? '/admin/login' : '/login';
+    if (continuation !== loginPath) {
       try {
         window.sessionStorage.setItem('eventhub_after_login', continuation);
       } catch (error) {
         console.error('Protected-page continuation could not be saved:', error);
       }
     }
-    return <Navigate to="/login" replace />;
+    return <Navigate to={loginPath} replace />;
   }
   if (!allowedRoles.includes(String(user.role || '').toLowerCase())) {
     return <AccessDeniedPage onNavigate={onNavigate} />;
@@ -4657,7 +4662,12 @@ function Overview({ onNavigate }) {
     return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
   };
   const metricGroups = [
-    { title: 'Registered users', total: data.users.total_users, values: [] },
+    { title: 'Registered users', total: data.users.total_users, values: [
+      ['Administrators', data.userRoles.total_administrators],
+      ['Customers', data.userRoles.total_customers],
+      ['Organizers', data.userRoles.total_organizers],
+      ['Vendors', data.userRoles.total_vendors],
+    ] },
     { title: 'Vendors', total: data.vendors.total_vendors, values: [['Verified',data.vendors.verified_vendors],['Pending applications',data.vendors.pending_vendors]] },
     { title: 'Events', total: data.events.total_events, values: [['Published',data.events.published_events],['Upcoming',data.events.upcoming_events]] },
     { title: 'Bookings', total: data.bookings.total_bookings, values: [['Pending',data.bookings.pending_bookings],['Confirmed',data.bookings.confirmed_bookings],['Completed',data.bookings.completed_bookings],['Cancelled',data.bookings.cancelled_bookings]] },
@@ -4718,10 +4728,11 @@ function Overview({ onNavigate }) {
       </section>
     </div>
     <div className="dashboard-recent-grid">
-      <section className="panel dashboard-recent"><h3>Recent bookings</h3>{data.recentBookings.length===0?<div className="empty"><strong>No bookings in this range</strong></div>:<div className="dashboard-list">{data.recentBookings.map((row)=><article className="dashboard-list-row dashboard-booking-row" key={row.id}><div><strong>{row.event_title}</strong><span>{row.customer_name} · {row.vendor_name}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span><strong>{money(row.quoted_amount,row.currency)}</strong></article>)}</div>}</section>
+      <section className="panel dashboard-recent"><h3>Recent bookings</h3>{data.recentBookings.length===0?<div className="empty"><strong>No bookings in this range</strong></div>:<div className="dashboard-list">{data.recentBookings.map((row)=><article className="dashboard-list-row dashboard-booking-row" key={row.id}><div><strong>{row.event_title}</strong><span>{row.organizer_name} · {row.vendor_name}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span><strong>{money(row.quoted_amount,row.currency)}</strong></article>)}</div>}</section>
       <section className="panel dashboard-recent"><h3>Recent vendor applications</h3>{data.recentVendorRequests.length===0?<div className="empty"><strong>No pending vendor applications</strong></div>:<div className="dashboard-list">{data.recentVendorRequests.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{row.business_name}</strong><span>{row.applicant_name} · {row.email}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div><span className="pill pending">Pending</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('vendors')}>Review vendors</button></section>
       <section className="panel dashboard-recent"><h3>Recent complaints</h3>{data.recentComplaints.length===0?<div className="empty"><strong>No complaints in this range</strong></div>:<div className="dashboard-list">{data.recentComplaints.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{row.subject}</strong><span>{row.customer_name} · {dateTime(row.created_at)}</span></div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('complaints')}>Manage complaints</button></section>
       <section className="panel dashboard-recent"><h3>Recent reviews</h3>{data.recentReviews.length===0?<div className="empty"><strong>No reviews in this range</strong></div>:<div className="dashboard-list">{data.recentReviews.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{'★'.repeat(Number(row.rating))} · {row.vendor_name}</strong><span>{row.customer_name} · {dateTime(row.created_at)}</span>{row.comment&&<span className="dashboard-review-comment">{row.comment}</span>}</div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('reviews')}>Manage reviews</button></section>
+      <section className="panel dashboard-recent"><h3>Recent activities</h3>{data.recentActivities.length===0?<div className="empty"><strong>No activity in this range</strong></div>:<div className="dashboard-list">{data.recentActivities.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{translateText(row.action,language)}</strong><span>{row.actor_name} · {row.entity_type}{row.entity_id ? ` #${row.entity_id}` : ''}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('audit-logs')}>View audit log</button></section>
     </div>
   </>;
 }
@@ -6243,6 +6254,15 @@ export default function App(){
     );
     navigatePublic(canContinue ? continuation : dashboardPathForRole(role));
   }
+  async function loginAdministrator(email, password) {
+    const administrator = await authenticateAdministrator(api, email, password);
+    authSessionLoader.setAuthenticated(administrator, 'admin');
+    setUser(administrator);
+    setPortal('admin');
+    setGlobalError('');
+    setShowLogin(false);
+    navigatePublic('/admin');
+  }
   function completeRegistration(result) {
     const registeredUser = result?.demo ? toDemoUser(result.profile) : result?.data?.user;
     if (!registeredUser || registeredUser.role !== 'customer') {
@@ -6277,17 +6297,19 @@ export default function App(){
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
     if (!window.confirm(translate('confirmLogout', language))) return;
+    const isAdministrator = String(user?.role || '').toLowerCase() === 'admin';
     try {
       if (DEMO_AUTH_ENABLED) clearDemoSession();
-      if (user) await api('/platform/logout',{method:'POST'});
+      if (user) await api(isAdministrator ? '/auth/logout' : '/platform/logout',{method:'POST'});
     } catch (issue) {
       setGlobalError(translate('logoutFailed', language));
       if (issue.status === 401) {
         authSessionLoader.setUnauthenticated();
         setUser(null);
         setPortal('admin');
-        window.history.replaceState({}, '', '/login');
-        setCurrentPath('/login');
+        const loginPath = isAdministrator ? '/admin/login' : '/login';
+        window.history.replaceState({}, '', loginPath);
+        setCurrentPath(loginPath);
       }
       return;
     }
@@ -6301,8 +6323,9 @@ export default function App(){
     } catch (issue) {
       console.error('Post-login navigation state could not be cleared:', issue);
     }
-    window.history.replaceState({}, '', '/login');
-    setCurrentPath('/login');
+    const loginPath = isAdministrator ? '/admin/login' : '/login';
+    window.history.replaceState({}, '', loginPath);
+    setCurrentPath(loginPath);
   }
 
   const publicRoutes = {
@@ -6330,10 +6353,17 @@ export default function App(){
   const customerBookingRoute = routePath.match(/^\/customer\/bookings\/(\d+)$/);
   const roleDashboardRoute = /^\/(customer|organizer|vendor)\/dashboard(?:\/|$)/.test(routePath);
   const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || routePath === '/my-favorites' || isAiChatRoute || roleDashboardRoute || Boolean(customerBookingRoute);
-  if (routePath === '/admin/login') return <Navigate to="/login" replace />;
   if (checking && requiresSession) return <div className="loading full-screen"><img className="loading-brand-symbol" src="/eventhub-symbol.png" alt="EventHub"/><span className="spinner"/>Checking your session…</div>;
   if (requiresSession && !user && ['error', 'rate-limited', 'waking'].includes(authSessionState.status)) {
     return <SessionRecoveryPage sessionState={authSessionState}/>;
+  }
+  if (routePath === '/admin/login') {
+    if (user) {
+      return String(user.role || '').toLowerCase() === 'admin'
+        ? <Navigate to="/admin" replace />
+        : <AccessDeniedPage onNavigate={navigatePublic} />;
+    }
+    return <LoginPage onLogin={loginAdministrator} administrator />;
   }
   if (routePath.startsWith('/admin') && (!user || String(user.role || '').toLowerCase() !== 'admin')) {
     return <ProtectedRoute user={user} allowedRoles={['admin']} onNavigate={navigatePublic} />;

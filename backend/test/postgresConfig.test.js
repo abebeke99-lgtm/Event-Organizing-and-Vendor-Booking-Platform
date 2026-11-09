@@ -23,21 +23,52 @@ function neonUrls(database = 'eventhub') {
   };
 }
 
+function verifiedTlsUrl(connectionString) {
+  const url = new URL(connectionString);
+  url.searchParams.set('sslmode', 'verify-full');
+  return url.toString();
+}
+
 test('PostgreSQL config uses separate Neon pooled and direct endpoints', () => {
   assert.deepEqual(getPostgresConfigurationErrors(neonTestEnvironment), []);
   const runtime = createPostgresPoolConfig(neonTestEnvironment);
   const migration = createPostgresPoolConfig(neonTestEnvironment, { purpose: 'migration' });
 
   assert.equal(runtime.connectionString, neonTestEnvironment.DATABASE_URL);
-  assert.equal(runtime.max, 8);
+  assert.equal(runtime.max, 2);
   assert.equal(runtime.connectionTimeoutMillis, 15000);
   assert.equal(runtime.idleTimeoutMillis, 10000);
+  assert.equal(runtime.keepAlive, true);
+  assert.equal(runtime.keepAliveInitialDelayMillis, 10000);
   assert.equal(runtime.application_name, 'eventhub-api');
   assert.deepEqual(runtime.ssl, { rejectUnauthorized: true });
   assert.equal(migration.connectionString, neonTestEnvironment.DIRECT_URL);
   assert.equal(migration.max, 2);
   assert.equal(migration.application_name, 'eventhub-migrations');
   assert.deepEqual(migration.ssl, { rejectUnauthorized: true });
+});
+
+test('Neon TLS normalizes require to verify-full without disabling certificate validation', () => {
+  const urls = neonUrls();
+  const config = createPostgresPoolConfig({
+    NODE_ENV: 'test',
+    DATABASE_URL: urls.DATABASE_URL,
+    DIRECT_URL: urls.DIRECT_URL,
+    DB_SSL: 'true',
+  });
+  const normalized = new URL(config.connectionString);
+  assert.equal(normalized.searchParams.get('sslmode'), 'verify-full');
+  assert.equal(normalized.searchParams.get('channel_binding'), 'require');
+  assert.deepEqual(config.ssl, { rejectUnauthorized: true });
+
+  const explicitVerifiedUrl = {
+    NODE_ENV: 'test',
+    DATABASE_URL: verifiedTlsUrl(urls.DATABASE_URL),
+    DIRECT_URL: verifiedTlsUrl(urls.DIRECT_URL),
+    DB_SSL: 'true',
+  };
+  assert.deepEqual(getPostgresConfigurationErrors(explicitVerifiedUrl), []);
+  assert.equal(createPostgresPoolConfig(explicitVerifiedUrl).connectionString, explicitVerifiedUrl.DATABASE_URL);
 });
 
 test('PostgreSQL runtime requires only the pooled URL while migrations require the direct URL', () => {
@@ -49,12 +80,54 @@ test('PostgreSQL runtime requires only the pooled URL while migrations require t
   );
 });
 
-test('PostgreSQL config rejects missing, non-Neon, non-TLS, and role-swapped URLs', () => {
+test('PostgreSQL runtime accepts managed providers with verified TLS', () => {
+  const environment = {
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://app-user:app-password@db.example.test:5432/event_app',
+    DIRECT_URL: 'postgresql://migration-user:migration-password@db.example.test:5432/event_app',
+  };
+  assert.deepEqual(getPostgresConfigurationErrors(environment, { purpose: 'migration' }), []);
+  assert.deepEqual(createPostgresPoolConfig(environment), {
+    connectionString: environment.DATABASE_URL,
+    ssl: { rejectUnauthorized: true },
+    max: 8,
+    connectionTimeoutMillis: 15000,
+    idleTimeoutMillis: 10000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
+    application_name: 'eventhub-api',
+  });
+  assert.equal(
+    createPostgresPoolConfig(environment, { purpose: 'migration' }).connectionString,
+    environment.DIRECT_URL,
+  );
+});
+
+test('PostgreSQL TLS can be disabled only for explicit non-production local development', () => {
+  const environment = {
+    NODE_ENV: 'development',
+    DB_SSL: 'false',
+    DATABASE_URL: 'postgresql://app-user:app-password@localhost:5432/event_app?sslmode=disable',
+  };
+  assert.deepEqual(getPostgresConfigurationErrors(environment, { purpose: 'runtime' }), []);
+  assert.equal(Object.hasOwn(createPostgresPoolConfig(environment), 'ssl'), false);
+
+  assert.ok(getPostgresConfigurationErrors({
+    ...environment,
+    NODE_ENV: 'production',
+  }, { purpose: 'runtime' }).some((error) => error.includes('DB_SSL must be true in production')));
+  assert.ok(getPostgresConfigurationErrors({
+    NODE_ENV: 'production',
+    DATABASE_URL: 'postgresql://app-user:app-password@db.example.test:5432/event_app?sslmode=disable',
+  }, { purpose: 'runtime' }).some((error) => error.includes('must not use an sslmode')));
+});
+
+test('PostgreSQL config rejects missing, malformed, non-TLS Neon, and role-swapped URLs', () => {
   assert.ok(getPostgresConfigurationErrors({}).some((error) => error.startsWith('DATABASE_URL')));
   assert.ok(getPostgresConfigurationErrors({
     ...neonTestEnvironment,
-    DATABASE_URL: 'postgresql://user:password@db.example.test/app?sslmode=require',
-  }).some((error) => error.startsWith('DATABASE_URL must be a credentialed')));
+    DATABASE_URL: 'not a URL',
+  }).some((error) => error.startsWith('DATABASE_URL must be a valid PostgreSQL URL')));
   assert.ok(getPostgresConfigurationErrors({
     ...neonTestEnvironment,
     DATABASE_URL: 'postgresql://user:password@ep-eventhub-pooler.us-east-2.aws.neon.tech/app',
@@ -78,12 +151,14 @@ test('Neon test config loads only explicit local values without changing product
   const filePath = join(directory, '.env.neon-test');
   try {
     await writeFile(filePath, `DATABASE_URL=${neonTestEnvironment.DATABASE_URL}\nDIRECT_URL=${neonTestEnvironment.DIRECT_URL}\n`);
-    const environment = { NODE_ENV: 'development', DATABASE_URL: 'postgresql://ignored' };
+    const environment = { NODE_ENV: 'development', DB_SSL: 'false', DATABASE_URL: 'postgresql://ignored' };
     const loaded = await loadNeonTestEnvironment({ environment, filePath });
     assert.equal(loaded.NODE_ENV, 'test');
+    assert.equal(loaded.DB_SSL, 'true');
     assert.equal(loaded.DATABASE_URL, neonTestEnvironment.DATABASE_URL);
     assert.equal(loaded.DIRECT_URL, neonTestEnvironment.DIRECT_URL);
     assert.equal(environment.DATABASE_URL, 'postgresql://ignored');
+    assert.equal(environment.DB_SSL, 'false');
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -189,11 +264,11 @@ test('Neon test loader rejects malformed, non-PostgreSQL, and non-TLS URLs with 
     { database: 'not a URL', expected: /DATABASE_URL must be a valid Neon PostgreSQL URL/ },
     {
       database: 'mysql://test-user:test-password@ep-test-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
-      expected: /DATABASE_URL must be a credentialed Neon PostgreSQL URL with sslmode=require/,
+      expected: /DATABASE_URL must be a credentialed Neon PostgreSQL URL with sslmode=require or sslmode=verify-full/,
     },
     {
       database: 'postgresql://test-user:test-password@ep-test-pooler.us-east-2.aws.neon.tech/eventhub',
-      expected: /DATABASE_URL must be a credentialed Neon PostgreSQL URL with sslmode=require/,
+      expected: /DATABASE_URL must be a credentialed Neon PostgreSQL URL with sslmode=require or sslmode=verify-full/,
     },
   ];
   try {
@@ -280,8 +355,11 @@ test('PostgreSQL transactions commit, roll back, release clients, and close pool
   assert.equal(await database.verifyRuntimeConnection().then((result) => result.server_version), '18.0');
   assert.equal(await database.verifyMigrationConnection().then((result) => result.server_version), '18.0');
 
-  await database.close();
+  const closing = database.close();
+  assert.equal(database.close(), closing);
+  await closing;
   assert.ok(poolCalls.every(({ calls }) => calls.includes('END')));
+  assert.ok(poolCalls.every(({ calls }) => calls.filter((call) => call === 'END').length === 1));
   assert.equal(poolCalls[0].config.connectionString, neonTestEnvironment.DATABASE_URL);
   assert.equal(poolCalls[1].config.connectionString, neonTestEnvironment.DIRECT_URL);
 });

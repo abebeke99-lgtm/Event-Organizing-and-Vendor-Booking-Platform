@@ -44,6 +44,24 @@ test('PostgreSQL adapter passes parameterized query results through without MySQ
   );
 });
 
+test('PostgreSQL adapter destroys clients after connection failures but reuses clients after SQL errors', async () => {
+  const connectionFailure = Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNRESET' });
+  const brokenPool = createPool();
+  const brokenReleases = [];
+  brokenPool.client.release = (error) => brokenReleases.push(error);
+  brokenPool.client.query = async () => { throw connectionFailure; };
+  await assert.rejects(createPostgresAdapter(brokenPool).query('SELECT 1'), (error) => error === connectionFailure);
+  assert.deepEqual(brokenReleases, [connectionFailure]);
+
+  const sqlFailure = Object.assign(new Error('syntax error'), { code: '42601' });
+  const healthyPool = createPool();
+  const healthyReleases = [];
+  healthyPool.client.release = (error) => healthyReleases.push(error);
+  healthyPool.client.query = async () => { throw sqlFailure; };
+  await assert.rejects(createPostgresAdapter(healthyPool).query('SELECT FROM'), (error) => error === sqlFailure);
+  assert.deepEqual(healthyReleases, [undefined]);
+});
+
 test('PostgreSQL adapter commits and releases a successful transaction', async () => {
   const pool = createPool();
   const database = createPostgresAdapter(pool);
@@ -71,6 +89,40 @@ test('PostgreSQL adapter rolls back and releases when a transaction fails', asyn
   }), (error) => error === failure);
   assert.deepEqual(pool.statements.map(({ text }) => text), ['BEGIN', 'ROLLBACK']);
   assert.equal(pool.releaseCount, 1);
+});
+
+test('PostgreSQL adapter destroys transaction clients after connection failures', async () => {
+  const pool = createPool();
+  const connectionFailure = Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNRESET' });
+  const releases = [];
+  pool.client.release = (error) => releases.push(error);
+  pool.client.query = async (text, values) => {
+    pool.statements.push({ text, values });
+    if (text === 'SELECT 1') throw connectionFailure;
+    return { command: text.split(' ')[0], rowCount: 0, rows: [] };
+  };
+  const database = createPostgresAdapter(pool);
+
+  await assert.rejects(database.inTransaction((transaction) => transaction.query('SELECT 1')), (error) => error === connectionFailure);
+  assert.deepEqual(releases, [connectionFailure]);
+});
+
+test('PostgreSQL adapter destroys transaction clients when rollback itself fails', async () => {
+  const pool = createPool();
+  const rollbackFailure = Object.assign(new Error('rollback failed'), { code: 'XX000' });
+  const releases = [];
+  pool.client.release = (error) => releases.push(error);
+  pool.client.query = async (text, values) => {
+    pool.statements.push({ text, values });
+    if (text === 'ROLLBACK') throw rollbackFailure;
+    return { command: text.split(' ')[0], rowCount: 0, rows: [] };
+  };
+  const database = createPostgresAdapter(pool);
+
+  await assert.rejects(database.inTransaction(() => {
+    throw new Error('transaction body failed');
+  }), AggregateError);
+  assert.deepEqual(releases, [rollbackFailure]);
 });
 
 test('PostgreSQL adapter isolates nested transactions with savepoints', async () => {

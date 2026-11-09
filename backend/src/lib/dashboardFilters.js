@@ -23,7 +23,13 @@ export const dashboardDateRangeSchema = z.object({
   }
 });
 
-export function buildCreatedAtDateFilter({ startDate, endDate }, column = 'created_at') {
+export function buildCreatedAtDateFilter({ startDate, endDate }, column = 'created_at', dialect = 'mysql') {
+  if (dialect === 'postgres') {
+    return {
+      sql: ` WHERE ${column} >= $1::date AND ${column} < ($2::date + INTERVAL '1 day')`,
+      values: [startDate, endDate],
+    };
+  }
   return {
     sql: ` WHERE ${column} >= ? AND ${column} < DATE_ADD(?, INTERVAL 1 DAY)`,
     values: [startDate, endDate],
@@ -55,7 +61,18 @@ export function buildDashboardTrends(bookings, payments) {
 }
 
 export async function loadAdminDashboardOverview(database, dateRange) {
-  const createdFilter = (alias) => buildCreatedAtDateFilter(dateRange, `${alias}.created_at`);
+  const dialect = database.dialect === 'postgres' ? 'postgres' : 'mysql';
+  if (dialect === 'postgres') {
+    if (typeof database.inTransaction !== 'function') {
+      throw new TypeError('PostgreSQL dashboard queries require transaction-capable database access.');
+    }
+    return database.inTransaction((transaction) => loadDashboardOverviewQueries(transaction, dateRange, dialect));
+  }
+  return loadDashboardOverviewQueries(database, dateRange, dialect);
+}
+
+async function loadDashboardOverviewQueries(database, dateRange, dialect) {
+  const createdFilter = (alias) => buildCreatedAtDateFilter(dateRange, `${alias}.created_at`, dialect);
   const usersFilter = createdFilter('u');
   const vendorsFilter = createdFilter('vp');
   const eventsFilter = createdFilter('e');
@@ -63,10 +80,41 @@ export async function loadAdminDashboardOverview(database, dateRange) {
   const paymentsFilter = createdFilter('p');
   const complaintsFilter = createdFilter('c');
   const reviewsFilter = createdFilter('r');
-  const queryRows = (sql, values) => database.query(sql, values).then(([rows]) => rows);
+  let pendingQuery = Promise.resolve();
+  let queryFailure = null;
+  const queryRows = async (sql, values) => {
+    if (dialect !== 'postgres') {
+      const result = await database.query(sql, values);
+      return result[0];
+    }
+    const result = pendingQuery.then(async () => {
+      if (queryFailure) throw queryFailure;
+      try {
+        return await database.query(sql, values);
+      } catch (error) {
+        queryFailure = error;
+        throw error;
+      }
+    });
+    pendingQuery = result.then(() => undefined, () => undefined);
+    return (await result).rows;
+  };
+  const aggregate = (condition) => dialect === 'postgres'
+    ? `(COUNT(*) FILTER (WHERE ${condition}))::int`
+    : `COALESCE(SUM(${condition}), 0)`;
+  const count = dialect === 'postgres' ? 'COUNT(*)::int' : 'COUNT(*)';
+  const distinctCount = (expression) => dialect === 'postgres'
+    ? `(COUNT(DISTINCT ${expression}))::int`
+    : `COUNT(DISTINCT ${expression})`;
+  const period = (column) => dialect === 'postgres'
+    ? `TO_CHAR(${column}, 'YYYY-MM-DD')`
+    : `DATE_FORMAT(${column}, '%Y-%m-%d')`;
+  const bookingPeriod = period('b.created_at');
+  const paymentPeriod = period('p.created_at');
 
   const [
     userRows,
+    userRoleRows,
     vendorRows,
     eventRows,
     bookingRows,
@@ -82,40 +130,51 @@ export async function loadAdminDashboardOverview(database, dateRange) {
     paymentTrend,
     eventCategories,
     bookingStatuses,
+    recentActivities,
   ] = await Promise.all([
     queryRows(
-      `SELECT COUNT(*) AS total_users
+      `SELECT ${count} AS total_users
        FROM users u${usersFilter.sql}`,
       usersFilter.values,
     ),
     queryRows(
-      `SELECT COUNT(*) AS total_vendors,
-              COALESCE(SUM(vp.verification_status = 'verified'), 0) AS verified_vendors,
-              COALESCE(SUM(vp.verification_status = 'pending'), 0) AS pending_vendors
+      `SELECT ${distinctCount("CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN u.id END")} AS total_administrators,
+              ${distinctCount("CASE WHEN LOWER(r.name) = 'customer' THEN u.id END")} AS total_customers,
+              ${distinctCount("CASE WHEN LOWER(r.name) = 'organizer' THEN u.id END")} AS total_organizers,
+              ${distinctCount("CASE WHEN LOWER(r.name) = 'vendor' THEN u.id END")} AS total_vendors
+       FROM users u
+       LEFT JOIN user_roles ur ON ur.user_id = u.id
+       LEFT JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE${usersFilter.sql}`,
+      usersFilter.values,
+    ),
+    queryRows(
+      `SELECT ${count} AS total_vendors,
+              ${aggregate("vp.verification_status = 'verified'")} AS verified_vendors,
+              ${aggregate("vp.verification_status = 'pending'")} AS pending_vendors
        FROM vendor_profiles vp${vendorsFilter.sql}`,
       vendorsFilter.values,
     ),
     queryRows(
-      `SELECT COUNT(*) AS total_events,
-              COALESCE(SUM(e.status IN ('active', 'published', 'upcoming', 'open')), 0) AS published_events,
-              COALESCE(SUM(e.start_date >= CURRENT_DATE AND e.status IN ('active', 'published', 'upcoming', 'open')), 0) AS upcoming_events
+      `SELECT ${count} AS total_events,
+              ${aggregate("e.status IN ('active', 'published', 'upcoming', 'open')")} AS published_events,
+              ${aggregate("e.start_date >= CURRENT_DATE AND e.status IN ('active', 'published', 'upcoming', 'open')")} AS upcoming_events
        FROM events e${eventsFilter.sql}`,
       eventsFilter.values,
     ),
     queryRows(
-      `SELECT COUNT(*) AS total_bookings,
-              COALESCE(SUM(b.status IN ('requested', 'quoted', 'under_review')), 0) AS pending_bookings,
-              COALESCE(SUM(b.status = 'accepted'), 0) AS confirmed_bookings,
-              COALESCE(SUM(b.status = 'completed'), 0) AS completed_bookings,
-              COALESCE(SUM(b.status = 'cancelled'), 0) AS cancelled_bookings
+      `SELECT ${count} AS total_bookings,
+              ${aggregate("b.status IN ('requested', 'quoted', 'under_review')")} AS pending_bookings,
+              ${aggregate("b.status = 'accepted'")} AS confirmed_bookings,
+              ${aggregate("b.status = 'completed'")} AS completed_bookings,
+              ${aggregate("b.status = 'cancelled'")} AS cancelled_bookings
        FROM bookings b${bookingsFilter.sql}`,
       bookingsFilter.values,
     ),
     queryRows(
-      `SELECT COUNT(*) AS total_payments,
-              COALESCE(SUM(p.status = 'paid'), 0) AS successful_payments,
-              COALESCE(SUM(p.status IN ('pending', 'authorized')), 0) AS pending_payments,
-              COALESCE(SUM(p.status = 'refund_pending'), 0) AS refund_requests
+      `SELECT ${count} AS total_payments,
+              ${aggregate("p.status = 'paid'")} AS successful_payments,
+              ${aggregate("p.status IN ('pending', 'authorized')")} AS pending_payments,
+              ${aggregate("p.status = 'refund_pending'")} AS refund_requests
        FROM payments p${paymentsFilter.sql}`,
       paymentsFilter.values,
     ),
@@ -126,19 +185,19 @@ export async function loadAdminDashboardOverview(database, dateRange) {
       paymentsFilter.values,
     ),
     queryRows(
-      `SELECT COUNT(*) AS total_complaints,
-              COALESCE(SUM(c.status IN ('open', 'under_review')), 0) AS open_complaints
+      `SELECT ${count} AS total_complaints,
+              ${aggregate("c.status IN ('open', 'under_review')")} AS open_complaints
        FROM complaints c${complaintsFilter.sql}`,
       complaintsFilter.values,
     ),
     queryRows(
-      `SELECT COUNT(*) AS total_reviews
+      `SELECT ${count} AS total_reviews
        FROM reviews r${reviewsFilter.sql}`,
       reviewsFilter.values,
     ),
     queryRows(
       `SELECT b.id, b.status, b.quoted_amount, b.currency, b.created_at,
-              e.title AS event_title, u.full_name AS customer_name,
+              e.title AS event_title, u.full_name AS organizer_name,
               vp.business_name AS vendor_name
        FROM bookings b
        JOIN events e ON e.id = b.event_id
@@ -173,38 +232,47 @@ export async function loadAdminDashboardOverview(database, dateRange) {
       reviewsFilter.values,
     ),
     queryRows(
-      `SELECT DATE_FORMAT(b.created_at, '%Y-%m-%d') AS period, COUNT(*) AS total
+      `SELECT ${bookingPeriod} AS period, ${count} AS total
        FROM bookings b${bookingsFilter.sql}
-       GROUP BY DATE_FORMAT(b.created_at, '%Y-%m-%d')
+       GROUP BY ${bookingPeriod}
        ORDER BY period`,
       bookingsFilter.values,
     ),
     queryRows(
-      `SELECT DATE_FORMAT(p.created_at, '%Y-%m-%d') AS period, p.currency,
-              COUNT(*) AS transactions, SUM(p.amount) AS total
+      `SELECT ${paymentPeriod} AS period, p.currency,
+              ${count} AS transactions, SUM(p.amount) AS total
        FROM payments p${paymentsFilter.sql} AND p.status = 'paid'
-       GROUP BY DATE_FORMAT(p.created_at, '%Y-%m-%d'), p.currency
+       GROUP BY ${paymentPeriod}, p.currency
        ORDER BY period, p.currency`,
       paymentsFilter.values,
     ),
     queryRows(
       `SELECT COALESCE(NULLIF(TRIM(e.event_type), ''), 'Uncategorized') AS category,
-              COUNT(*) AS total
+              ${count} AS total
        FROM events e${eventsFilter.sql}
        GROUP BY COALESCE(NULLIF(TRIM(e.event_type), ''), 'Uncategorized')
        ORDER BY total DESC, category ASC`,
       eventsFilter.values,
     ),
     queryRows(
-      `SELECT b.status, COUNT(*) AS total
+      `SELECT b.status, ${count} AS total
        FROM bookings b${bookingsFilter.sql}
        GROUP BY b.status
        ORDER BY total DESC, b.status ASC`,
       bookingsFilter.values,
     ),
+    queryRows(
+      `SELECT a.id, a.action, a.entity_type, a.entity_id, a.created_at,
+              u.full_name AS actor_name
+       FROM audit_logs a
+       JOIN users u ON u.id = a.actor_id${createdFilter('a').sql}
+       ORDER BY a.created_at DESC, a.id DESC LIMIT 8`,
+      createdFilter('a').values,
+    ),
   ]);
 
   const [users] = userRows;
+  const [userRoles] = userRoleRows;
   const [vendors] = vendorRows;
   const [events] = eventRows;
   const [bookings] = bookingRows;
@@ -214,6 +282,7 @@ export async function loadAdminDashboardOverview(database, dateRange) {
 
   return {
     users,
+    userRoles,
     vendors,
     events,
     bookings,
@@ -228,6 +297,7 @@ export async function loadAdminDashboardOverview(database, dateRange) {
     bookingTrend: buildDashboardTrends(bookingTrend, paymentTrend),
     eventCategories,
     bookingStatuses,
+    recentActivities,
     filters: dateRange,
   };
 }

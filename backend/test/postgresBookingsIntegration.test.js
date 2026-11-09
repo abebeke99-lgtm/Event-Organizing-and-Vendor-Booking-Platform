@@ -29,9 +29,12 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
   const eventIds = [];
   const bookingIds = [];
   const quoteIds = [];
+  const budgetCategoryIds = [];
+  const expenseIds = [];
+  const taskIds = [];
 
   const cleanup = async () => {
-    const relatedIds = [...bookingIds, ...quoteIds].map(String);
+    const relatedIds = [...bookingIds, ...quoteIds, ...eventIds].map(String);
     if (relatedIds.length) {
       const notifications = await database.runtimeAdapter.query(
         `SELECT id FROM notifications
@@ -58,8 +61,13 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     }
     if (bookingIds.length) {
       await database.runtimeAdapter.query('DELETE FROM booking_history WHERE booking_id = ANY($1::bigint[])', [bookingIds]);
-      await database.runtimeAdapter.query('DELETE FROM bookings WHERE id = ANY($1::bigint[])', [bookingIds]);
     }
+    if (taskIds.length) await database.runtimeAdapter.query('DELETE FROM event_vendor_tasks WHERE id = ANY($1::bigint[])', [taskIds]);
+    if (expenseIds.length) await database.runtimeAdapter.query('DELETE FROM event_expenses WHERE id = ANY($1::bigint[])', [expenseIds]);
+    if (budgetCategoryIds.length) {
+      await database.runtimeAdapter.query('DELETE FROM event_budget_categories WHERE id = ANY($1::bigint[])', [budgetCategoryIds]);
+    }
+    if (bookingIds.length) await database.runtimeAdapter.query('DELETE FROM bookings WHERE id = ANY($1::bigint[])', [bookingIds]);
     if (quoteIds.length) await database.runtimeAdapter.query('DELETE FROM quotations WHERE id = ANY($1::bigint[])', [quoteIds]);
     if (vendorId) await database.runtimeAdapter.query('DELETE FROM vendor_availability WHERE vendor_id = $1', [vendorId]);
     if (eventIds.length) await database.runtimeAdapter.query('DELETE FROM events WHERE id = ANY($1::bigint[])', [eventIds]);
@@ -118,8 +126,8 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     const startDate = new Date(Date.now() + 10 * 86400000).toISOString();
     for (const title of ['Neon booking event A', 'Neon booking event B']) {
       eventIds.push((await database.runtimeAdapter.query(
-        `INSERT INTO events (organizer_id, title, event_type, start_date, status)
-         VALUES ($1, $2, 'Integration', $3, 'active') RETURNING id`,
+        `INSERT INTO events (organizer_id, title, event_type, start_date, status, budget)
+         VALUES ($1, $2, 'Integration', $3, 'active', 10000) RETURNING id`,
         [organizerId, `${title} ${suffix}`, startDate],
       )).rows[0].id);
     }
@@ -145,6 +153,85 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     const firstBookingId = createdBody.data.id;
     bookingIds.push(firstBookingId);
     assert.equal(createdBody.data.status, 'requested');
+
+    const budgetBefore = await request(`/api/platform/organizer/events/${eventIds[0]}/budget`, token);
+    assert.equal(budgetBefore.status, 200);
+    assert.equal((await budgetBefore.json()).data.summary.remaining, 10000);
+    const categoryResponse = await request(
+      `/api/platform/organizer/events/${eventIds[0]}/budget/categories`,
+      token,
+      { method: 'POST', body: JSON.stringify({ name: 'Live catering', budgetLimit: 700 }) },
+    );
+    assert.equal(categoryResponse.status, 201);
+    const budgetCategoryId = (await categoryResponse.json()).data.id;
+    budgetCategoryIds.push(budgetCategoryId);
+    const expenseResponse = await request(`/api/platform/organizer/events/${eventIds[0]}/expenses`, token, {
+      method: 'POST',
+      body: JSON.stringify({
+        categoryId: budgetCategoryId,
+        bookingId: firstBookingId,
+        description: 'Live catering deposit',
+        plannedAmount: 300,
+        actualAmount: 250,
+        expenseDate: new Date().toISOString().slice(0, 10),
+      }),
+    });
+    assert.equal(expenseResponse.status, 201);
+    expenseIds.push((await expenseResponse.json()).data.id);
+    const budgetAfter = await request(`/api/platform/organizer/events/${eventIds[0]}/budget`, token);
+    assert.equal(budgetAfter.status, 200);
+    assert.deepEqual((await budgetAfter.json()).data.summary, {
+      planned: 300, actual: 250, remaining: 9750,
+    });
+    const budgetCategoryUpdate = await request(
+      `/api/platform/organizer/events/${eventIds[0]}/budget/categories/${budgetCategoryId}`,
+      token,
+      { method: 'PATCH', body: JSON.stringify({ name: 'Live catering update', budgetLimit: 800 }) },
+    );
+    assert.equal(budgetCategoryUpdate.status, 200);
+    assert.equal((await request(
+      `/api/platform/organizer/events/${eventIds[0]}/budget/categories/${budgetCategoryId}`,
+      token,
+      { method: 'DELETE' },
+    )).status, 409);
+
+    const taskResponse = await request(`/api/platform/organizer/events/${eventIds[0]}/tasks`, token, {
+      method: 'POST',
+      body: JSON.stringify({ bookingId: firstBookingId, title: 'Live vendor task', details: 'Verify table setup.' }),
+    });
+    assert.equal(taskResponse.status, 201);
+    const taskId = (await taskResponse.json()).data.id;
+    taskIds.push(taskId);
+    const taskUpdate = await request(
+      `/api/platform/organizer/events/${eventIds[0]}/tasks/${taskId}`,
+      token,
+      { method: 'PATCH', body: JSON.stringify({ title: 'Live vendor task updated', details: '', dueAt: null, status: 'in_progress' }) },
+    );
+    assert.equal(taskUpdate.status, 200);
+    const taskList = await request(`/api/platform/organizer/events/${eventIds[0]}/tasks`, token);
+    assert.equal((await taskList.json()).data.find((row) => row.id === taskId)?.status, 'in_progress');
+    assert.equal((await database.runtimeAdapter.query(
+      `SELECT n.id, h.id AS history_id FROM notifications n
+       LEFT JOIN notification_history h ON h.notification_id = n.id
+       WHERE n.related_entity_id = $1 AND n.title = 'Event preparation task'`,
+      [String(eventIds[0])],
+    )).rowCount, 1);
+    assert.equal((await database.runtimeAdapter.query(
+      `SELECT id FROM audit_logs WHERE actor_id = $1 AND action = 'organizer.vendor_task_created' AND entity_id = $2`,
+      [organizerId, String(eventIds[0])],
+    )).rowCount, 1);
+    assert.equal((await request(`/api/platform/organizer/events/${eventIds[0]}/expenses/${expenseIds[0]}`, token, {
+      method: 'DELETE',
+    })).status, 204);
+    expenseIds.length = 0;
+    assert.equal((await request(`/api/platform/organizer/events/${eventIds[0]}/budget/categories/${budgetCategoryId}`, token, {
+      method: 'DELETE',
+    })).status, 204);
+    budgetCategoryIds.length = 0;
+    assert.equal((await request(`/api/platform/organizer/events/${eventIds[0]}/tasks/${taskId}`, token, {
+      method: 'DELETE',
+    })).status, 204);
+    taskIds.length = 0;
 
     const customerList = await request('/api/customer/bookings', token);
     assert.equal(customerList.status, 200);

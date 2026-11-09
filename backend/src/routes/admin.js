@@ -754,7 +754,7 @@ router.get('/dashboard/overview', async (req, res, next) => {
   if (!parsed.success) return res.status(400).json({ error: 'Provide a valid date range no longer than 366 days.' });
 
   try {
-    const data = await loadAdminDashboardOverview(pool, parsed.data);
+    const data = await loadAdminDashboardOverview(getDatabase(req), parsed.data);
     res.json({ data });
   } catch (error) {
     next(error);

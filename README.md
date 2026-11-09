@@ -253,6 +253,19 @@ The platform includes the requested features for:
 3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173`. For API-backed authentication, keep `VITE_DEMO_AUTH=false`, configure `VITE_API_URL`, and start the backend with `backend/.env` configured for a provisioned MySQL database.
 4. For a real backend, apply migrations with `npm run migrate` after configuring the database. Never enable demo authentication in production.
 
+### Open the isolated Neon PostgreSQL database in VS Code
+
+The workspace recommends SQLTools and its PostgreSQL driver. Install the recommended extensions when VS Code prompts, or install **SQLTools** and **SQLTools PostgreSQL/Cockroach Driver** from Extensions.
+
+To connect to the isolated Neon test database:
+
+1. Open `backend/.env.neon-test` locally. This ignored file contains the pooled `DATABASE_URL` and direct `DIRECT_URL`; never commit it or share its contents.
+2. In VS Code, open the SQLTools sidebar and choose **Add New Connection** → **PostgreSQL**.
+3. Use the pooled URL from `DATABASE_URL` for browsing and queries. Keep `DIRECT_URL` for the migration tooling. Enter the URL directly in the connection form; if the extension instead asks for separate fields, copy the host, database, and username locally from that URL and enter the password only when prompted.
+4. Keep TLS certificate verification enabled. Do not put database credentials in source files, `.vscode/settings.json`, screenshots, or chat. Do not run schema-changing SQL against production.
+
+This connection is for the isolated Neon test database only. Connecting to it from VS Code does not switch the application from its current MySQL production default.
+
 ### Language and localization
 
 The interface supports English and Amharic (አማርኛ). The header selector applies changes immediately, keeps the selection in browser storage, and saves it to the signed-in account. The backend accepts `Accept-Language`; an authenticated account's saved preference takes precedence. Apply the database migrations to add account-level language preferences.

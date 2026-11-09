@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { isPostgresConnectionError } from './postgresRetry.js';
 
 export function createPostgresAdapter(pool, { connect = () => pool.connect() } = {}) {
   const transactionContext = new AsyncLocalStorage();
@@ -12,12 +13,23 @@ export function createPostgresAdapter(pool, { connect = () => pool.connect() } =
       throw new TypeError('PostgreSQL query parameters must be provided as an array.');
     }
     const transaction = transactionContext.getStore();
-    if (transaction) return transaction.client.query(text, values);
+    if (transaction) {
+      try {
+        return await transaction.client.query(text, values);
+      } catch (error) {
+        if (isPostgresConnectionError(error)) transaction.releaseError = error;
+        throw error;
+      }
+    }
     const client = await connect();
+    let releaseError;
     try {
       return await client.query(text, values);
+    } catch (error) {
+      if (isPostgresConnectionError(error)) releaseError = error;
+      throw error;
     } finally {
-      client.release();
+      client.release(releaseError);
     }
   }
 
@@ -40,6 +52,7 @@ export function createPostgresAdapter(pool, { connect = () => pool.connect() } =
           await parent.client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
           await parent.client.query(`RELEASE SAVEPOINT ${savepoint}`);
         } catch (rollbackError) {
+          parent.releaseError = rollbackError;
           throw new AggregateError(
             [error, rollbackError],
             'Nested PostgreSQL transaction failed and savepoint rollback could not be completed.',
@@ -50,16 +63,18 @@ export function createPostgresAdapter(pool, { connect = () => pool.connect() } =
     }
 
     const client = await connect();
+    const state = { client, releaseError: undefined };
     try {
       await client.query('BEGIN');
-      const state = { client };
       const result = await transactionContext.run(state, () => work(adapter));
       await client.query('COMMIT');
       return result;
     } catch (error) {
+      if (isPostgresConnectionError(error)) state.releaseError = error;
       try {
         await client.query('ROLLBACK');
       } catch (rollbackError) {
+        state.releaseError = rollbackError;
         throw new AggregateError(
           [error, rollbackError],
           'PostgreSQL transaction failed and rollback could not be completed.',
@@ -67,7 +82,7 @@ export function createPostgresAdapter(pool, { connect = () => pool.connect() } =
       }
       throw error;
     } finally {
-      client.release();
+      client.release(state.releaseError);
     }
   }
 

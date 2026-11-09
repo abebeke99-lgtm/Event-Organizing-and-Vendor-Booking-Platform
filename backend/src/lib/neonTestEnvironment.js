@@ -38,6 +38,7 @@ export async function loadNeonTestEnvironment({
     ...environment,
     DATABASE_URL: fileEnvironment.DATABASE_URL,
     DIRECT_URL: fileEnvironment.DIRECT_URL,
+    DB_SSL: 'true',
     NODE_ENV: 'test',
   };
   const errors = getPostgresConfigurationErrors(testEnvironment, {

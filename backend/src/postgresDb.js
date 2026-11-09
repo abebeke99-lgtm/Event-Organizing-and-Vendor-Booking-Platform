@@ -55,6 +55,7 @@ export function createPostgresDatabase(environment = process.env, { poolFactory 
   const migrationAdapter = createPostgresAdapter(migrationPool, {
     connect: () => connectWithRetry(() => migrationPool.connect()),
   });
+  let closePromise;
 
   async function verifyPool(adapter, purpose) {
     const result = await adapter.query('SELECT version() AS server_version, current_database() AS database_name');
@@ -75,8 +76,11 @@ export function createPostgresDatabase(environment = process.env, { poolFactory 
     inTransaction: (work, pool = runtimePool) => (
       pool === migrationPool ? migrationAdapter.inTransaction(work) : runtimeAdapter.inTransaction(work)
     ),
-    async close() {
-      await Promise.all([runtimePool.end(), migrationPool.end()]);
+    close() {
+      if (!closePromise) {
+        closePromise = Promise.all([runtimePool.end(), migrationPool.end()]);
+      }
+      return closePromise;
     },
   };
 }

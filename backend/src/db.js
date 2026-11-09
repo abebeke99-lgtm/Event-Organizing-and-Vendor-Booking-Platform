@@ -2,6 +2,7 @@ import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseConfig } from './lib/databaseConfig.js';
+import { isPostgresConnectionError } from './lib/postgresRetry.js';
 import { formatPostgresError, getPostgresFailureCode } from './postgresDb.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
@@ -66,16 +67,26 @@ export function getDatabaseFailureCode(error) {
 export async function inTransaction(work) {
   if (isPostgresDialect) {
     const connection = await pool.connect();
+    let releaseError;
     try {
       await connection.query('BEGIN');
       const result = await work(connection);
       await connection.query('COMMIT');
       return result;
     } catch (error) {
-      await connection.query('ROLLBACK');
+      if (isPostgresConnectionError(error)) releaseError = error;
+      try {
+        await connection.query('ROLLBACK');
+      } catch (rollbackError) {
+        releaseError = rollbackError;
+        throw new AggregateError(
+          [error, rollbackError],
+          'PostgreSQL transaction failed and rollback could not be completed.',
+        );
+      }
       throw error;
     } finally {
-      connection.release();
+      connection.release(releaseError);
     }
   }
   const connection = await pool.getConnection();

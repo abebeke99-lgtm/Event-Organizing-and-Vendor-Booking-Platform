@@ -63,6 +63,26 @@ function createDatabase() {
       if (sql.includes('FROM vendor_profiles WHERE user_id = $1')) {
         return { rows: [{ id: 10 }] };
       }
+      if (sql.includes('AS total_services') && sql.includes('AS unread_notifications')) {
+        return { rows: [{
+          total_services: '3',
+          active_services: '2',
+          inactive_services: '1',
+          pending_bookings: '4',
+          confirmed_bookings: '5',
+          completed_bookings: '2',
+          total_bookings: '11',
+          total_customers: '6',
+          upcoming_bookings: '3',
+          upcoming_dates: '7',
+          pending_quotations: '2',
+          total_earnings: '1250.50',
+          pending_payouts: '300.00',
+          average_rating: '4.75',
+          unread_messages: '2',
+          unread_notifications: '4',
+        }] };
+      }
       return { rows: [] };
     },
     async inTransaction(work) {
@@ -116,13 +136,22 @@ test('PostgreSQL vendor dashboard exposes every frontend data endpoint and profi
       '/api/vendor/quotations',
     ];
 
+    let overviewData;
     for (const path of paths) {
       const response = await fetch(`${baseUrl}${path}`, { headers: { Cookie: cookie } });
       assert.equal(response.status, 200, `${path} should be routed`);
       const body = await response.json();
       assert.ok(body && typeof body === 'object', `${path} should return its JSON payload`);
       assert.ok(Object.hasOwn(body, 'data'), `${path} should preserve the frontend response envelope`);
+      if (path === '/api/vendor/overview') overviewData = body.data;
     }
+    const overviewQuery = database.statements.filter(({ sql }) => sql.includes('AS total_services'));
+    assert.equal(overviewQuery.length, 1, 'vendor overview should use one aggregate query');
+    assert.deepEqual(overviewQuery[0].values, [10, 44]);
+    assert.equal(overviewData.totalServices, 3);
+    assert.equal(overviewData.totalEarnings, 1250.5);
+    assert.equal(overviewData.averageRating, 4.75);
+    assert.equal(overviewData.unreadNotifications, 4);
 
     const photo = await fetch(`${baseUrl}/api/platform/profile/photo`, { headers: { Cookie: cookie } });
     assert.equal(photo.status, 204);
@@ -284,6 +313,7 @@ test('Neon PostgreSQL vendor dashboard queries, ownership, and mutations', {
 
     const app = createApp({
       database: {
+        dialect: 'postgres',
         async query(sql, values = []) {
           try {
             return await database.runtimeAdapter.query(sql, values);

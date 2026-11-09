@@ -202,56 +202,59 @@ export function createPostgresVendorRouter({ database }) {
   router.get('/overview', async (req, res) => {
     const vendorId = req.vendor.id;
     const userId = req.platformUser.id;
-    const [services, bookings, quotations, payments, messages, availability, ratings, notifications] = await Promise.all([
-      database.query('SELECT status FROM services WHERE vendor_id = $1', [vendorId]),
-      database.query(
-        `SELECT b.status, e.organizer_id, e.start_date
-         FROM bookings b JOIN events e ON e.id = b.event_id WHERE b.vendor_id = $1`,
-        [vendorId],
-      ),
-      database.query('SELECT status FROM quotations WHERE vendor_id = $1', [vendorId]),
-      database.query(
-        `SELECT p.status, p.amount FROM payments p
-         JOIN bookings b ON b.id = p.booking_id WHERE b.vendor_id = $1`,
-        [vendorId],
-      ),
-      database.query('SELECT read_at FROM messages WHERE recipient_id = $1', [userId]),
-      database.query(
-        `SELECT id FROM vendor_availability
-         WHERE vendor_id = $1 AND status = 'available' AND available_date >= CURRENT_DATE`,
-        [vendorId],
-      ),
-      database.query(
-        `SELECT r.rating FROM reviews r JOIN bookings b ON b.id = r.booking_id
-         WHERE b.vendor_id = $1 AND r.status = 'published'`,
-        [vendorId],
-      ),
-      database.query("SELECT id FROM notifications WHERE user_id = $1 AND status <> 'read'", [userId]),
-    ]);
-    const bookingRows = bookings.rows;
-    const paymentRows = payments.rows;
-    const ratingValues = ratings.rows.map((row) => Number(row.rating || 0));
-    const confirmed = new Set(['accepted', 'confirmed', 'in_progress']);
+    const result = await database.query(
+      `SELECT
+         (SELECT COUNT(*) FROM services WHERE vendor_id = $1) AS total_services,
+         (SELECT COUNT(*) FROM services WHERE vendor_id = $1 AND status = 'active') AS active_services,
+         (SELECT COUNT(*) FROM services WHERE vendor_id = $1 AND status <> 'active') AS inactive_services,
+         (SELECT COUNT(*) FROM bookings b
+          WHERE b.vendor_id = $1 AND b.status IN ('requested', 'under_review', 'quoted')) AS pending_bookings,
+         (SELECT COUNT(*) FROM bookings b
+          WHERE b.vendor_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress')) AS confirmed_bookings,
+         (SELECT COUNT(*) FROM bookings WHERE vendor_id = $1 AND status = 'completed') AS completed_bookings,
+         (SELECT COUNT(*) FROM bookings WHERE vendor_id = $1) AS total_bookings,
+         (SELECT COUNT(DISTINCT e.organizer_id)
+          FROM bookings b JOIN events e ON e.id = b.event_id WHERE b.vendor_id = $1) AS total_customers,
+         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE b.vendor_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress')
+            AND e.start_date >= NOW()) AS upcoming_bookings,
+         (SELECT COUNT(*) FROM vendor_availability
+          WHERE vendor_id = $1 AND status = 'available' AND available_date >= CURRENT_DATE) AS upcoming_dates,
+         (SELECT COUNT(*) FROM quotations
+          WHERE vendor_id = $1 AND status IN ('draft', 'sent', 'revision_requested')) AS pending_quotations,
+         COALESCE((SELECT SUM(p.amount) FROM payments p
+          JOIN bookings b ON b.id = p.booking_id
+          WHERE b.vendor_id = $1 AND p.status = 'paid'), 0) AS total_earnings,
+         COALESCE((SELECT SUM(p.amount) FROM payments p
+          JOIN bookings b ON b.id = p.booking_id
+          WHERE b.vendor_id = $1 AND p.status IN ('pending', 'authorized')), 0) AS pending_payouts,
+         COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 2)
+          FROM reviews r JOIN bookings b ON b.id = r.booking_id
+          WHERE b.vendor_id = $1 AND r.status = 'published'), 0) AS average_rating,
+         (SELECT COUNT(*) FROM messages WHERE recipient_id = $2 AND read_at IS NULL) AS unread_messages,
+         (SELECT COUNT(*) FROM notifications WHERE user_id = $2 AND status <> 'read') AS unread_notifications`,
+      [vendorId, userId],
+    );
+    const summary = result.rows[0];
+    if (!summary) throw new Error('PostgreSQL vendor overview query returned no result.');
     return respond(res, {
-      totalServices: services.rows.length,
-      activeServices: services.rows.filter((row) => row.status === 'active').length,
-      inactiveServices: services.rows.filter((row) => row.status !== 'active').length,
-      pendingBookings: bookingRows.filter((row) => ['requested', 'under_review', 'quoted'].includes(row.status)).length,
-      confirmedBookings: bookingRows.filter((row) => confirmed.has(row.status)).length,
-      completedBookings: bookingRows.filter((row) => row.status === 'completed').length,
-      totalBookings: bookingRows.length,
-      totalCustomers: new Set(bookingRows.map((row) => Number(row.organizer_id))).size,
-      upcomingBookings: bookingRows.filter((row) => confirmed.has(row.status) && new Date(row.start_date) >= new Date()).length,
-      upcomingDates: availability.rows.length,
-      pendingQuotations: quotations.rows.filter((row) => ['draft', 'sent', 'revision_requested'].includes(row.status)).length,
-      totalEarnings: paymentRows.filter((row) => row.status === 'paid').reduce((total, row) => total + Number(row.amount || 0), 0),
-      pendingPayouts: paymentRows.filter((row) => ['pending', 'authorized'].includes(row.status)).reduce((total, row) => total + Number(row.amount || 0), 0),
-      averageRating: ratingValues.length
-        ? Number((ratingValues.reduce((total, value) => total + value, 0) / ratingValues.length).toFixed(2))
-        : 0,
-      unreadMessages: messages.rows.filter((row) => !row.read_at).length,
-      notifications: notifications.rows.length,
-      unreadNotifications: notifications.rows.length,
+      totalServices: Number(summary.total_services),
+      activeServices: Number(summary.active_services),
+      inactiveServices: Number(summary.inactive_services),
+      pendingBookings: Number(summary.pending_bookings),
+      confirmedBookings: Number(summary.confirmed_bookings),
+      completedBookings: Number(summary.completed_bookings),
+      totalBookings: Number(summary.total_bookings),
+      totalCustomers: Number(summary.total_customers),
+      upcomingBookings: Number(summary.upcoming_bookings),
+      upcomingDates: Number(summary.upcoming_dates),
+      pendingQuotations: Number(summary.pending_quotations),
+      totalEarnings: Number(summary.total_earnings),
+      pendingPayouts: Number(summary.pending_payouts),
+      averageRating: Number(summary.average_rating),
+      unreadMessages: Number(summary.unread_messages),
+      notifications: Number(summary.unread_notifications),
+      unreadNotifications: Number(summary.unread_notifications),
     });
   });
 

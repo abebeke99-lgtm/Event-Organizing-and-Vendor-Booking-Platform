@@ -36,6 +36,11 @@ import { createPostgresMarketplaceRouter } from './routes/postgresMarketplace.js
 import { createPostgresBookingRouters } from './routes/postgresBookings.js';
 import { createPostgresVendorRouter } from './routes/postgresVendor.js';
 import { createPostgresProfilePhotoRouter } from './routes/postgresProfilePhoto.js';
+import { createPostgresOrganizerPlanningRouter } from './routes/postgresOrganizerPlanning.js';
+import { createPostgresAdminRouter } from './routes/postgresAdmin.js';
+import { createPostgresAdminAuditLogRouter } from './routes/postgresAdminAuditLogs.js';
+import { createPostgresAdminSettingsRouter } from './routes/postgresAdminSettings.js';
+import { createPostgresHomepageRouter } from './routes/postgresHomepage.js';
 
 export function createApp({
   database = pool,
@@ -134,11 +139,18 @@ export function createApp({
   }));
   if (databaseDialect === 'postgres') {
     const postgresBookingRouters = createPostgresBookingRouters({ database });
+    app.use('/api', createPostgresHomepageRouter({ database }));
+    app.use('/api/admin', requireAdmin);
+    app.use('/api/admin', createPostgresAdminRouter({ database }));
+    app.use('/api/admin', createPostgresAdminAuditLogRouter({ database }));
+    app.use('/api/admin', createPostgresAdminSettingsRouter({ database }));
     app.use('/api/platform', requirePlatformAvailable, createPostgresMarketplaceRouter({ database }));
     app.use('/api/platform', requirePlatformAvailable, postgresBookingRouters.platform);
     app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), postgresBookingRouters.vendor);
     app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), createPostgresVendorRouter({ database }));
     app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), postgresBookingRouters.customer);
+    app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'),
+      createPostgresOrganizerPlanningRouter({ database }));
     app.use('/api/platform/profile/photo', requirePlatformAvailable, createPostgresProfilePhotoRouter({ database }));
     app.use('/api/platform', requirePlatformAvailable, createPostgresPublicEventsRouter({ database }));
     app.use('/api/platform', requirePlatformAvailable, createPostgresAuthRouter({ database }));
@@ -194,7 +206,7 @@ export function createApp({
     app.use('/api/admin', adminNotificationsRoutes);
     app.use('/api/admin', adminRoutes);
   }
-  app.use((req, res) => res.status(404).json({ error: 'Endpoint not found.' }));
+  app.use((req, res) => res.status(404).json({ error: 'Endpoint not found.'   }));
   app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
     const databaseUnavailable = databaseDialect === 'postgres' && isTransientPostgresError(error);
