@@ -28,7 +28,7 @@ import heroSlidesRoutes, { adminRouter as adminHeroSlidesRoutes, requireHeroSlid
 import { requestContextMiddleware } from './lib/requestContext.js';
 import { localizationMiddleware } from './lib/localization.js';
 import { createAiChatRouter } from './routes/aiChat.js';
-import { isTransientPostgresError } from './lib/postgresRetry.js';
+import { getPostgresErrorCause, isTransientPostgresError } from './lib/postgresRetry.js';
 import { formatPostgresError } from './postgresDb.js';
 import { createPostgresAuthRouter } from './routes/postgresAuth.js';
 import { createPostgresPublicEventsRouter } from './routes/postgresPublicEvents.js';
@@ -40,6 +40,8 @@ import { createPostgresOrganizerPlanningRouter } from './routes/postgresOrganize
 import { createPostgresAdminRouter } from './routes/postgresAdmin.js';
 import { createPostgresAdminAuditLogRouter } from './routes/postgresAdminAuditLogs.js';
 import { createPostgresAdminSettingsRouter } from './routes/postgresAdminSettings.js';
+import { createPostgresAdminPaymentsRouter } from './routes/postgresAdminPayments.js';
+import { createPostgresAdminNotificationsRouter } from './routes/postgresAdminNotifications.js';
 import { createPostgresHomepageRouter } from './routes/postgresHomepage.js';
 
 export function createApp({
@@ -112,9 +114,7 @@ export function createApp({
     }
     next();
   });
-  if (databaseDialect !== 'postgres') {
-    app.use('/api/payments/webhook', paymentWebhookRoutes);
-  }
+  app.use('/api/payments/webhook', paymentWebhookRoutes);
   app.use(express.json({ limit: '100kb' }));
   app.get('/', (req, res) => res.json({
     status: 'ok',
@@ -142,12 +142,15 @@ export function createApp({
     app.use('/api', createPostgresHomepageRouter({ database }));
     app.use('/api/admin', requireAdmin);
     app.use('/api/admin', createPostgresAdminRouter({ database }));
+    app.use('/api/admin', createPostgresAdminPaymentsRouter({ database }));
+    app.use('/api/admin', createPostgresAdminNotificationsRouter({ database }));
     app.use('/api/admin', createPostgresAdminAuditLogRouter({ database }));
     app.use('/api/admin', createPostgresAdminSettingsRouter({ database }));
     app.use('/api/platform', requirePlatformAvailable, createPostgresMarketplaceRouter({ database }));
     app.use('/api/platform', requirePlatformAvailable, postgresBookingRouters.platform);
     app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), postgresBookingRouters.vendor);
     app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), createPostgresVendorRouter({ database }));
+    app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), createPostgresMarketplaceRouter({ database }));
     app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), postgresBookingRouters.customer);
     app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'),
       createPostgresOrganizerPlanningRouter({ database }));
@@ -213,7 +216,9 @@ export function createApp({
     const formattedError = databaseDialect === 'postgres'
       ? formatPostgresError(error)
       : formatDatabaseError(error);
-    console.error(`Request failed: ${req.method} ${req.originalUrl}: ${formattedError}`);
+    const rootError = databaseDialect === 'postgres' ? getPostgresErrorCause(error) : error;
+    const databaseErrorCode = typeof rootError?.code === 'string' ? ` [${rootError.code}]` : '';
+    console.error(`Request failed: ${req.method} ${req.originalUrl}${databaseErrorCode}: ${formattedError}`);
     if (databaseDialect !== 'postgres') console.error(error.stack || error);
     if (databaseUnavailable) {
       return res.status(503).json({ message: 'Database is waking up, please retry' });

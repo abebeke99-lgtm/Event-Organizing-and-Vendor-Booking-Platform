@@ -1,9 +1,32 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { runPostgresMigrations, splitPostgresSqlStatements } from '../src/lib/postgresMigrate.js';
+
+test('standard migration command selects PostgreSQL and fails closed without its connection URL', () => {
+  const scriptPath = fileURLToPath(new URL('../scripts/migrate.js', import.meta.url));
+  const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: backendDirectory,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DB_DIALECT: 'postgres',
+      DATABASE_URL: '',
+      DIRECT_URL: '',
+      DB_SSL: 'true',
+      NODE_ENV: 'test',
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /PostgreSQL migration failed \[DB_CONFIG_INVALID\]: .*DATABASE_URL is required/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ECONNREFUSED|MySQL/);
+});
 
 test('PostgreSQL SQL splitter preserves semicolons in strings and dollar-quoted bodies', () => {
   const statements = splitPostgresSqlStatements(`
@@ -50,6 +73,25 @@ test('vendor dashboard permissions are assigned only to active vendor roles', as
 
   assert.match(sql, /'services\.manage_own'/);
   assert.match(sql, /WHERE LOWER\(r\.name\) = 'vendor' AND r\.is_active = TRUE/);
+  assert.match(sql, /ON CONFLICT \(role_id, permission_id\) DO NOTHING/);
+  assert.doesNotMatch(sql, /DELETE\s+FROM|DROP\s+TABLE|TRUNCATE/i);
+});
+
+test('payment status width accommodates every PostgreSQL payment state without removing data', async () => {
+  const sql = await readFile(new URL('../postgres/migrations/009_payment_status_width.sql', import.meta.url), 'utf8');
+
+  assert.match(sql, /ALTER TABLE payments\s+ALTER COLUMN status TYPE VARCHAR\(24\)/i);
+  assert.doesNotMatch(sql, /DROP\s+TABLE|TRUNCATE|DELETE\s+FROM/i);
+});
+
+test('customer permissions are granted idempotently only to active customer roles', async () => {
+  const sql = await readFile(new URL('../postgres/migrations/010_customer_dashboard_permissions.sql', import.meta.url), 'utf8');
+
+  assert.match(sql, /'favorites\.manage_own'/);
+  assert.match(sql, /'messages\.view_own'/);
+  assert.match(sql, /'notifications\.view_own'/);
+  assert.match(sql, /'reviews\.create'/);
+  assert.match(sql, /WHERE LOWER\(r\.name\) = 'customer'\s+AND r\.is_active = TRUE/);
   assert.match(sql, /ON CONFLICT \(role_id, permission_id\) DO NOTHING/);
   assert.doesNotMatch(sql, /DELETE\s+FROM|DROP\s+TABLE|TRUNCATE/i);
 });

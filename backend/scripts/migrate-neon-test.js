@@ -33,6 +33,8 @@ try {
       '006_customer_role_seed.sql',
       '007_case_insensitive_user_email.sql',
       '008_vendor_dashboard_permissions.sql',
+      '009_payment_status_width.sql',
+      '010_customer_dashboard_permissions.sql',
     ],
   });
   if (applied.length) {
@@ -64,6 +66,8 @@ try {
     || !recordedNames.includes('006_customer_role_seed.sql')
     || !recordedNames.includes('007_case_insensitive_user_email.sql')
     || !recordedNames.includes('008_vendor_dashboard_permissions.sql')
+    || !recordedNames.includes('009_payment_status_width.sql')
+    || !recordedNames.includes('010_customer_dashboard_permissions.sql')
     || postgresApplicationTables.some((tableName) => !publicTableNames.includes(tableName))
     || publicTableNames.length !== postgresApplicationTables.length + 1) {
     throw new Error('PostgreSQL schema integrity check failed: expected migration record or core tables are missing.');

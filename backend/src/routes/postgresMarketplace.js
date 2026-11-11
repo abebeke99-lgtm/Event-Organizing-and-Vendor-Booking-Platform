@@ -15,6 +15,10 @@ const vendorFiltersSchema = z.object({
   verified: z.enum(['true', 'false', '1', '0']).optional(),
   filter: z.enum(['featured']).optional(),
   availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+  availableDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }).optional(),
   minRating: z.coerce.number().finite().min(0).max(5).optional(),
   minPrice: z.coerce.number().finite().min(0).optional(),
   maxPrice: z.coerce.number().finite().min(0).optional(),
@@ -36,17 +40,27 @@ const serviceFiltersSchema = z.object({
   minPrice: z.coerce.number().finite().min(0).optional(),
   maxPrice: z.coerce.number().finite().min(0).optional(),
   minRating: z.coerce.number().finite().min(0).max(5).optional(),
+  minReviews: z.coerce.number().int().min(0).optional(),
+  maxReviews: z.coerce.number().int().min(0).optional(),
+  feature: z.string().trim().max(120).optional(),
   availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+  availableDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }).optional(),
   ids: z.string().max(80).refine((value) => {
     const ids = value.split(',').map(Number);
     return ids.length <= 4 && ids.every((id) => Number.isSafeInteger(id) && id > 0) && new Set(ids).size === ids.length;
   }, 'Invalid service filters.').optional(),
-  sort: z.enum(['recommended', 'popular', 'newest', 'highest-rated', 'rating', 'price-low', 'price-high', 'alphabetical']).optional(),
+  sort: z.enum(['recommended', 'relevance', 'popular', 'newest', 'highest-rated', 'most-reviewed', 'rating', 'price-low', 'price-high', 'alphabetical']).optional(),
   page: z.coerce.number().int().min(1).max(100000).optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
 }).strict().superRefine((filters, context) => {
   if (filters.minPrice !== undefined && filters.maxPrice !== undefined && filters.maxPrice < filters.minPrice) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxPrice'], message: 'Maximum price must be greater than or equal to minimum price.' });
+  }
+  if (filters.minReviews !== undefined && filters.maxReviews !== undefined && filters.maxReviews < filters.minReviews) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['maxReviews'], message: 'Maximum review count must be greater than or equal to minimum review count.' });
   }
 });
 
@@ -157,7 +171,27 @@ export function createPostgresMarketplaceRouter({ database }) {
     if (!parsed.success) return res.status(400).json({ error: 'Invalid vendor filters.' });
     try {
       const marketplace = await loadPostgresPublicMarketplace(database);
-      const result = listPublicVendors(marketplace.vendors, parsed.data);
+      let vendors = marketplace.vendors;
+      if (parsed.data.availableDate) {
+        const available = await database.query(
+          `SELECT va.vendor_id
+           FROM vendor_availability va
+           WHERE va.available_date = $1::date AND va.status = 'available'
+             AND NOT EXISTS (
+               SELECT 1 FROM bookings b
+               JOIN events e ON e.id = b.event_id
+               WHERE b.vendor_id = va.vendor_id
+                 AND b.status IN ('accepted', 'confirmed', 'in_progress')
+                 AND COALESCE(b.scheduled_date::date, e.start_date::date) = va.available_date
+             )`,
+          [parsed.data.availableDate],
+        );
+        const availableVendorIds = new Set(available.rows.map((row) => Number(row.vendor_id)));
+        vendors = vendors
+          .filter((vendor) => availableVendorIds.has(Number(vendor.id)))
+          .map((vendor) => ({ ...vendor, available: true }));
+      }
+      const result = listPublicVendors(vendors, parsed.data);
       return res.json({
         data: result.vendors,
         pagination: { total: result.total, page: result.page, limit: result.limit, totalPages: result.totalPages },
@@ -172,6 +206,26 @@ export function createPostgresMarketplaceRouter({ database }) {
     if (!parsed.success) return res.status(400).json({ error: 'Invalid service filters.' });
     try {
       const marketplace = await loadPostgresPublicMarketplace(database);
+      if (parsed.data.availableDate) {
+        const available = await database.query(
+          `SELECT DISTINCT va.vendor_id
+           FROM vendor_availability va
+           WHERE va.available_date = $1::date AND va.status = 'available'
+             AND NOT EXISTS (
+               SELECT 1 FROM bookings b
+               JOIN events e ON e.id = b.event_id
+               WHERE b.vendor_id = va.vendor_id
+                 AND b.status IN ('accepted', 'confirmed', 'in_progress')
+                 AND COALESCE(b.scheduled_date::date, e.start_date::date) = va.available_date
+             )`,
+          [parsed.data.availableDate],
+        );
+        const availableVendorIds = new Set(available.rows.map((row) => Number(row.vendor_id)));
+        marketplace.services = marketplace.services.map((service) => ({
+          ...service,
+          available: availableVendorIds.has(Number(service.vendorId)),
+        }));
+      }
       let categoryId;
       if (parsed.data.category !== undefined) {
         const key = categorySlug(parsed.data.category);
@@ -184,7 +238,11 @@ export function createPostgresMarketplaceRouter({ database }) {
       const sourceServices = ids
         ? marketplace.services.filter((service) => ids.includes(Number(service.id)))
         : marketplace.services;
-      const result = listPublicServices(sourceServices, { ...parsed.data, categoryId });
+      const result = listPublicServices(sourceServices, {
+        ...parsed.data,
+        categoryId,
+        availableOnly: parsed.data.availableDate ? true : parsed.data.availableOnly,
+      });
       return res.json({
         data: result.services,
         pagination: { total: result.total, page: result.page, limit: result.limit, totalPages: result.totalPages },

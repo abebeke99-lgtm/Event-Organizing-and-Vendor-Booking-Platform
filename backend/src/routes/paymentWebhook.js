@@ -3,6 +3,7 @@ import express from 'express';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { pool } from '../db.js';
 import { processVerifiedProviderEvent } from '../lib/paymentManagement.js';
+import { processVerifiedPostgresProviderEvent } from '../lib/postgresPaymentManagement.js';
 
 const router = Router();
 const databaseFor = (req) => req.app?.locals?.database || pool;
@@ -28,7 +29,10 @@ router.post('/', express.raw({ type: 'application/json', limit: '1mb' }), asyncH
   }
   if (!verifiedEvent) return res.status(401).json({ error: 'Provider webhook verification failed.' });
 
-  const result = await processVerifiedProviderEvent(databaseFor(req), provider, verifiedEvent);
+  const processEvent = req.app.locals.databaseDialect === 'postgres'
+    ? processVerifiedPostgresProviderEvent
+    : processVerifiedProviderEvent;
+  const result = await processEvent(databaseFor(req), provider, verifiedEvent);
   res.json({ data: result });
 }));
 

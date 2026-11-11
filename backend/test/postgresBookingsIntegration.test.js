@@ -17,11 +17,14 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
   const database = createPostgresDatabase(environment);
   const suffix = randomUUID();
   const organizerEmail = `pg-booking-organizer-${suffix}@example.invalid`;
+  const customerEmail = `pg-booking-customer-${suffix}@example.invalid`;
   const vendorEmail = `pg-booking-vendor-${suffix}@example.invalid`;
   const token = randomUUID() + randomUUID();
+  const customerToken = randomUUID() + randomUUID();
   const app = createApp({ database: database.runtimeAdapter, databaseDialect: 'postgres' });
   const server = app.listen(0, '127.0.0.1');
   let organizerId;
+  let customerId;
   let vendorUserId;
   let vendorId;
   let categoryId;
@@ -73,7 +76,7 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     if (eventIds.length) await database.runtimeAdapter.query('DELETE FROM events WHERE id = ANY($1::bigint[])', [eventIds]);
     if (serviceId) await database.runtimeAdapter.query('DELETE FROM services WHERE id = $1', [serviceId]);
     if (vendorId) await database.runtimeAdapter.query('DELETE FROM vendor_profiles WHERE id = $1', [vendorId]);
-    const userIds = [organizerId, vendorUserId].filter(Boolean);
+    const userIds = [organizerId, customerId, vendorUserId].filter(Boolean);
     if (userIds.length) {
       await database.runtimeAdapter.query('DELETE FROM user_sessions WHERE user_id = ANY($1::bigint[])', [userIds]);
       await database.runtimeAdapter.query('DELETE FROM user_roles WHERE user_id = ANY($1::bigint[])', [userIds]);
@@ -87,10 +90,13 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     const organizerRole = (await database.runtimeAdapter.query(
       `SELECT id FROM roles WHERE LOWER(name) = 'organizer' AND is_active = TRUE LIMIT 1`,
     )).rows[0];
+    const customerRole = (await database.runtimeAdapter.query(
+      `SELECT id FROM roles WHERE LOWER(name) = 'customer' AND is_active = TRUE LIMIT 1`,
+    )).rows[0];
     const vendorRole = (await database.runtimeAdapter.query(
       `SELECT id FROM roles WHERE LOWER(name) = 'vendor' AND is_active = TRUE LIMIT 1`,
     )).rows[0];
-    assert.ok(organizerRole && vendorRole, 'seeded organizer and vendor roles must exist');
+    assert.ok(organizerRole && customerRole && vendorRole, 'seeded organizer, customer, and vendor roles must exist');
 
     organizerId = (await database.runtimeAdapter.query(
       `INSERT INTO users (full_name, email, password_hash) VALUES ($1, $2, $3) RETURNING id`,
@@ -100,14 +106,19 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
       `INSERT INTO users (full_name, email, password_hash) VALUES ($1, $2, $3) RETURNING id`,
       ['Neon booking vendor', vendorEmail, 'integration-only-not-a-password'],
     )).rows[0].id;
+    customerId = (await database.runtimeAdapter.query(
+      `INSERT INTO users (full_name, email, password_hash) VALUES ($1, $2, $3) RETURNING id`,
+      ['Neon booking customer', customerEmail, 'integration-only-not-a-password'],
+    )).rows[0].id;
     await database.runtimeAdapter.query(
-      'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2), ($3, $4)',
-      [organizerId, organizerRole.id, vendorUserId, vendorRole.id],
+      'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2), ($3, $4), ($5, $6)',
+      [organizerId, organizerRole.id, vendorUserId, vendorRole.id, customerId, customerRole.id],
     );
     await database.runtimeAdapter.query(
       `INSERT INTO user_sessions (token_hash, user_id, expires_at)
-       VALUES ($1, $2, NOW() + INTERVAL '1 hour'), ($3, $4, NOW() + INTERVAL '1 hour')`,
-      [hashToken(token), organizerId, hashToken(`${token}-vendor`), vendorUserId],
+       VALUES ($1, $2, NOW() + INTERVAL '1 hour'), ($3, $4, NOW() + INTERVAL '1 hour'),
+              ($5, $6, NOW() + INTERVAL '1 hour')`,
+      [hashToken(token), organizerId, hashToken(`${token}-vendor`), vendorUserId, hashToken(customerToken), customerId],
     );
     categoryId = (await database.runtimeAdapter.query(
       `INSERT INTO service_categories (name) VALUES ($1) RETURNING id`,
@@ -144,6 +155,50 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
       signal: AbortSignal.timeout(20000),
     });
 
+    const emptyOverviewResponse = await request('/api/customer/overview', token);
+    assert.equal(emptyOverviewResponse.status, 200);
+    assert.deepEqual((await emptyOverviewResponse.json()).data, {
+      totalBookings: 0,
+      pendingBookings: 0,
+      confirmedBookings: 0,
+      completedBookings: 0,
+      upcomingEvents: 2,
+      pendingQuotations: 0,
+      unreadMessages: 0,
+      unreadNotifications: 0,
+      outstandingPayments: 0,
+    });
+    assert.equal((await request('/api/customer/overview', `${token}-vendor`)).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/customer/overview`)).status, 401);
+    const customerVendors = await request('/api/customer/vendors?sort=recently-added&availableDate=2026-11-18', token);
+    assert.equal(customerVendors.status, 200);
+    assert.equal((await customerVendors.json()).data.some((row) => row.id === Number(vendorId)), false);
+    const customerServices = await request('/api/customer/services?sort=relevance&minReviews=0&maxReviews=10&feature=setup', token);
+    assert.equal(customerServices.status, 200);
+    const customerCategories = await request('/api/customer/categories', token);
+    assert.equal(customerCategories.status, 200);
+    assert.ok((await customerCategories.json()).data.some((row) => row.id === Number(categoryId)));
+    const customerEvents = await request('/api/customer/events', token);
+    assert.equal(customerEvents.status, 200);
+    assert.deepEqual((await customerEvents.json()).data.map((row) => row.id).sort(), eventIds.map(Number).sort());
+    const favoriteResponse = await request('/api/customer/favorites', customerToken, {
+      method: 'POST', body: JSON.stringify({ vendorId }),
+    });
+    assert.equal(favoriteResponse.status, 201);
+    const favoriteList = await request('/api/customer/favorites', customerToken);
+    assert.equal((await favoriteList.json()).data.some((row) => row.id === Number(vendorId)), true);
+    assert.equal((await request('/api/customer/favorites', customerToken, {
+      method: 'POST', body: JSON.stringify({ vendorId }),
+    })).status, 409);
+    assert.equal((await request(`/api/customer/favorites/${vendorId}`, customerToken, { method: 'DELETE' })).status, 204);
+    const savedServiceResponse = await request('/api/customer/saved-services', customerToken, {
+      method: 'POST', body: JSON.stringify({ serviceId }),
+    });
+    assert.equal(savedServiceResponse.status, 201);
+    const savedServiceList = await request('/api/customer/saved-services', customerToken);
+    assert.equal((await savedServiceList.json()).data.some((row) => row.id === Number(serviceId)), true);
+    assert.equal((await request(`/api/customer/saved-services/${serviceId}`, customerToken, { method: 'DELETE' })).status, 204);
+
     const created = await request('/api/platform/bookings', token, {
       method: 'POST',
       body: JSON.stringify({ eventId: eventIds[0], serviceId }),
@@ -153,6 +208,17 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     const firstBookingId = createdBody.data.id;
     bookingIds.push(firstBookingId);
     assert.equal(createdBody.data.status, 'requested');
+    const populatedOverviewResponse = await request('/api/customer/overview', token);
+    assert.equal(populatedOverviewResponse.status, 200);
+    const populatedOverview = (await populatedOverviewResponse.json()).data;
+    assert.equal(populatedOverview.totalBookings, 1);
+    assert.equal(populatedOverview.pendingBookings, 1);
+    assert.equal(populatedOverview.confirmedBookings, 0);
+    assert.equal(populatedOverview.completedBookings, 0);
+    assert.equal(populatedOverview.upcomingEvents, 2);
+    assert.equal(populatedOverview.pendingQuotations, 0);
+    assert.equal(populatedOverview.unreadMessages, 0);
+    assert.equal(populatedOverview.outstandingPayments, 0);
 
     const budgetBefore = await request(`/api/platform/organizer/events/${eventIds[0]}/budget`, token);
     assert.equal(budgetBefore.status, 200);

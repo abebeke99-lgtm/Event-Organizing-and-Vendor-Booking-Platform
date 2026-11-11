@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { requirePermission } from '../middleware/rbac.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { loadSystemSettings } from '../lib/systemSettings.js';
 import { mapBookingRecord } from '../lib/marketplace.js';
@@ -12,6 +13,10 @@ import {
   reserveBookingDate,
 } from '../lib/bookingAvailability.js';
 import { dateTimeSchema, toMysqlDateTime } from '../lib/eventInput.js';
+import {
+  createPostgresRefundRequest,
+  isSafePostgresFinancialNote,
+} from '../lib/postgresPaymentManagement.js';
 
 const activeBookingStatuses = ['requested', 'under_review', 'quoted', 'accepted', 'confirmed', 'in_progress'];
 const reservedBookingStatuses = ['accepted', 'confirmed', 'in_progress'];
@@ -529,6 +534,522 @@ function createPostgresPlatformRouter({ database }) {
 
 function createPostgresCustomerRouter({ database }) {
   const router = Router();
+
+  router.get('/overview', requirePlatformUser, asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT
+         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1)::int AS total_bookings,
+         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1 AND b.status IN ('requested', 'under_review', 'quoted'))::int AS pending_bookings,
+         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress'))::int AS confirmed_bookings,
+         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1 AND b.status = 'completed')::int AS completed_bookings,
+         (SELECT COUNT(*) FROM events e
+          WHERE e.organizer_id = $1 AND e.start_date >= NOW() AND e.status <> 'cancelled')::int AS upcoming_events,
+         (SELECT COUNT(*) FROM quotations q LEFT JOIN events e ON e.id = q.event_id
+          WHERE (q.customer_id = $1 OR e.organizer_id = $1)
+            AND q.status IN ('draft', 'sent', 'revision_requested'))::int AS pending_quotations,
+         (SELECT COUNT(*) FROM messages m
+          WHERE m.recipient_id = $1 AND m.read_at IS NULL)::int AS unread_messages,
+         (SELECT COUNT(*) FROM notifications n
+          WHERE n.user_id = $1 AND n.status <> 'read')::int AS unread_notifications,
+         (SELECT COALESCE(SUM(p.amount) FILTER (WHERE p.status IN ('pending', 'authorized')), 0)
+          FROM payments p JOIN bookings b ON b.id = p.booking_id
+          JOIN events e ON e.id = b.event_id WHERE e.organizer_id = $1) AS outstanding_payments`,
+      [req.platformUser.id],
+    );
+    const row = result.rows[0];
+    return res.json({
+      success: true,
+      data: {
+        totalBookings: Number(row.total_bookings),
+        pendingBookings: Number(row.pending_bookings),
+        confirmedBookings: Number(row.confirmed_bookings),
+        completedBookings: Number(row.completed_bookings),
+        upcomingEvents: Number(row.upcoming_events),
+        pendingQuotations: Number(row.pending_quotations),
+        unreadMessages: Number(row.unread_messages),
+        unreadNotifications: Number(row.unread_notifications),
+        outstandingPayments: Number(row.outstanding_payments),
+      },
+    });
+  }));
+
+  router.get('/events', requirePlatformUser, asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT id, title, event_type, description, city, venue, cover_image_url,
+              start_date, end_date, budget, guest_count, capacity, notes, status
+       FROM events WHERE organizer_id = $1 ORDER BY start_date DESC, id DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({
+      success: true,
+      data: result.rows.map((row) => ({
+        id: Number(row.id),
+        title: row.title,
+        type: row.event_type,
+        description: row.description || '',
+        city: row.city || '',
+        location: row.city || '',
+        venue: row.venue || '',
+        coverImage: row.cover_image_url || null,
+        date: row.start_date,
+        startDate: row.start_date,
+        endDate: row.end_date,
+        budget: row.budget === null ? null : Number(row.budget),
+        guestCount: row.guest_count === null ? null : Number(row.guest_count),
+        capacity: row.capacity === null ? null : Number(row.capacity),
+        currency: 'ETB',
+        notes: row.notes || '',
+        status: row.status,
+      })),
+    });
+  }));
+
+  router.get('/favorites', requirePlatformUser, requirePermission('favorites.manage_own'), asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT vp.id, vp.business_name, vp.city, vp.description, vp.verification_status,
+              sc.name AS category
+       FROM favorites f JOIN vendor_profiles vp ON vp.id = f.vendor_id
+       LEFT JOIN service_categories sc ON sc.id = vp.category_id
+       WHERE f.user_id = $1 ORDER BY f.created_at DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      id: Number(row.id),
+      name: row.business_name,
+      business_name: row.business_name,
+      category: row.category || 'General',
+      city: row.city || '',
+      description: row.description || '',
+      verified: row.verification_status === 'verified',
+    })) });
+  }));
+
+  router.post('/favorites', requirePlatformUser, requirePermission('favorites.manage_own'), asyncHandler(async (req, res) => {
+    const parsed = z.object({ vendorId: z.coerce.number().int().positive() }).strict().safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'A valid vendor ID is required.' });
+    const vendor = await database.query(
+      `SELECT id FROM vendor_profiles WHERE id = $1 AND verification_status = 'verified'`,
+      [parsed.data.vendorId],
+    );
+    if (!vendor.rows[0]) return res.status(404).json({ error: 'Verified vendor not found.' });
+    const created = await database.query(
+      `INSERT INTO favorites (user_id, vendor_id) VALUES ($1, $2)
+       ON CONFLICT (user_id, vendor_id) DO NOTHING RETURNING id`,
+      [req.platformUser.id, vendor.rows[0].id],
+    );
+    if (!created.rows[0]) return res.status(409).json({ error: 'Vendor is already saved.' });
+    return res.status(201).json({ success: true, data: { id: Number(created.rows[0].id), vendorId: Number(vendor.rows[0].id) } });
+  }));
+
+  router.delete('/favorites/:vendorId', requirePlatformUser, requirePermission('favorites.manage_own'), asyncHandler(async (req, res) => {
+    const vendorId = z.coerce.number().int().positive().safeParse(req.params.vendorId);
+    if (!vendorId.success) return res.status(400).json({ error: 'Vendor ID is invalid.' });
+    const deleted = await database.query(
+      'DELETE FROM favorites WHERE user_id = $1 AND vendor_id = $2 RETURNING vendor_id',
+      [req.platformUser.id, vendorId.data],
+    );
+    if (!deleted.rows[0]) return res.status(404).json({ error: 'Saved vendor not found.' });
+    return res.status(204).end();
+  }));
+
+  router.get('/saved-services', requirePlatformUser, requirePermission('favorites.manage_own'), asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT s.id, s.title, s.description, s.price,
+              COALESCE(NULLIF(BTRIM(s.currency), ''), 'ETB') AS currency,
+              vp.business_name, vp.city, sc.name AS category, s.status
+       FROM customer_service_favorites f JOIN services s ON s.id = f.service_id
+       JOIN vendor_profiles vp ON vp.id = s.vendor_id
+       LEFT JOIN service_categories sc ON sc.id = s.category_id
+       WHERE f.user_id = $1 AND s.status <> 'archived' AND vp.verification_status = 'verified'
+       ORDER BY f.created_at DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      id: Number(row.id),
+      title: row.title,
+      description: row.description || '',
+      price: Number(row.price || 0),
+      currency: row.currency,
+      vendorName: row.business_name,
+      city: row.city || '',
+      category: row.category || 'General',
+      status: row.status,
+    })) });
+  }));
+
+  router.post('/saved-services', requirePlatformUser, requirePermission('favorites.manage_own'), asyncHandler(async (req, res) => {
+    const parsed = z.object({ serviceId: z.coerce.number().int().positive() }).strict().safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: 'A valid service ID is required.' });
+    const service = await database.query(
+      `SELECT s.id FROM services s JOIN vendor_profiles vp ON vp.id = s.vendor_id
+       WHERE s.id = $1 AND s.status = 'active' AND vp.verification_status = 'verified'`,
+      [parsed.data.serviceId],
+    );
+    if (!service.rows[0]) return res.status(404).json({ error: 'Published service not found.' });
+    const created = await database.query(
+      `INSERT INTO customer_service_favorites (user_id, service_id) VALUES ($1, $2)
+       ON CONFLICT (user_id, service_id) DO NOTHING RETURNING id`,
+      [req.platformUser.id, service.rows[0].id],
+    );
+    if (!created.rows[0]) return res.status(409).json({ error: 'Service is already saved.' });
+    return res.status(201).json({ data: { id: Number(created.rows[0].id), serviceId: Number(service.rows[0].id) } });
+  }));
+
+  router.delete('/saved-services/:serviceId', requirePlatformUser, requirePermission('favorites.manage_own'), asyncHandler(async (req, res) => {
+    const serviceId = z.coerce.number().int().positive().safeParse(req.params.serviceId);
+    if (!serviceId.success) return res.status(400).json({ error: 'Service ID is invalid.' });
+    const deleted = await database.query(
+      'DELETE FROM customer_service_favorites WHERE user_id = $1 AND service_id = $2 RETURNING service_id',
+      [req.platformUser.id, serviceId.data],
+    );
+    if (!deleted.rows[0]) return res.status(404).json({ error: 'Saved service not found.' });
+    return res.status(204).end();
+  }));
+
+  router.get('/messages', requirePlatformUser, requirePermission('messages.view_own'), asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT m.id, m.booking_id, m.sender_id, m.recipient_id, m.subject, m.body, m.read_at, m.created_at,
+              u.full_name AS sender, e.id AS event_id, e.title AS event_title, vp.business_name AS vendor_name
+       FROM messages m JOIN users u ON u.id = m.sender_id
+       JOIN bookings b ON b.id = m.booking_id JOIN events e ON e.id = b.event_id
+       JOIN vendor_profiles vp ON vp.id = b.vendor_id
+       WHERE e.organizer_id = $1 AND (m.sender_id = $1 OR m.recipient_id = $1)
+       ORDER BY m.created_at DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      id: Number(row.id),
+      bookingId: Number(row.booking_id),
+      eventId: Number(row.event_id),
+      event: row.event_title,
+      vendor: row.vendor_name,
+      senderId: Number(row.sender_id),
+      recipientId: Number(row.recipient_id),
+      sender: row.sender,
+      subject: row.subject || '',
+      body: row.body,
+      read: Boolean(row.read_at),
+      createdAt: row.created_at,
+    })) });
+  }));
+
+  router.post('/messages', requirePlatformUser, requirePermission('messages.view_own'), asyncHandler(async (req, res) => {
+    const parsed = z.object({
+      bookingId: z.coerce.number().int().positive(),
+      body: z.string().trim().min(1).max(4000),
+    }).strict().safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Message details are invalid.' });
+    const booking = await database.query(
+      `SELECT b.id, e.title AS event_title, vp.user_id AS vendor_user_id
+       FROM bookings b JOIN events e ON e.id = b.event_id
+       JOIN vendor_profiles vp ON vp.id = b.vendor_id
+       WHERE b.id = $1 AND e.organizer_id = $2 AND b.status NOT IN ('cancelled', 'rejected')`,
+      [parsed.data.bookingId, req.platformUser.id],
+    );
+    if (!booking.rows[0]) return res.status(404).json({ error: 'Active booking not found.' });
+    const record = booking.rows[0];
+    const messageId = await database.inTransaction(async (tx) => {
+      const created = await tx.query(
+        `INSERT INTO messages (sender_id, recipient_id, booking_id, subject, body)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [req.platformUser.id, record.vendor_user_id, record.id, `Question about ${record.event_title}`.slice(0, 180), parsed.data.body],
+      );
+      const id = Number(created.rows[0].id);
+      await notify(tx, {
+        userId: record.vendor_user_id,
+        title: 'New customer message',
+        message: `New message about ${record.event_title}.`,
+        type: 'booking',
+        relatedType: 'booking',
+        relatedId: record.id,
+        actorId: req.platformUser.id,
+        idempotencyKey: `customer-message:${id}`,
+      });
+      await audit(tx, req, {
+        actorId: req.platformUser.id,
+        action: 'customer.message_sent',
+        entityType: 'booking',
+        entityId: record.id,
+        details: { messageId: id },
+      });
+      return id;
+    });
+    return res.status(201).json({ data: { id: messageId, bookingId: Number(record.id), status: 'sent' } });
+  }));
+
+  router.post('/messages/:id/read', requirePlatformUser, requirePermission('messages.view_own'), asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'A valid message ID is required.' });
+    const updated = await database.query(
+      `UPDATE messages m SET read_at = COALESCE(m.read_at, NOW())
+       FROM bookings b JOIN events e ON e.id = b.event_id
+       WHERE m.id = $1 AND m.recipient_id = $2 AND m.booking_id = b.id AND e.organizer_id = $2
+       RETURNING m.id`,
+      [id.data, req.platformUser.id],
+    );
+    if (!updated.rows[0]) return res.status(404).json({ error: 'Message not found.' });
+    return res.json({ data: { id: id.data, read: true } });
+  }));
+
+  router.get('/notifications', requirePlatformUser, requirePermission('notifications.view_own'), asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT id, title, message, notification_type, related_entity_type, related_entity_id, status, created_at
+       FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      id: Number(row.id),
+      title: row.title,
+      message: row.message,
+      type: row.notification_type,
+      relatedType: row.related_entity_type,
+      relatedId: row.related_entity_id,
+      read: row.status === 'read',
+      status: row.status,
+      createdAt: row.created_at,
+    })) });
+  }));
+
+  router.post('/notifications/:id/read', requirePlatformUser, requirePermission('notifications.view_own'), asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'A valid notification ID is required.' });
+    const exists = await database.inTransaction(async (tx) => {
+      const changed = await tx.query(
+        `UPDATE notifications SET status = 'read', read_at = COALESCE(read_at, NOW())
+         WHERE id = $1 AND user_id = $2 AND status <> 'read' RETURNING id`,
+        [id.data, req.platformUser.id],
+      );
+      if (changed.rows[0]) {
+        await tx.query(
+          `INSERT INTO notification_history (notification_id, actor_id, action)
+           VALUES ($1, $2, 'read')`,
+          [id.data, req.platformUser.id],
+        );
+        return true;
+      }
+      const existing = await tx.query('SELECT id FROM notifications WHERE id = $1 AND user_id = $2', [id.data, req.platformUser.id]);
+      return Boolean(existing.rows[0]);
+    });
+    if (!exists) return res.status(404).json({ error: 'Notification not found.' });
+    return res.json({ data: { id: id.data, read: true } });
+  }));
+
+  router.post('/notifications/read-all', requirePlatformUser, requirePermission('notifications.view_own'), asyncHandler(async (req, res) => {
+    const result = await database.inTransaction(async (tx) => tx.query(
+      `WITH changed AS (
+         UPDATE notifications SET status = 'read', read_at = COALESCE(read_at, NOW())
+         WHERE user_id = $1 AND status <> 'read' RETURNING id
+       ), history AS (
+         INSERT INTO notification_history (notification_id, actor_id, action)
+         SELECT id, $1, 'read' FROM changed RETURNING notification_id
+       )
+       SELECT COUNT(*)::integer AS changed FROM changed`,
+      [req.platformUser.id],
+    ));
+    return res.json({ data: { changed: Number(result.rows[0].changed) } });
+  }));
+
+  router.get('/reviews', requirePlatformUser, requirePermission('reviews.view'), asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT r.id, r.booking_id, r.rating, r.comment, r.status, r.created_at,
+              b.vendor_id, vp.business_name AS vendor_name
+       FROM reviews r JOIN bookings b ON b.id = r.booking_id
+       JOIN events e ON e.id = b.event_id JOIN vendor_profiles vp ON vp.id = b.vendor_id
+       WHERE e.organizer_id = $1 ORDER BY r.created_at DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      id: Number(row.id),
+      bookingId: Number(row.booking_id),
+      vendorId: Number(row.vendor_id),
+      vendorName: row.vendor_name,
+      rating: Number(row.rating),
+      comment: row.comment || '',
+      status: row.status,
+      createdAt: row.created_at,
+    })) });
+  }));
+
+  router.post('/reviews', requirePlatformUser, requirePermission('reviews.create'), asyncHandler(async (req, res) => {
+    const parsed = z.object({
+      bookingId: z.coerce.number().int().positive(),
+      rating: z.coerce.number().int().min(1).max(5),
+      comment: z.string().trim().max(2000).optional().default(''),
+    }).strict().safeParse(req.body || {});
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Review details are invalid.' });
+    try {
+      const review = await database.inTransaction(async (tx) => {
+        const booking = await tx.query(
+          `SELECT b.id, b.status, e.organizer_id FROM bookings b
+           JOIN events e ON e.id = b.event_id WHERE b.id = $1 FOR UPDATE`,
+          [parsed.data.bookingId],
+        );
+        const record = booking.rows[0];
+        if (!record || Number(record.organizer_id) !== Number(req.platformUser.id)) {
+          throw httpError('Booking not found.', 404);
+        }
+        if (record.status !== 'completed') {
+          throw httpError('Reviews can only be submitted for completed bookings.', 409);
+        }
+        const existing = await tx.query('SELECT id FROM reviews WHERE booking_id = $1 LIMIT 1', [record.id]);
+        if (existing.rows[0]) throw httpError('A review has already been submitted for this booking.', 409);
+        const created = await tx.query(
+          `INSERT INTO reviews (booking_id, rating, comment, status)
+           VALUES ($1, $2, $3, 'published') RETURNING id`,
+          [record.id, parsed.data.rating, parsed.data.comment || null],
+        );
+        const reviewId = Number(created.rows[0].id);
+        await tx.query(
+          `INSERT INTO review_history (review_id, actor_id, action, to_status)
+           VALUES ($1, $2, 'created', 'published')`,
+          [reviewId, req.platformUser.id],
+        );
+        await audit(tx, req, {
+          actorId: req.platformUser.id,
+          action: 'review.created',
+          entityType: 'review',
+          entityId: reviewId,
+          details: { bookingId: Number(record.id), rating: parsed.data.rating },
+        });
+        return { id: reviewId, bookingId: Number(record.id), rating: parsed.data.rating, status: 'published' };
+      });
+      return res.status(201).json({ success: true, data: review });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
+      throw error;
+    }
+  }));
+
+  router.get('/payments', requirePlatformUser, asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT p.id, p.booking_id, p.amount,
+              COALESCE(NULLIF(BTRIM(p.currency), ''), 'ETB') AS currency,
+              p.provider, p.provider_reference, p.status, p.created_at,
+              b.service_description, e.title AS event_title
+       FROM payments p JOIN bookings b ON b.id = p.booking_id
+       JOIN events e ON e.id = b.event_id
+       WHERE e.organizer_id = $1 ORDER BY p.created_at DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      id: Number(row.id),
+      bookingId: Number(row.booking_id),
+      reference: row.provider_reference || `PAY-${String(row.id).padStart(6, '0')}`,
+      provider: row.provider || null,
+      status: row.status,
+      amount: Number(row.amount || 0),
+      currency: row.currency,
+      service: row.service_description,
+      event: row.event_title,
+      date: row.created_at,
+    })) });
+  }));
+
+  router.get('/payments/:id', requirePlatformUser, asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Payment ID is invalid.' });
+    const paymentResult = await database.query(
+      `SELECT p.id, p.booking_id, p.amount,
+              COALESCE(NULLIF(BTRIM(p.currency), ''), 'ETB') AS currency,
+              p.provider, p.provider_reference, p.status, p.created_at,
+              b.service_description, e.title AS event_title
+       FROM payments p JOIN bookings b ON b.id = p.booking_id
+       JOIN events e ON e.id = b.event_id
+       WHERE p.id = $1 AND e.organizer_id = $2`,
+      [id.data, req.platformUser.id],
+    );
+    const row = paymentResult.rows[0];
+    if (!row) return res.status(404).json({ error: 'Payment not found.' });
+    const [refunds, history] = await Promise.all([
+      database.query(
+        `SELECT id, amount, currency, reason, status, decision_reason, created_at, decided_at, processed_at
+         FROM refund_requests WHERE payment_id = $1 ORDER BY created_at DESC, id DESC`,
+        [id.data],
+      ),
+      database.query(
+        `SELECT id, refund_id, action, from_status, to_status, created_at
+         FROM payment_history WHERE payment_id = $1 ORDER BY created_at DESC, id DESC`,
+        [id.data],
+      ),
+    ]);
+    return res.json({
+      success: true,
+      data: {
+        payment: {
+          id: Number(row.id),
+          bookingId: Number(row.booking_id),
+          reference: row.provider_reference || `PAY-${String(row.id).padStart(6, '0')}`,
+          provider: row.provider || null,
+          status: row.status,
+          amount: Number(row.amount || 0),
+          currency: row.currency,
+          service: row.service_description,
+          event: row.event_title,
+          date: row.created_at,
+        },
+        refunds: refunds.rows.map((refund) => ({
+          ...refund,
+          id: Number(refund.id),
+          amount: Number(refund.amount),
+        })),
+        history: history.rows.map((entry) => ({
+          ...entry,
+          id: Number(entry.id),
+          refund_id: entry.refund_id === null ? null : Number(entry.refund_id),
+        })),
+      },
+    });
+  }));
+
+  router.get('/refunds', requirePlatformUser, asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT r.id, r.payment_id, r.amount,
+              COALESCE(NULLIF(BTRIM(r.currency), ''), 'ETB') AS currency,
+              r.reason, r.status, r.decision_reason, r.created_at, r.decided_at,
+              p.provider_reference
+       FROM refund_requests r JOIN payments p ON p.id = r.payment_id
+       JOIN bookings b ON b.id = p.booking_id JOIN events e ON e.id = b.event_id
+       WHERE e.organizer_id = $1 ORDER BY r.created_at DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      id: Number(row.id),
+      paymentId: Number(row.payment_id),
+      reference: row.provider_reference || null,
+      amount: Number(row.amount),
+      currency: row.currency,
+      reason: row.reason,
+      status: row.status,
+      decisionReason: row.decision_reason || null,
+      createdAt: row.created_at,
+      decidedAt: row.decided_at,
+    })) });
+  }));
+
+  router.post('/payments/:id/refunds', requirePlatformUser, asyncHandler(async (req, res) => {
+    const paymentId = z.coerce.number().int().positive().safeParse(req.params.id);
+    const parsed = z.object({
+      amount: z.union([z.string().trim().max(13), z.number().finite()]),
+      reason: z.string().trim().min(5).max(500)
+        .refine(isSafePostgresFinancialNote, 'Do not include card data or payment credentials.'),
+      idempotencyKey: z.string().uuid(),
+    }).strict().safeParse(req.body);
+    if (!paymentId.success || !parsed.success) {
+      return res.status(400).json({ error: 'A valid payment ID, refund amount, reason, and idempotency key are required.' });
+    }
+    const result = await createPostgresRefundRequest(database, {
+      paymentId: paymentId.data,
+      requesterId: req.platformUser.id,
+      ...parsed.data,
+      ip: req.ip,
+    });
+    return res.status(result.duplicate ? 200 : 201).json({ success: true, data: result });
+  }));
+
   const bookingRowsForCustomer = async (userId, id = null) => {
     const values = id === null ? [userId] : [userId, id];
     const idFilter = id === null ? '' : 'AND b.id = $2';

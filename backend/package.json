@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/server.js",
+    "dev": "node --watch scripts/dev-neon.js",
     "start": "node src/server.js",
-    "migrate": "node src/lib/migrate.js",
+    "migrate": "node scripts/migrate.js",
     "db:init": "node scripts/db-init.js",
     "db:check": "node scripts/check-db.js",
     "db:check:neon-test": "node scripts/check-neon-test-db.js",

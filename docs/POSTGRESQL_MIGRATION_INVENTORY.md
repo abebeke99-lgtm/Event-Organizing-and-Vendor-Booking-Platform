@@ -1,5 +1,11 @@
 # PostgreSQL Migration Inventory
 
+## Current Continuation Status (2026-11-11)
+
+The current query inventory and payment/refund evidence are recorded in the root [POSTGRESQL_MIGRATION_INVENTORY.md](../POSTGRESQL_MIGRATION_INVENTORY.md), [POSTGRESQL_MIGRATION_PROGRESS.md](../POSTGRESQL_MIGRATION_PROGRESS.md), and [POSTGRESQL_PAYMENT_REFUND_MIGRATION_REPORT.md](../POSTGRESQL_PAYMENT_REFUND_MIGRATION_REPORT.md). The latest AST scan is 987 call sites across 88 source files: 18 infrastructure calls and 969 application calls not certified. The isolated Neon `eventhub` test database has 51 application table names, 82 FKs, 151 indexes, and migrations 001–009. The expanded live payment/refund integration passed 1/1; the full backend run under PostgreSQL settings failed (446 total: 252 pass, 184 fail, 10 skip). Production remains untouched.
+
+The checkpoints below are historical evidence through 2026-11-09; their older query/test counts are not the current totals.
+
 ## Checkpoint
 
 Latest Neon pool verification (2026-11-09): an earlier read-only 16-request probe failed during connection establishment with Neon pool maxima 4 and 8, while max 2 passed. The current repeatable `npm --workspace backend run test:neon-pool` uses the isolated `eventhub` PostgreSQL 18 database and runs 1/2/4/8/16 concurrent read-only queries three times on both pooled and direct endpoints with configured max 2: 93/93 queries passed per endpoint, with no waiting or checked-out clients left after each batch. Query p95 ranged about 312–325 ms; at concurrency 16, acquisition wait p95 averaged about 2.2 seconds and peak local queue length was 16. A separate pooled diagnostic run at max 2/4/8, concurrency 16, three repetitions each, also passed 48/48 per cap. This does not erase the earlier transient failures or prove production capacity; the Neon runtime cap remains 2. The standard backend suite passed 470 tests (457 pass, 0 fail, 13 skip) with a temporary local MariaDB connection; frontend tests passed 172/172 and the production build passed. Eleven opted-in live Neon integration tests and a Vite → Express → Neon health request passed. No production cutover was performed.
