@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { after, before, test } from 'node:test';
 import { once } from 'node:events';
 import { rootCertificates } from 'node:tls';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createApp } from '../src/app.js';
 import {
   createDatabaseConfig,
@@ -17,6 +19,7 @@ import { getDatabaseDialect, getStartupConfigurationErrors } from '../src/lib/st
 import { getCookieOptions } from '../src/lib/cookieOptions.js';
 
 const databaseCredentials = {
+  DB_DIALECT: 'mysql',
   DB_HOST: 'mysql.example.test',
   DB_PORT: '11713',
   DB_NAME: 'defaultdb',
@@ -117,6 +120,7 @@ test('production database configuration rejects loopback database hosts', () => 
 
 test('production configuration accepts DATABASE_URL with verified TLS and secure cross-site cookies', () => {
   const configuration = {
+    DB_DIALECT: 'mysql',
     DATABASE_URL: 'mysql://validation-user@db.example.test/events',
     DB_SSL: 'true',
     WEB_ORIGIN: 'https://infobekele.netlify.app',
@@ -253,8 +257,62 @@ test('PostgreSQL startup validates the pooled runtime URL without requiring migr
   assert.deepEqual(getStartupConfigurationErrors(configuration), []);
 });
 
+test('PostgreSQL mode does not load the MySQL driver', () => {
+  const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const loaderPath = fileURLToPath(new URL('./helpers/forbid-mysql-loader.js', import.meta.url));
+  const result = spawnSync(process.execPath, [
+    '--experimental-loader',
+    pathToFileURL(loaderPath).href,
+    '--input-type=module',
+    '-e',
+    "const { databaseDialect } = await import('./src/db.js'); "
+      + "if (databaseDialect !== 'postgres') process.exitCode = 1; "
+      + "else console.log('PostgreSQL mode selected.');",
+  ], {
+    cwd: backendDirectory,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DB_DIALECT: 'postgres',
+      DATABASE_URL: 'postgresql://test-user:test-password@127.0.0.1:5432/eventhub?sslmode=disable',
+      DB_SSL: 'false',
+      NODE_ENV: 'test',
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /PostgreSQL mode selected/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /MySQL driver import attempted/);
+});
+
+test('PostgreSQL startup exits without listening when its database is unavailable', () => {
+  const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const serverPath = fileURLToPath(new URL('../src/server.js', import.meta.url));
+  const result = spawnSync(process.execPath, [serverPath], {
+    cwd: backendDirectory,
+    encoding: 'utf8',
+    timeout: 15000,
+    env: {
+      ...process.env,
+      DB_DIALECT: 'postgres',
+      DATABASE_URL: 'postgresql://test-user:test-password@127.0.0.1:1/eventhub?sslmode=disable',
+      DB_SSL: 'false',
+      NODE_ENV: 'test',
+      WEB_ORIGIN: 'http://localhost:5173',
+      COOKIE_SECURE: 'false',
+      COOKIE_SAME_SITE: 'lax',
+      PORT: '4001',
+    },
+  });
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /PostgreSQL connection failed \[DB_CONNECT_FAILED\]/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Admin API listening|127\.0\.0\.1:3306|MySQL connected/);
+});
+
 test('production startup requires HTTPS origin and cross-site secure cookies', () => {
   const configuration = {
+    DB_DIALECT: 'mysql',
     DB_HOST: 'db.example.test',
     DB_PORT: '3306',
     DB_NAME: 'events',

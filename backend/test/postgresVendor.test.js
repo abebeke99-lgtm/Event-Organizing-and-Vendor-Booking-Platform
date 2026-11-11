@@ -384,12 +384,29 @@ test('Neon PostgreSQL vendor dashboard queries, ownership, and mutations', {
       "UPDATE vendor_profiles SET verification_status = 'verified' WHERE id = $1",
       [fixture.vendorId],
     );
+    const sentMessage = await request('/api/vendor/messages', {
+      method: 'POST',
+      body: { bookingId: Number(fixture.bookingId), body: 'Neon-verified vendor message' },
+    });
+    assert.equal(sentMessage.status, 201);
+    const sentMessageId = (await sentMessage.json()).data.id;
+    assert.ok((await (await request('/api/vendor/messages')).json()).data.some((message) => message.id === sentMessageId));
 
     const profilePatch = await request('/api/vendor/profile', {
       method: 'PATCH', body: { city: 'Bahir Dar', categoryId: Number(fixture.categoryId) },
     });
     assert.equal(profilePatch.status, 200);
     assert.equal((await (await request('/api/vendor/profile')).json()).data.serviceLocation, 'Bahir Dar');
+    const accountPatch = await request('/api/vendor/account', {
+      method: 'PATCH', body: { fullName: 'Updated Neon Vendor', phone: '+251900000000' },
+    });
+    assert.equal(accountPatch.status, 200);
+    const account = await database.runtimeAdapter.query(
+      'SELECT full_name, phone FROM users WHERE id = $1',
+      [fixture.vendorUserId],
+    );
+    assert.equal(account.rows[0].full_name, 'Updated Neon Vendor');
+    assert.equal(account.rows[0].phone, '+251900000000');
 
     const taskUpdate = await request(`/api/vendor/tasks/${fixture.taskId}/status`, {
       method: 'PATCH', body: { status: 'completed' },

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import OpenAI, { APIConnectionError } from 'openai';
 import { z } from 'zod';
-import { pool } from '../db.js';
+import { databaseDialect as defaultDatabaseDialect, pool } from '../db.js';
 import { optionalPlatformUser, requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { loadAiChatContext } from '../lib/aiChatContext.js';
@@ -128,8 +128,56 @@ function logAiChatFailure(branch, error) {
   console.error(`AI chat ${branch} failed:`, { code, status: Number(error?.status) || undefined });
 }
 
-export function createAiChatRouter({ database = pool, client = null, loadContext = loadAiChatContext } = {}) {
+export function toPostgresAiChatStatement(sql, values) {
+  let index = 0;
+  let statement = sql.replace(/\?/g, () => `$${++index}`);
+  statement = statement.replace(/\bc\.title LIKE (\$\d+)\b/g, (_match, placeholder) => `c.title ILIKE ${placeholder}`);
+  statement = statement.replace(
+    /title = IF\(title = 'New chat', (\$\d+), title\)/g,
+    (_match, placeholder) => `title = CASE WHEN title = 'New chat' THEN ${placeholder} ELSE title END`,
+  );
+  if (/^\s*INSERT INTO ai_(?:conversations|messages)\b/i.test(statement)
+    && !/\bRETURNING\b/i.test(statement)) {
+    statement = `${statement.trimEnd()} RETURNING id`;
+  }
+  return { statement, values };
+}
+
+export function createAiChatRouter({
+  database = pool,
+  databaseDialect = defaultDatabaseDialect,
+  client = null,
+  loadContext = loadAiChatContext,
+} = {}) {
   const router = Router();
+  const isPostgres = databaseDialect === 'postgres';
+  const execute = async (target, sql, values = []) => {
+    if (!isPostgres) return target.execute(sql, values);
+    const query = toPostgresAiChatStatement(sql, values);
+    const result = await target.query(query.statement, query.values);
+    const metadata = {
+      affectedRows: result.rowCount,
+      insertId: Number(result.rows[0]?.id) || undefined,
+    };
+    return /^\s*(?:SELECT|WITH)\b/i.test(query.statement)
+      ? [result.rows, metadata]
+      : [metadata, result.rows];
+  };
+  const transaction = async (work) => {
+    if (isPostgres) return database.inTransaction(work);
+    const connection = await database.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await work(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  };
   const openai = client || (process.env.OPENAI_API_KEY?.trim()
     ? new OpenAI({
       apiKey: process.env.OPENAI_API_KEY.trim(),
@@ -400,8 +448,8 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
   router.get('/conversations', async (req, res, next) => {
     try {
       const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 120) : '';
-      const archived = req.query.archived === 'true' ? 1 : 0;
-      const [rows] = await database.execute(
+      const archived = req.query.archived === 'true';
+      const [rows] = await execute(database,
         `SELECT c.id, c.title, c.model, c.is_archived, c.is_pinned, c.created_at, c.updated_at
          FROM ai_conversations c
          WHERE c.user_id = ? AND c.is_archived = ?
@@ -425,12 +473,18 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
       const title = typeof req.body?.title === 'string' && req.body.title.trim()
         ? redactSensitiveContent(req.body.title.trim()).slice(0, 160)
         : 'New chat';
-      const [result] = await database.execute(
+      const [result] = await execute(database,
         'INSERT INTO ai_conversations (user_id, title, model) VALUES (?, ?, ?)',
         [req.platformUser.id, title, model],
       );
       res.status(201).json({
-        data: { id: result.insertId, title, model, is_archived: 0, is_pinned: 0 },
+        data: {
+          id: result.insertId,
+          title,
+          model,
+          is_archived: isPostgres ? false : 0,
+          is_pinned: isPostgres ? false : 0,
+        },
       });
     } catch (error) {
       next(error);
@@ -441,12 +495,12 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
     const conversationId = parseConversationId(req.params.id);
     if (!conversationId) return res.status(400).json({ error: 'Invalid conversation ID.' });
     try {
-      const [conversation] = await database.execute(
+      const [conversation] = await execute(database,
         'SELECT id FROM ai_conversations WHERE id = ? AND user_id = ?',
         [conversationId, req.platformUser.id],
       );
       if (!conversation.length) return res.status(404).json({ error: 'Conversation not found.' });
-      const [messages] = await database.execute(
+      const [messages] = await execute(database,
         `SELECT id, role, content, model, created_at
          FROM ai_messages WHERE conversation_id = ?
          ORDER BY id ASC LIMIT 500`,
@@ -475,39 +529,40 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
       return res.status(400).json({ error: 'Enter a valid message of up to 12,000 characters.' });
     }
 
-    let connection;
     try {
-      connection = await database.getConnection();
-      await connection.beginTransaction();
-      const [conversation] = await connection.execute(
-        'SELECT id FROM ai_conversations WHERE id = ? AND user_id = ? FOR UPDATE',
-        [conversationId, req.platformUser.id],
-      );
-      if (!conversation.length) {
-        await connection.rollback();
-        return res.status(404).json({ error: 'Conversation not found.' });
-      }
-      const [latestUserMessage] = await connection.execute(
-        `SELECT id FROM ai_messages WHERE conversation_id = ? AND role = 'user'
-         ORDER BY id DESC LIMIT 1 FOR UPDATE`,
-        [conversationId],
-      );
-      if (Number(latestUserMessage[0]?.id) !== messageId) {
-        await connection.rollback();
-        return res.status(409).json({ error: 'Only the latest user message can be edited.' });
-      }
       const content = isSensitiveDisclosureRequest(body.data.content)
         ? AI_BLOCKED_REQUEST_MARKER
         : redactSensitiveContent(body.data.content);
-      await connection.execute(
-        'UPDATE ai_messages SET content = ? WHERE id = ? AND conversation_id = ? AND role = ?',
-        [content, messageId, conversationId, 'user'],
-      );
-      await connection.execute(
-        'DELETE FROM ai_messages WHERE conversation_id = ? AND id > ?',
-        [conversationId, messageId],
-      );
-      await connection.commit();
+      const result = await transaction(async (connection) => {
+        const [conversation] = await execute(
+          connection,
+          'SELECT id FROM ai_conversations WHERE id = ? AND user_id = ? FOR UPDATE',
+          [conversationId, req.platformUser.id],
+        );
+        if (!conversation.length) return { status: 404 };
+        const [latestUserMessage] = await execute(
+          connection,
+          `SELECT id FROM ai_messages WHERE conversation_id = ? AND role = 'user'
+           ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+          [conversationId],
+        );
+        if (Number(latestUserMessage[0]?.id) !== messageId) return { status: 409 };
+        await execute(
+          connection,
+          'UPDATE ai_messages SET content = ? WHERE id = ? AND conversation_id = ? AND role = ?',
+          [content, messageId, conversationId, 'user'],
+        );
+        await execute(
+          connection,
+          'DELETE FROM ai_messages WHERE conversation_id = ? AND id > ?',
+          [conversationId, messageId],
+        );
+        return { status: 200 };
+      });
+      if (result.status === 404) return res.status(404).json({ error: 'Conversation not found.' });
+      if (result.status === 409) {
+        return res.status(409).json({ error: 'Only the latest user message can be edited.' });
+      }
       res.json({
         data: {
           id: messageId,
@@ -516,10 +571,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
         },
       });
     } catch (error) {
-      if (connection) await connection.rollback();
       next(error);
-    } finally {
-      connection?.release();
     }
   });
 
@@ -535,7 +587,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
     }
     if (body.data.title) body.data.title = redactSensitiveContent(body.data.title);
     try {
-      const [result] = await database.execute(
+      const [result] = await execute(database,
         `UPDATE ai_conversations
          SET title = COALESCE(?, title),
              is_pinned = COALESCE(?, is_pinned),
@@ -560,7 +612,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
     const conversationId = parseConversationId(req.params.id);
     if (!conversationId) return res.status(400).json({ error: 'Invalid conversation ID.' });
     try {
-      const [result] = await database.execute(
+      const [result] = await execute(database,
         'DELETE FROM ai_conversations WHERE id = ? AND user_id = ?',
         [conversationId, req.platformUser.id],
       );
@@ -586,7 +638,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
 
     let rows;
     try {
-      [rows] = await database.execute(
+      [rows] = await execute(database,
         'SELECT id FROM ai_conversations WHERE id = ? AND user_id = ?',
         [conversationId, req.platformUser.id],
       );
@@ -602,7 +654,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
       : redactSensitiveContent(input.data.content);
     let regenerateMessageId = null;
     try {
-      const [messages] = await database.execute(
+      const [messages] = await execute(database,
         `SELECT id, role, content FROM ai_messages
          WHERE conversation_id = ? ORDER BY id DESC LIMIT ${MAX_HISTORY_MESSAGES}`,
         [conversationId],
@@ -631,13 +683,13 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
         return res.status(503).json({ error: 'AI chat is not configured. Set OPENAI_API_KEY on the server.' });
       }
       if (!regenerate && !retryingLastPrompt) {
-        await database.execute(
+        await execute(database,
           'INSERT INTO ai_messages (conversation_id, role, content) VALUES (?, ?, ?)',
           [conversationId, 'user', userContent],
         );
         history.push({ role: 'user', content: userContent });
       }
-      await database.execute(
+      await execute(database,
         `UPDATE ai_conversations SET model = ?, title = IF(title = 'New chat', ?, title)
          WHERE id = ? AND user_id = ?`,
         [
@@ -653,7 +705,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
 
     if (blockedRequest) {
       try {
-        const [result] = await database.execute(
+        const [result] = await execute(database,
           'INSERT INTO ai_messages (conversation_id, role, content, model) VALUES (?, ?, ?, ?)',
           [conversationId, 'assistant', AI_SECRET_DISCLOSURE_RESPONSE, model],
         );
@@ -738,7 +790,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
       let savedMessageId;
       try {
         if (regenerateMessageId) {
-          const [result] = await database.execute(
+          const [result] = await execute(database,
             `UPDATE ai_messages SET content = ?, model = ?
              WHERE id = ? AND conversation_id = ? AND role = 'assistant'`,
             [assistantContent, model, regenerateMessageId, conversationId],
@@ -746,7 +798,7 @@ export function createAiChatRouter({ database = pool, client = null, loadContext
           if (!result.affectedRows) throw new Error('The saved response could not be updated.');
           savedMessageId = regenerateMessageId;
         } else {
-          const [result] = await database.execute(
+          const [result] = await execute(database,
             'INSERT INTO ai_messages (conversation_id, role, content, model) VALUES (?, ?, ?, ?)',
             [conversationId, 'assistant', assistantContent, model],
           );

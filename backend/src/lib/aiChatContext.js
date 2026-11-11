@@ -3,6 +3,7 @@ import { loadPublicMarketplace } from './marketplace.js';
 import { publicEventSelect } from './publicEventSql.js';
 import { listPublicServices } from './serviceCatalog.js';
 import { listPublicVendors } from './vendorCatalog.js';
+import { loadPostgresPublicMarketplace } from './postgresMarketplace.js';
 
 const stopWords = new Set([
   'about', 'and', 'can', 'find', 'for', 'from', 'help', 'how', 'looking', 'need',
@@ -44,6 +45,53 @@ export async function loadAiChatContext(database, message) {
       return rows.map(mapDatabaseEvent);
     })(),
   ]);
+  return buildAiChatContext(marketplace, eventRows, message);
+}
+
+export async function loadPostgresAiChatContext(database, message) {
+  const [marketplace, eventResult] = await Promise.all([
+    loadPostgresPublicMarketplace(database),
+    database.query(
+      `SELECT e.id, e.title, e.event_type AS type, e.description, e.city AS location, e.venue,
+              e.start_date, t.starting_price, COALESCE(t.available_quantity, 0) AS available_quantity
+       FROM events e
+       JOIN users u ON u.id = e.organizer_id
+       LEFT JOIN (
+         SELECT tt.event_id,
+                MIN(CASE WHEN (tt.sales_start IS NULL OR tt.sales_start <= NOW())
+                         AND (tt.sales_end IS NULL OR tt.sales_end >= NOW()) THEN tt.price END) AS starting_price,
+                SUM(CASE WHEN (tt.sales_start IS NULL OR tt.sales_start <= NOW())
+                         AND (tt.sales_end IS NULL OR tt.sales_end >= NOW())
+                         THEN GREATEST(tt.capacity - tt.sold_quantity - COALESCE(reserved.quantity, 0), 0)
+                         ELSE 0 END) AS available_quantity
+         FROM event_ticket_types tt
+         LEFT JOIN (
+           SELECT ticket_type_id, SUM(quantity) AS quantity
+           FROM event_ticket_bookings
+           WHERE booking_status = 'pending_payment'
+             AND created_at >= NOW() - INTERVAL '15 minutes'
+           GROUP BY ticket_type_id
+         ) reserved ON reserved.ticket_type_id = tt.id
+         WHERE tt.status = 'active'
+         GROUP BY tt.event_id
+       ) t ON t.event_id = e.id
+       WHERE (e.status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
+         OR (e.status = 'completed' AND e.published_at IS NOT NULL))
+         AND e.start_date > NOW()
+       ORDER BY e.start_date ASC, e.id ASC
+       LIMIT 40`,
+    ),
+  ]);
+  const events = eventResult.rows.map((row) => ({
+    ...row,
+    startDate: row.start_date,
+    startingPrice: row.starting_price === null ? null : Number(row.starting_price),
+    availableQuantity: Number(row.available_quantity),
+  }));
+  return buildAiChatContext(marketplace, events, message);
+}
+
+function buildAiChatContext(marketplace, eventRows, message) {
   const terms = searchTerms(message);
   const services = listPublicServices(marketplace.services, { limit: 50, sort: 'recommended' }).services;
   const vendors = listPublicVendors(marketplace.vendors, { limit: 50, sort: 'recommended' }).vendors;

@@ -3,6 +3,21 @@ import { runPostgresMigrations } from '../src/lib/postgresMigrate.js';
 import { postgresApplicationTables } from '../src/lib/postgresSchema.js';
 import { createPostgresDatabase, formatPostgresError, getPostgresFailureCode } from '../src/postgresDb.js';
 
+const requiredArguments = new Set([
+  '--target=isolated-neon-eventhub',
+  '--authorize-allowlisted-migrations',
+]);
+const suppliedArguments = process.argv.slice(2);
+if (suppliedArguments.length !== requiredArguments.size
+  || new Set(suppliedArguments).size !== requiredArguments.size
+  || suppliedArguments.some((argument) => !requiredArguments.has(argument))) {
+  console.error(
+    'Refusing Neon test migrations. Pass exactly --target=isolated-neon-eventhub '
+      + 'and --authorize-allowlisted-migrations to apply only the script allowlist.',
+  );
+  process.exit(2);
+}
+
 function postgresMajorVersion(version) {
   return Number(version.match(/\b(\d+)\./)?.[1]);
 }

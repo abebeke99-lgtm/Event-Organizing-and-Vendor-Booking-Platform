@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch scripts/dev-neon.js",
-    "start": "node src/server.js",
+    "start": "node scripts/start.js",
     "migrate": "node scripts/migrate.js",
     "db:init": "node scripts/db-init.js",
     "db:check": "node scripts/check-db.js",
@@ -17,7 +17,7 @@
     "seed:users": "node scripts/seed-users.js",
     "seed:vendor-menu": "node scripts/seed-vendor-menu.js",
     "bootstrap:admin": "node scripts/bootstrap-admin.js",
-    "test": "node --test test"
+    "test": "node scripts/run-tests.js"
   },
   "engines": {
     "node": "20.x"

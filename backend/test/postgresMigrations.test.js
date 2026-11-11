@@ -28,6 +28,30 @@ test('standard migration command selects PostgreSQL and fails closed without its
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ECONNREFUSED|MySQL/);
 });
 
+test('isolated Neon migration script refuses to run without explicit target and authorization', () => {
+  const scriptPath = fileURLToPath(new URL('../scripts/migrate-neon-test.js', import.meta.url));
+  const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const invalidArguments = [
+    [],
+    ['--target=isolated-neon-eventhub', '--target=isolated-neon-eventhub'],
+    ['--target=wrong-database', '--authorize-allowlisted-migrations'],
+    ['--target=isolated-neon-eventhub'],
+  ];
+
+  for (const arguments_ of invalidArguments) {
+    const result = spawnSync(process.execPath, [scriptPath, ...arguments_], {
+      cwd: backendDirectory,
+      encoding: 'utf8',
+      env: { ...process.env, NODE_ENV: 'test' },
+    });
+
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Refusing Neon test migrations/);
+    assert.match(result.stderr, /--target=isolated-neon-eventhub/);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /PostgreSQL operation failed|ECONNREFUSED/);
+  }
+});
+
 test('database initialization selects PostgreSQL migrations without loading the MySQL schema path', () => {
   const scriptPath = fileURLToPath(new URL('../scripts/db-init.js', import.meta.url));
   const backendDirectory = fileURLToPath(new URL('../', import.meta.url));

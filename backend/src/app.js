@@ -28,6 +28,7 @@ import heroSlidesRoutes, { adminRouter as adminHeroSlidesRoutes, requireHeroSlid
 import { requestContextMiddleware } from './lib/requestContext.js';
 import { localizationMiddleware } from './lib/localization.js';
 import { createAiChatRouter } from './routes/aiChat.js';
+import { loadPostgresAiChatContext } from './lib/aiChatContext.js';
 import { getPostgresErrorCause, isTransientPostgresError } from './lib/postgresRetry.js';
 import { formatPostgresError } from './postgresDb.js';
 import { createPostgresAuthRouter } from './routes/postgresAuth.js';
@@ -36,6 +37,7 @@ import { createPostgresMarketplaceRouter } from './routes/postgresMarketplace.js
 import { createPostgresBookingRouters } from './routes/postgresBookings.js';
 import { createPostgresVendorRouter } from './routes/postgresVendor.js';
 import { createPostgresProfilePhotoRouter } from './routes/postgresProfilePhoto.js';
+import { createPostgresCustomerAccountRouter } from './routes/postgresCustomerAccount.js';
 import { createPostgresOrganizerPlanningRouter } from './routes/postgresOrganizerPlanning.js';
 import { createPostgresAdminRouter } from './routes/postgresAdmin.js';
 import { createPostgresAdminReportsRouter } from './routes/postgresAdminReports.js';
@@ -141,6 +143,13 @@ export function createApp({
   }));
   if (databaseDialect === 'postgres') {
     const postgresBookingRouters = createPostgresBookingRouters({ database });
+    app.use('/api/ai', requirePlatformAvailable, createAiChatRouter({
+      ...aiChatServices,
+      database,
+      databaseDialect,
+      client: aiClient,
+      loadContext: loadPostgresAiChatContext,
+    }));
     app.use('/api', createPostgresHomepageRouter({ database }));
     app.use('/api/admin', requireAdmin);
     app.use('/api/admin', createPostgresAdminRouter({ database }));
@@ -156,6 +165,8 @@ export function createApp({
     app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), createPostgresVendorRouter({ database }));
     app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), createPostgresMarketplaceRouter({ database }));
     app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), postgresBookingRouters.customer);
+    app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'),
+      createPostgresCustomerAccountRouter({ database }));
     app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'),
       createPostgresOrganizerPlanningRouter({ database }));
     app.use('/api/platform/profile/photo', requirePlatformAvailable, createPostgresProfilePhotoRouter({ database }));

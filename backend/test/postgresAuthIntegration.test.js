@@ -50,9 +50,9 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
   let injectedRoleLinkErrorCode;
   let fixtureUserIds = [];
 
-  async function cleanupFixtures() {
+  async function cleanupFixtures(emails = fixtureEmails) {
     await database.runtimeAdapter.inTransaction(async (tx) => {
-      const users = await tx.query('SELECT id FROM users WHERE email = ANY($1::varchar[])', [fixtureEmails]);
+      const users = await tx.query('SELECT id FROM users WHERE email = ANY($1::varchar[])', [emails]);
       fixtureUserIds = users.rows.map((row) => row.id);
       if (!fixtureUserIds.length) return;
 
@@ -73,8 +73,7 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
       }
 
       await tx.query(
-        `DELETE FROM audit_logs
-         WHERE actor_id = ANY($1::bigint[]) AND action IN ('auth.register', 'auth.login')`,
+        'DELETE FROM audit_logs WHERE actor_id = ANY($1::bigint[])',
         [fixtureUserIds],
       );
       await tx.query('DELETE FROM vendor_profiles WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);
@@ -86,6 +85,11 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     const identity = await database.verifyRuntimeConnection();
     assert.match(identity.server_version, /^PostgreSQL 18\b/);
     assert.equal(identity.database_name, 'eventhub');
+
+    const staleFixtures = await database.runtimeAdapter.query(
+      `SELECT email FROM users WHERE email LIKE 'pg-auth-%@example.invalid'`,
+    );
+    await cleanupFixtures(staleFixtures.rows.map((row) => row.email));
 
     const roles = await database.runtimeAdapter.query(
       `SELECT LOWER(name) AS name, id FROM roles
@@ -238,6 +242,52 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     });
     assert.deepEqual(await redirect.json(), { redirect: '/customer/dashboard' });
 
+    const customerProfile = await fetch(`${baseUrl}/api/customer/profile`, {
+      headers: { Cookie: platformCookie },
+    });
+    assert.equal((await customerProfile.json()).data.fullName, 'Neon Customer Fixture');
+    const profileUpdate = await fetch(`${baseUrl}/api/customer/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
+      body: JSON.stringify({ fullName: 'Neon Customer Updated', phone: '+251900000000' }),
+    });
+    assert.equal(profileUpdate.status, 200);
+    assert.equal((await profileUpdate.json()).data.fullName, 'Neon Customer Updated');
+    const invalidProfileUpdate = await fetch(`${baseUrl}/api/customer/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
+      body: JSON.stringify({ fullName: 'x', unexpected: true }),
+    });
+    assert.equal(invalidProfileUpdate.status, 400);
+
+    const secondarySessionToken = randomBytes(32).toString('hex');
+    await database.runtimeAdapter.query(
+      'INSERT INTO user_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL \'1 hour\')',
+      [hashToken(secondarySessionToken), userId],
+    );
+    const incorrectCurrentPassword = await fetch(`${baseUrl}/api/customer/profile/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
+      body: JSON.stringify({ currentPassword: 'WrongCurrentPass123', newPassword: 'WrongPass456A' }),
+    });
+    assert.equal(incorrectCurrentPassword.status, 400);
+    const passwordChange = await fetch(`${baseUrl}/api/customer/profile/password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
+      body: JSON.stringify({ currentPassword: password, newPassword: 'NeonPass456A' }),
+    });
+    assert.equal(passwordChange.status, 200);
+    const survivingSession = await database.runtimeAdapter.query(
+      'SELECT id FROM user_sessions WHERE token_hash = $1',
+      [hashToken(sessionToken)],
+    );
+    const invalidatedSession = await database.runtimeAdapter.query(
+      'SELECT id FROM user_sessions WHERE token_hash = $1',
+      [hashToken(secondarySessionToken)],
+    );
+    assert.equal(survivingSession.rowCount, 1);
+    assert.equal(invalidatedSession.rowCount, 0);
+
     const logout = await fetch(`${baseUrl}/api/platform/logout`, {
       method: 'POST',
       headers: { Cookie: platformCookie },
@@ -248,6 +298,19 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
       [hashToken(sessionToken)],
     );
     assert.equal(deletedSession.rowCount, 0);
+
+    const previousPasswordLogin = await fetch(`${baseUrl}/api/platform/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: customerEmail, password }),
+    });
+    assert.equal(previousPasswordLogin.status, 401);
+    const changedPasswordLogin = await fetch(`${baseUrl}/api/platform/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: customerEmail, password: 'NeonPass456A' }),
+    });
+    assert.equal(changedPasswordLogin.status, 200);
 
     const vendorLogin = await fetch(`${baseUrl}/api/platform/login`, {
       method: 'POST',
@@ -307,7 +370,7 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
        ORDER BY action`,
       [userId],
     );
-    assert.deepEqual(auditRows.rows.map((row) => row.action).sort(), ['auth.login', 'auth.register']);
+    assert.deepEqual(auditRows.rows.map((row) => row.action).sort(), ['auth.login', 'auth.login', 'auth.register']);
   } finally {
     for (const application of servers.reverse()) await application.close();
     try {

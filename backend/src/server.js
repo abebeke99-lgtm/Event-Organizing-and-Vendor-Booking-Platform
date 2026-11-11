@@ -1,8 +1,13 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
-import { getStartupConfigurationErrors } from './lib/startupConfig.js';
+import { getDatabaseDialect, getStartupConfigurationErrors } from './lib/startupConfig.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
+
+if (process.env.NODE_ENV !== 'production' && process.env.DB_DIALECT?.trim() !== 'postgres') {
+  const { loadNeonTestEnvironment } = await import('./lib/neonTestEnvironment.js');
+  Object.assign(process.env, await loadNeonTestEnvironment(), { DB_DIALECT: 'postgres' });
+}
 
 const configuredPort = process.env.PORT?.trim();
 const PORT = configuredPort ? Number(configuredPort) : 4000;
@@ -20,7 +25,7 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   console.error('Required configuration is incomplete or invalid:', configurationErrors.join(', '));
   process.exitCode = 1;
 } else {
-  const databaseDialect = process.env.DB_DIALECT?.trim() || 'mysql';
+  const databaseDialect = getDatabaseDialect();
   const [{ formatDatabaseError, getDatabaseFailureCode, pool, verifyDatabaseConnection }, { createApp }, { loadPaymentProvider }] = await Promise.all([
     import('./db.js'),
     import('./app.js'),
@@ -32,7 +37,12 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     databaseConnected = true;
   } catch (error) {
     const dialect = databaseDialect === 'postgres' ? 'PostgreSQL' : 'MySQL';
-    console.warn(`${dialect} connection failed [${getDatabaseFailureCode(error)}]; the API will start with database health unavailable:`, formatDatabaseError(error));
+    if (databaseDialect === 'postgres') {
+      console.error(`${dialect} connection failed [${getDatabaseFailureCode(error)}]:`, formatDatabaseError(error));
+      process.exitCode = 1;
+    } else {
+      console.warn(`${dialect} connection failed [${getDatabaseFailureCode(error)}]; the API will start with database health unavailable:`, formatDatabaseError(error));
+    }
   }
 
   if (!process.exitCode) {
