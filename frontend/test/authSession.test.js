@@ -160,7 +160,7 @@ test('429 responses honor Retry-After and do not retry before the cooldown expir
   assert.equal(adminCalls, 2);
 });
 
-test('network failures remain recoverable and do not cause automatic retries', async () => {
+test('network failures remain recoverable and do not cause automatic retries', async (context) => {
   let adminCalls = 0;
   const loader = createAuthSessionLoader({
     async getAdminSession() {
@@ -172,7 +172,7 @@ test('network failures remain recoverable and do not cause automatic retries', a
     },
   });
 
-  test('initial auth probes retry 503 responses with backoff and eventually authenticate', async () => {
+  await context.test('initial auth probes retry 503 responses with backoff and eventually authenticate', async () => {
     let adminCalls = 0;
     const delays = [];
     const loader = createAuthSessionLoader({
@@ -194,7 +194,7 @@ test('network failures remain recoverable and do not cause automatic retries', a
     assert.deepEqual(delays, [500, 1000]);
   });
 
-  test('persistent 503 shows waking state and does not clear a platform session hint', async () => {
+  await context.test('persistent 503 shows waking state and does not clear a platform session hint', async () => {
     let clearedSessions = 0;
     let adminCalls = 0;
     const delays = [];

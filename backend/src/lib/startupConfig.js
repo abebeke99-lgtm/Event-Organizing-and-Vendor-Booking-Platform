@@ -1,6 +1,14 @@
 import { getDatabaseConfigurationErrors } from './databaseConfig.js';
 import { getPostgresConfigurationErrors } from './postgresConfig.js';
 
+export function getDatabaseDialect(environment = process.env) {
+  const dialect = environment.DB_DIALECT?.trim() || 'mysql';
+  if (!['mysql', 'postgres'].includes(dialect)) {
+    throw new Error('DB_DIALECT must be mysql or postgres.');
+  }
+  return dialect;
+}
+
 function isValidOriginList(value, isProduction) {
   const origins = value.split(',').map((origin) => origin.trim());
   if (!origins.length || origins.some((origin) => !origin || origin === '*')) return false;

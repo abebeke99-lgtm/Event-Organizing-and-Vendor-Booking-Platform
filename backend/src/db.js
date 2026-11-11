@@ -1,14 +1,16 @@
-import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import { createDatabaseConfig } from './lib/databaseConfig.js';
 import { isPostgresConnectionError } from './lib/postgresRetry.js';
+import { getDatabaseDialect } from './lib/startupConfig.js';
 import { formatPostgresError, getPostgresFailureCode } from './postgresDb.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
-export const isPostgresDialect = process.env.DB_DIALECT === 'postgres';
+export const databaseDialect = getDatabaseDialect();
+export const isPostgresDialect = databaseDialect === 'postgres';
 const postgresModule = isPostgresDialect ? await import('./postgresPool.js') : null;
+const mysqlModule = isPostgresDialect ? null : await import('mysql2/promise');
 
 export {
   createDatabaseConfig,
@@ -36,12 +38,43 @@ export function formatDatabaseError(error, password = process.env.DB_PASSWORD) {
   return details.join(': ') || 'Unknown database error';
 }
 
-export const pool = isPostgresDialect ? postgresModule.getPostgresRuntimePool() : mysql.createPool(createDatabaseConfig());
+let databasePool;
+function getDatabasePool() {
+  if (!databasePool) {
+    databasePool = isPostgresDialect
+      ? postgresModule.getPostgresRuntimePool()
+      : mysqlModule.default.createPool(createDatabaseConfig());
+  }
+  return databasePool;
+}
+
+export const pool = new Proxy({}, {
+  get(_target, property, receiver) {
+    const instance = getDatabasePool();
+    const value = Reflect.get(instance, property, receiver);
+    return typeof value === 'function' ? value.bind(instance) : value;
+  },
+  set(_target, property, value) {
+    getDatabasePool()[property] = value;
+    return true;
+  },
+  has(_target, property) {
+    return property in getDatabasePool();
+  },
+  ownKeys() {
+    return Reflect.ownKeys(getDatabasePool());
+  },
+  getOwnPropertyDescriptor(_target, property) {
+    const descriptor = Object.getOwnPropertyDescriptor(getDatabasePool(), property);
+    return descriptor ? { ...descriptor, configurable: true } : undefined;
+  },
+});
 
 export async function verifyDatabaseConnection(database = pool, expectedDatabase) {
-  await database.query('SELECT 1');
+  const client = database ?? getDatabasePool();
+  await client.query('SELECT 1');
   if (expectedDatabase) {
-    const result = await database.query(
+    const result = await client.query(
       isPostgresDialect ? 'SELECT current_database() AS database_name' : 'SELECT DATABASE() AS database_name',
     );
     const rows = isPostgresDialect ? result.rows : result[0];

@@ -4,14 +4,14 @@ const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const BOOKING_STATUSES = ['requested', 'quoted', 'accepted', 'rejected', 'under_review', 'completed', 'cancelled'];
 const REPORT_STATUSES = {
   users: ['active', 'pending', 'suspended'],
-  vendors: ['pending', 'verified', 'rejected'],
+  vendors: ['pending', 'under_review', 'information_requested', 'verified', 'rejected', 'suspended'],
   events: ['draft', 'pending_approval', 'active', 'published', 'booked', 'in_progress', 'completed', 'rejected', 'cancelled', 'upcoming', 'open'],
   bookings: BOOKING_STATUSES,
   payments: ['pending', 'authorized', 'paid', 'failed', 'cancelled', 'refunded', 'partially_refunded', 'refund_pending'],
   refunds: ['pending', 'processing', 'succeeded', 'failed', 'rejected'],
   categories: BOOKING_STATUSES,
   reviews: ['published', 'hidden', 'flagged'],
-  complaints: ['open', 'under_review', 'resolved', 'closed'],
+  complaints: ['open', 'under_review', 'investigating', 'resolved', 'closed', 'dismissed'],
   'vendor-performance': BOOKING_STATUSES,
   'booking-outcomes': ['completed', 'cancelled'],
 };

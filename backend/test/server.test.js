@@ -13,7 +13,7 @@ import {
   getDatabaseConfigurationErrors,
   verifyDatabaseConnection,
 } from '../src/db.js';
-import { getStartupConfigurationErrors } from '../src/lib/startupConfig.js';
+import { getDatabaseDialect, getStartupConfigurationErrors } from '../src/lib/startupConfig.js';
 import { getCookieOptions } from '../src/lib/cookieOptions.js';
 
 const databaseCredentials = {
@@ -228,6 +228,17 @@ test('startup configuration validation reports missing environment variable name
     'COOKIE_SAME_SITE',
   ]);
   assert.equal(new Set(errors).size, errors.length);
+});
+
+test('database dialect defaults to MySQL, trims explicit selection, and rejects unknown values', () => {
+  assert.equal(getDatabaseDialect({}), 'mysql');
+  assert.equal(getDatabaseDialect({ DB_DIALECT: ' postgres ' }), 'postgres');
+  assert.throws(
+    () => getDatabaseDialect({ DB_DIALECT: 'postgre' }),
+    /DB_DIALECT must be mysql or postgres/,
+  );
+  assert.ok(getStartupConfigurationErrors({ DB_DIALECT: 'postgre' })
+    .some((error) => error.includes('DB_DIALECT')));
 });
 
 test('PostgreSQL startup validates the pooled runtime URL without requiring migration credentials', () => {

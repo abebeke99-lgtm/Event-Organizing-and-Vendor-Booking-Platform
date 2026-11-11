@@ -316,7 +316,7 @@ test('vendor service history is owner-scoped and records lifecycle changes', asy
   assert.equal(foreignResponse.status, 404);
 });
 
-test('revoking a role permission blocks the protected vendor operation on the next request', async () => {
+test('revoking a role permission blocks the protected vendor operation on the next request', async (context) => {
   database.setPermissionKeys(['bookings.view_own']);
   const response = await request('/api/vendor/services');
   assert.equal(response.status, 403);
@@ -324,7 +324,7 @@ test('revoking a role permission blocks the protected vendor operation on the ne
     error: 'Access denied. The required permission is not assigned to this account.',
   });
 
-  test('unverified vendors cannot mutate services, but can securely upload verification documents', async () => {
+  await context.test('unverified vendors cannot mutate services, but can securely upload verification documents', async () => {
     database.vendor.verification_status = 'suspended';
     const blocked = await request('/api/vendor/services', {
       method: 'POST',

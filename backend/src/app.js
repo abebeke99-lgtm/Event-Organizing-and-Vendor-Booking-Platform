@@ -13,7 +13,7 @@ import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { requirePlatformRole } from './middleware/requirePlatformUser.js';
 import { getSystemLockState } from './lib/rbac.js';
-import { formatDatabaseError, getDatabaseFailureCode, pool } from './db.js';
+import { databaseDialect as defaultDatabaseDialect, formatDatabaseError, getDatabaseFailureCode, pool } from './db.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { requirePlatformAvailable } from './middleware/rbac.js';
 import { loadSystemSettings, updateSystemSettingsCache } from './lib/systemSettings.js';
@@ -38,6 +38,8 @@ import { createPostgresVendorRouter } from './routes/postgresVendor.js';
 import { createPostgresProfilePhotoRouter } from './routes/postgresProfilePhoto.js';
 import { createPostgresOrganizerPlanningRouter } from './routes/postgresOrganizerPlanning.js';
 import { createPostgresAdminRouter } from './routes/postgresAdmin.js';
+import { createPostgresAdminReportsRouter } from './routes/postgresAdminReports.js';
+import { createPostgresAdminReviewsComplaintsRouter } from './routes/postgresAdminReviewsComplaints.js';
 import { createPostgresAdminAuditLogRouter } from './routes/postgresAdminAuditLogs.js';
 import { createPostgresAdminSettingsRouter } from './routes/postgresAdminSettings.js';
 import { createPostgresAdminPaymentsRouter } from './routes/postgresAdminPayments.js';
@@ -46,7 +48,7 @@ import { createPostgresHomepageRouter } from './routes/postgresHomepage.js';
 
 export function createApp({
   database = pool,
-  databaseDialect = process.env.DB_DIALECT || 'mysql',
+  databaseDialect = defaultDatabaseDialect,
   emailConfigured,
   emailSender,
   emailChangeEmailConfigured,
@@ -142,6 +144,8 @@ export function createApp({
     app.use('/api', createPostgresHomepageRouter({ database }));
     app.use('/api/admin', requireAdmin);
     app.use('/api/admin', createPostgresAdminRouter({ database }));
+    app.use('/api/admin', createPostgresAdminReportsRouter({ database }));
+    app.use('/api/admin', createPostgresAdminReviewsComplaintsRouter({ database }));
     app.use('/api/admin', createPostgresAdminPaymentsRouter({ database }));
     app.use('/api/admin', createPostgresAdminNotificationsRouter({ database }));
     app.use('/api/admin', createPostgresAdminAuditLogRouter({ database }));

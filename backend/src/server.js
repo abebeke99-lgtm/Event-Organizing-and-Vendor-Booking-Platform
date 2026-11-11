@@ -20,6 +20,7 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   console.error('Required configuration is incomplete or invalid:', configurationErrors.join(', '));
   process.exitCode = 1;
 } else {
+  const databaseDialect = process.env.DB_DIALECT?.trim() || 'mysql';
   const [{ formatDatabaseError, getDatabaseFailureCode, pool, verifyDatabaseConnection }, { createApp }, { loadPaymentProvider }] = await Promise.all([
     import('./db.js'),
     import('./app.js'),
@@ -30,14 +31,14 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     await verifyDatabaseConnection();
     databaseConnected = true;
   } catch (error) {
-    const dialect = process.env.DB_DIALECT === 'postgres' ? 'PostgreSQL' : 'MySQL';
+    const dialect = databaseDialect === 'postgres' ? 'PostgreSQL' : 'MySQL';
     console.warn(`${dialect} connection failed [${getDatabaseFailureCode(error)}]; the API will start with database health unavailable:`, formatDatabaseError(error));
   }
 
   if (!process.exitCode) {
-    if (databaseConnected) console.log(process.env.DB_DIALECT === 'postgres' ? 'Database connected.' : 'MySQL connected.');
+    if (databaseConnected) console.log(databaseDialect === 'postgres' ? 'Database connected.' : 'MySQL connected.');
     const paymentProvider = await loadPaymentProvider();
-    const app = createApp({ paymentProvider, databaseDialect: process.env.DB_DIALECT || 'mysql' });
+    const app = createApp({ paymentProvider, databaseDialect });
     const server = app.listen(PORT, HOST, () => {
       console.log(`Admin API listening on ${HOST}:${PORT}`);
     });

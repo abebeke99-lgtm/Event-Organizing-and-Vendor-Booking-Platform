@@ -28,6 +28,48 @@ test('standard migration command selects PostgreSQL and fails closed without its
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ECONNREFUSED|MySQL/);
 });
 
+test('database initialization selects PostgreSQL migrations without loading the MySQL schema path', () => {
+  const scriptPath = fileURLToPath(new URL('../scripts/db-init.js', import.meta.url));
+  const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: backendDirectory,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DB_DIALECT: 'postgres',
+      DATABASE_URL: '',
+      DIRECT_URL: '',
+      DB_SSL: 'true',
+      NODE_ENV: 'test',
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /PostgreSQL initialization failed \[DB_CONFIG_INVALID\]: .*DATABASE_URL is required/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ECONNREFUSED|MySQL|Applied idempotent schema\.sql/);
+});
+
+test('database health check validates PostgreSQL configuration without trying MySQL', () => {
+  const scriptPath = fileURLToPath(new URL('../scripts/check-db.js', import.meta.url));
+  const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: backendDirectory,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DB_DIALECT: 'postgres',
+      DATABASE_URL: '',
+      DIRECT_URL: '',
+      DB_SSL: 'true',
+      NODE_ENV: 'test',
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /FAIL Configuration: set valid values for DATABASE_URL/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ECONNREFUSED|MySQL/);
+});
+
 test('PostgreSQL SQL splitter preserves semicolons in strings and dollar-quoted bodies', () => {
   const statements = splitPostgresSqlStatements(`
     SELECT 'left;right', "a;b";

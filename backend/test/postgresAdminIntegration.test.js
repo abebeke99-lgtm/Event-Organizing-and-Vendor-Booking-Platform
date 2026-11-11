@@ -24,6 +24,11 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
   let userId;
   let adminRoleId;
   let testRoleId;
+  let vendorProfileId;
+  let eventId;
+  let bookingId;
+  let reviewId;
+  let complaintId;
   let server;
   let originalDescription;
   let notificationEmailConfigured = false;
@@ -148,6 +153,31 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     assert.equal(reportSummary.users.total_users >= 1, true);
     for (const section of Object.values(reportSummary)) {
       for (const value of Object.values(section)) assert.equal(Number.isInteger(value), true);
+    }
+
+    for (const report of [
+      'users', 'vendors', 'events', 'bookings', 'payments', 'refunds',
+      'revenue', 'categories', 'reviews', 'complaints', 'vendor-performance', 'booking-outcomes',
+    ]) {
+      const reportResponse = await request(`/reports?report=${report}&period=last30`);
+      assert.equal(reportResponse.status, 200, report);
+      const reportBody = await reportResponse.json();
+      assert.equal(reportBody.appliedFilters.report, report);
+      assert.ok(Array.isArray(reportBody.data));
+      assert.ok(Array.isArray(reportBody.summary));
+      assert.ok(Array.isArray(reportBody.chartData));
+    }
+
+    const reportExportResponse = await request('/reports/export?report=users&period=last30');
+    assert.equal(reportExportResponse.status, 200);
+    assert.match(reportExportResponse.headers.get('content-type'), /text\/csv/);
+
+    for (const path of [
+      '/reviews', '/reviews/vendors', '/reviews/services',
+      '/complaints', '/complaints/assignees',
+    ]) {
+      const response = await request(path);
+      assert.equal(response.status, 200, path);
     }
 
     const endDate = new Date().toISOString().slice(0, 10);
@@ -533,6 +563,78 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     );
     assert.equal(persisted.rows[0].status, 'suspended');
     assert.ok(persisted.rows[0].audit_count >= 3);
+
+    const vendorProfile = await database.runtimeAdapter.query(
+      `INSERT INTO vendor_profiles (user_id, business_name, verification_status)
+       VALUES ($1, $2, 'verified') RETURNING id`,
+      [userId, `Integration vendor ${suffix}`],
+    );
+    vendorProfileId = vendorProfile.rows[0].id;
+    const event = await database.runtimeAdapter.query(
+      `INSERT INTO events (organizer_id, title, event_type, start_date, status)
+       VALUES ($1, $2, 'Integration', CURRENT_TIMESTAMP + INTERVAL '1 day', 'active')
+       RETURNING id`,
+      [adminId, `Integration event ${suffix}`],
+    );
+    eventId = event.rows[0].id;
+    const booking = await database.runtimeAdapter.query(
+      `INSERT INTO bookings (event_id, vendor_id, service_description, quoted_amount, status)
+       VALUES ($1, $2, 'Integration service', 10, 'accepted') RETURNING id`,
+      [eventId, vendorProfileId],
+    );
+    bookingId = booking.rows[0].id;
+    const review = await database.runtimeAdapter.query(
+      `INSERT INTO reviews (booking_id, rating, comment, status)
+       VALUES ($1, 2, 'Integration review', 'published') RETURNING id`,
+      [bookingId],
+    );
+    reviewId = review.rows[0].id;
+    const complaint = await database.runtimeAdapter.query(
+      `INSERT INTO complaints (user_id, booking_id, subject, details, status)
+       VALUES ($1, $2, 'Integration complaint', 'Integration complaint details', 'open')
+       RETURNING id`,
+      [userId, bookingId],
+    );
+    complaintId = complaint.rows[0].id;
+
+    const reviewDetailsResponse = await request(`/reviews/${reviewId}`);
+    assert.equal(reviewDetailsResponse.status, 200);
+    assert.equal((await reviewDetailsResponse.json()).data.comment, 'Integration review');
+    const moderateResponse = await request(`/reviews/${reviewId}/moderation`, {
+      method: 'PATCH',
+      body: { status: 'hidden', reason: 'Integration moderation test' },
+    });
+    assert.equal(moderateResponse.status, 200);
+    const reviewHistory = await database.runtimeAdapter.query(
+      'SELECT action FROM review_history WHERE review_id = $1',
+      [reviewId],
+    );
+    assert.equal(reviewHistory.rows[0].action, 'hidden');
+
+    const complaintDetailsResponse = await request(`/complaints/${complaintId}`);
+    assert.equal(complaintDetailsResponse.status, 200);
+    const complaintDetails = await complaintDetailsResponse.json();
+    assert.equal(complaintDetails.data.details, 'Integration complaint details');
+    const complaintUpdate = await request(`/complaints/${complaintId}`, {
+      method: 'PATCH',
+      body: {
+        status: 'under_review',
+        reason: 'Integration assignment test',
+        assignedTo: adminId,
+      },
+    });
+    assert.equal(complaintUpdate.status, 200);
+    assert.equal(String((await complaintUpdate.json()).data.assigned_to), String(adminId));
+    const attachmentResponse = await fetch(`${baseUrl}/complaints/${complaintId}/attachments?filename=evidence.pdf`, {
+      method: 'POST',
+      headers: { Cookie: `admin_session=${adminToken}`, 'Content-Type': 'application/pdf' },
+      body: Buffer.from('%PDF-1.7 integration evidence'),
+    });
+    assert.equal(attachmentResponse.status, 201);
+    const attachmentId = (await attachmentResponse.json()).data.id;
+    const downloadResponse = await request(`/complaints/${complaintId}/attachments/${attachmentId}`);
+    assert.equal(downloadResponse.status, 200);
+    assert.equal(await downloadResponse.text(), '%PDF-1.7 integration evidence');
   } finally {
     if (server?.listening) {
       server.close();
@@ -572,6 +674,30 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
           await client.query('DELETE FROM notifications WHERE id = ANY($1::bigint[])', [notificationIds]);
         }
         await client.query('DELETE FROM audit_logs WHERE actor_id = $1', [adminId]);
+        if (complaintId) {
+          const notifications = await client.query(
+            `SELECT id FROM notifications
+             WHERE related_entity_type = 'complaint' AND related_entity_id = $1`,
+            [String(complaintId)],
+          );
+          const notificationIds = notifications.rows.map((row) => row.id);
+          if (notificationIds.length) {
+            await client.query('DELETE FROM notification_history WHERE notification_id = ANY($1::bigint[])', [notificationIds]);
+            await client.query('DELETE FROM notifications WHERE id = ANY($1::bigint[])', [notificationIds]);
+          }
+          await client.query('DELETE FROM complaint_attachments WHERE complaint_id = $1', [complaintId]);
+          await client.query('DELETE FROM complaint_history WHERE complaint_id = $1', [complaintId]);
+          await client.query('DELETE FROM complaints WHERE id = $1', [complaintId]);
+        }
+        if (reviewId) {
+          await client.query('DELETE FROM review_history WHERE review_id = $1', [reviewId]);
+          await client.query('DELETE FROM reviews WHERE id = $1', [reviewId]);
+        }
+        if (bookingId) {
+          await client.query('DELETE FROM booking_history WHERE booking_id = $1', [bookingId]);
+          await client.query('DELETE FROM bookings WHERE id = $1', [bookingId]);
+        }
+        if (eventId) await client.query('DELETE FROM events WHERE id = $1', [eventId]);
         await client.query('DELETE FROM vendor_profiles WHERE user_id = $1', [userId || -1]);
         if (userId && testRoleId) {
           await client.query('DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2', [userId, testRoleId]);

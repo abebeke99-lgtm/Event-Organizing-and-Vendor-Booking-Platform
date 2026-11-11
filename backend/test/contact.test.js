@@ -128,7 +128,7 @@ function createContactApp(database, { emailConfigured = false, emailSender = asy
   return createApp({ database, notificationEmailConfigured: () => emailConfigured, notificationEmailSender: emailSender });
 }
 
-test('contact API persists a valid message and reports unconfigured email delivery', async () => {
+test('contact API persists a valid message and reports unconfigured email delivery', async (context) => {
   const database = createContactDatabase();
   await withContactServer(createContactApp(database), async (baseUrl) => {
     const response = await fetch(`${baseUrl}/api/contact`, {
@@ -137,7 +137,7 @@ test('contact API persists a valid message and reports unconfigured email delive
       body: JSON.stringify(validContactMessage),
     });
 
-    test('contact API sends administrator and customer emails when SMTP is configured', async () => {
+    await context.test('contact API sends administrator and customer emails when SMTP is configured', async () => {
       const database = createContactDatabase({ admins: ['admin@example.com'] });
       const sentEmails = [];
       await withContactServer(createContactApp(database, {
@@ -157,7 +157,7 @@ test('contact API persists a valid message and reports unconfigured email delive
       });
     });
 
-    test('contact API returns only configured support contact details', async () => {
+    await context.test('contact API returns only configured support contact details', async () => {
       const database = createContactDatabase({
         settings: [
           { setting_key: 'support_email', setting_value: 'help@eventhub.test' },

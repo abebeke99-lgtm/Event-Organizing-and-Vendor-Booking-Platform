@@ -65,6 +65,7 @@ The booking logic is enforced in the backend with explicit transition checks so 
 ### Data layer
 
 - MySQL is the configured database, accessed through `mysql2`.
+- PostgreSQL can be selected explicitly with `DB_DIALECT=postgres` and a pooled Neon `DATABASE_URL`. Runtime PostgreSQL connections use a bounded pool and verify TLS certificates; set `DB_SSL=false` only for local, non-production PostgreSQL. `DIRECT_URL` is reserved for migration commands and is not used by the API. MySQL remains the default when `DB_DIALECT` is unset, and invalid dialect values are rejected rather than routed to MySQL.
 - Admin and platform authentication, public marketplace listings, and customer/vendor dashboard reads are backed by MySQL. Event creation now stores organizer-owned draft events transactionally with an audit record. Some dashboard controls and payment-provider workflows remain incomplete; payment records do not represent a real payment integration.
 - Configure either `DATABASE_URL` or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true`; certificate verification remains enabled, with an optional provider CA in `DB_SSL_CA` or `DB_SSL_CA_BASE64`.
 

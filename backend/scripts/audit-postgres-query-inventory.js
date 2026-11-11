@@ -19,6 +19,20 @@ const mysqlPatterns = [
   ['CONCAT_WS', /\bCONCAT_WS\s*\(/i],
   ['MySQL interval syntax', /\bINTERVAL\s+\d+\s+(?:SECOND|MINUTE|HOUR|DAY|MONTH|YEAR)\b/i],
 ];
+const neonVerifiedCallsites = new Map([
+  ['backend/src/routes/postgresAuth.js:39', 'PostgreSQL auth API query adapter; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:50', 'PostgreSQL auth audit insert; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:60', 'PostgreSQL auth session insert; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:71', 'PostgreSQL registration notification setting lookup; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:78', 'PostgreSQL admin recipient lookup; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:86', 'PostgreSQL registration notification insert; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:102', 'PostgreSQL notification history insert; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:170', 'PostgreSQL customer role lookup; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:180', 'PostgreSQL user insert with RETURNING; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:187', 'PostgreSQL user-role insert; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:270', 'PostgreSQL login timestamp update; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/routes/postgresAuth.js:273', 'PostgreSQL vendor profile ON CONFLICT insert; verified by backend/test/postgresAuthIntegration.test.js'],
+]);
 
 async function listJavaScriptFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -66,6 +80,8 @@ function inspectCallsites(ast, filePath, testFiles) {
           .map(([label]) => label);
         const isPostgresInfrastructure = /(?:^|[\\/])(?:postgresAdapter|postgresDb|postgresPool|postgresMigrate|postgresSchema)\.js$/i
           .test(filePath);
+        const relativeFilePath = relative(resolve(backendDirectory, '..'), filePath).replaceAll('\\', '/');
+        const neonVerification = neonVerifiedCallsites.get(`${relativeFilePath}:${node.loc?.start.line ?? 0}`);
         const neighboringTests = [...testFiles].filter((testFile) => {
           const base = relative(resolve(backendDirectory, 'test'), testFile).toLowerCase();
           const sourceBase = filePath.split(/[\\/]/).at(-1).replace(/\.js$/i, '').toLowerCase();
@@ -79,12 +95,16 @@ function inspectCallsites(ast, filePath, testFiles) {
           markers: markers.join('; ') || 'No MySQL-only syntax detected in static SQL text',
           conversionStatus: isPostgresInfrastructure
             ? 'PostgreSQL infrastructure; not an application query'
+            : neonVerification
+              ? `PostgreSQL verified on isolated Neon; ${neonVerification}`
             : property === 'execute'
               ? 'Not converted; execute/result handling requires MySQL semantics'
               : markers.length
                 ? 'Not converted; MySQL-specific SQL detected'
                 : 'Not certified; inspect SQL, parameters, and result handling',
-          testCoverage: neighboringTests.join('; ') || 'No filename-matched test found; query behavior unverified',
+          testCoverage: neonVerification
+            ? 'backend/test/postgresAuthIntegration.test.js'
+            : neighboringTests.join('; ') || 'No filename-matched test found; query behavior unverified',
         });
       }
     }
@@ -130,5 +150,9 @@ await writeFile(outputPath, `${output}\n`, 'utf8');
 console.log(`Query inventory written: ${relative(resolve(backendDirectory, '..'), outputPath).replaceAll('\\', '/')}`);
 console.log(`Source JavaScript files scanned: ${sourceFiles.length}`);
 console.log(`Database query/execute call sites inventoried: ${rows.length}`);
-console.log(`PostgreSQL infrastructure call sites: ${rows.filter((row) => row.conversionStatus.startsWith('PostgreSQL infrastructure')).length}`);
-console.log(`Application call sites not converted or certified: ${rows.filter((row) => !row.conversionStatus.startsWith('PostgreSQL infrastructure')).length}`);
+const infrastructureCalls = rows.filter((row) => row.conversionStatus.startsWith('PostgreSQL infrastructure')).length;
+const applicationRows = rows.filter((row) => !row.conversionStatus.startsWith('PostgreSQL infrastructure'));
+const certifiedCalls = applicationRows.filter((row) => row.conversionStatus.startsWith('PostgreSQL verified')).length;
+console.log(`PostgreSQL infrastructure call sites: ${infrastructureCalls}`);
+console.log(`Application call sites verified on isolated Neon: ${certifiedCalls}`);
+console.log(`Application call sites not certified: ${applicationRows.length - certifiedCalls}`);
