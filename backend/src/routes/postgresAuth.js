@@ -7,12 +7,19 @@ import { getCookieOptions } from '../lib/cookieOptions.js';
 import { DEFAULT_SYSTEM_SETTINGS, mergeSystemSettings } from '../lib/systemSettings.js';
 import { getSystemLockState } from '../lib/rbac.js';
 import { newSessionToken } from '../lib/security.js';
+import { isTransientPostgresError } from '../lib/postgresRetry.js';
+import { normalizeDatabaseAdapter } from '../db.js';
 
 const emailSchema = z.string().trim().email().max(254).transform(normalizeEmail);
 const registrationLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: 5,
   message: 'Too many registration attempts. Please try again later.',
+});
+const passwordRecoveryLimiter = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  message: 'Too many password recovery requests. Please try again later.',
 });
 const loginLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -109,6 +116,10 @@ async function createRegistrationNotifications(executor, {
 }
 
 export function createPostgresAuthRouter({ database, adminNamespace = false }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/availability', async (req, res, next) => {
@@ -222,6 +233,26 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
     }
   });
 
+  router.post('/password-recovery', passwordRecoveryLimiter, async (req, res, next) => {
+    const parsed = emailSchema.safeParse(req.body?.email);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Enter a valid email address.' });
+    }
+    try {
+      await writeAudit(database, {
+        actorId: null,
+        action: 'auth.password_recovery_requested',
+        entityType: 'user',
+        entityId: null,
+        details: { email: parsed.data.toLowerCase() },
+        ip: req.ip,
+      });
+      return res.json({ message: 'If the account exists, recovery instructions will be sent.' });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   router.post('/login', loginLimiter, async (req, res, next) => {
     const schema = z.object({
       email: emailSchema,
@@ -317,7 +348,7 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
     try {
       const adminSession = adminNamespace && Boolean(req.cookies?.admin_session);
       const token = adminSession ? req.cookies.admin_session : req.cookies?.platform_session;
-      if (!token) return res.json(adminNamespace ? { user: null } : { data: { user: null } });
+      if (!token) return res.json({ user: null });
       const result = await query(
         database,
         `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status,
@@ -338,11 +369,13 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
          LIMIT 1`,
         [hashToken(token)],
       );
-      const user = result.rows[0];
+      const rows = Array.isArray(result) ? (result[0] || []) : (result?.rows || []);
+      const user = rows[0];
       if (adminNamespace) {
         if (!user) {
           clearSessionCookie(res);
-          return res.json({ user: null });
+          if (adminSession) res.clearCookie('admin_session', getCookieOptions());
+          return res.status(401).json({ error: 'Authentication required.' });
         }
         if (!(user.is_admin || ['admin', 'administrator'].includes(user.role))) {
           return res.json({ user: null });
@@ -361,7 +394,7 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
       }
       if (!user) {
         clearSessionCookie(res);
-        return res.json({ data: { user: null } });
+        return res.status(401).json({ message: 'Unauthorized' });
       }
       return res.json({
         data: {
@@ -385,6 +418,15 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
         },
       });
     } catch (error) {
+      if (isTransientPostgresError(error)) return next(error);
+      const cookieName = adminNamespace && req.cookies?.admin_session ? 'admin_session' : 'platform_session';
+      if (req.cookies?.[cookieName]) {
+        res.clearCookie(cookieName, getCookieOptions());
+        if (adminNamespace) {
+          return res.status(401).json({ error: 'Authentication required.' });
+        }
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
       return next(error);
     }
   });

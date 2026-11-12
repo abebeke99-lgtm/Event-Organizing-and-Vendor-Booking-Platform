@@ -24,6 +24,7 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
   const categoryName = `Marketplace ${suffix} Category`;
   const serviceTitle = `Marketplace ${suffix} Service`;
   const city = `Marketplace ${suffix} City`;
+  let availableDate = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
   const app = createApp({ database: database.runtimeAdapter, databaseDialect: 'postgres' });
   const server = app.listen(0, '127.0.0.1');
   let userId;
@@ -35,6 +36,7 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
   let reviewId;
   let packageId;
   let mediaId;
+  let serviceMediaId;
 
   try {
     await once(server, 'listening');
@@ -84,14 +86,14 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
       packageId = Number(packageRow.rows[0].id);
       await transaction.query(
         `INSERT INTO vendor_availability (vendor_id, available_date, status)
-         VALUES ($1, CURRENT_DATE + INTERVAL '1 day', 'available')`,
-        [vendorId],
+         VALUES ($1, $2::date, 'available')`,
+        [vendorId, availableDate],
       );
       const event = await transaction.query(
         `INSERT INTO events (organizer_id, title, event_type, start_date, status)
-         VALUES ($1, 'Marketplace integration event', 'Integration', CURRENT_TIMESTAMP, 'active')
+         VALUES ($1, 'Marketplace integration event', $2, CURRENT_TIMESTAMP, 'active')
          RETURNING id`,
-        [userId],
+        [userId, categoryName],
       );
       eventId = Number(event.rows[0].id);
       const booking = await transaction.query(
@@ -117,6 +119,14 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
         [vendorId, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
       );
       mediaId = Number(media.rows[0].id);
+      const serviceMedia = await transaction.query(
+        `INSERT INTO vendor_media
+           (vendor_id, service_id, media_type, original_name, content_type, file_size, content)
+         VALUES ($1, $2, 'service', 'service-integration.png', 'image/png', 8, $3)
+         RETURNING id`,
+        [vendorId, serviceId, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+      );
+      serviceMediaId = Number(serviceMedia.rows[0].id);
     });
 
     await context.test('public vendor list and detail return correctly mapped optional data', async () => {
@@ -135,6 +145,9 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
       assert.equal(Object.values(detail.ratingDistribution).reduce((sum, count) => sum + count, 0), 1);
       assert.deepEqual(Object.keys(detail.reviews[0]).sort(), ['comment', 'createdAt', 'customerName', 'rating'].sort());
       assert.deepEqual(Object.keys(detail.availability[0]).sort(), ['date', 'status'].sort());
+      const available = await get(`/api/platform/vendors?search=${encodeURIComponent(suffix)}&availableDate=${availableDate}`);
+      assert.equal(available.status, 200);
+      assert.ok((await available.json()).data.some((item) => item.id === vendorId && item.available));
     });
 
     await context.test('vendor discovery validates filters and accepts availability and recent sorting', async () => {
@@ -231,6 +244,9 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
       const { categories } = await response.json();
       assert.deepEqual(categories.map((category) => category.name), expected.rows.map((row) => row.name));
       assert.ok(categories.some((category) => category.id === categoryId));
+      const categoryDetail = await get(`/api/platform/categories/${categories.find((category) => category.id === categoryId).slug}`);
+      assert.equal(categoryDetail.status, 200);
+      assert.equal((await categoryDetail.json()).data.id, categoryId);
       for (const category of categories) {
         const servicesResponse = await get(`/api/platform/services?category=${encodeURIComponent(category.slug)}&page=1&limit=50`);
         assert.equal(servicesResponse.status, 200, category.name);
@@ -255,6 +271,9 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
       assert.ok(result.data.every((service) => service.status === 'active' && service.published));
       assert.equal(result.pagination.page, 1);
       assert.equal(result.pagination.limit, 5);
+      const available = await get(`/api/platform/services?search=${encodeURIComponent(suffix)}&availableDate=${availableDate}`);
+      assert.equal(available.status, 200);
+      assert.ok((await available.json()).data.some((service) => service.id === serviceId && service.available));
     });
 
     await context.test('public category images allow embedding from the frontend origin', async () => {
@@ -262,6 +281,18 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
       assert.equal(response.status, 200);
       assert.equal(response.headers.get('cross-origin-resource-policy'), 'cross-origin');
       assert.match(response.headers.get('content-type') || '', /^image\//);
+    });
+
+    await context.test('public vendor and service media are owner-scoped and returned as bytes', async () => {
+      const vendorMedia = await get(`/api/platform/vendors/${vendorId}/media/${mediaId}`);
+      assert.equal(vendorMedia.status, 200);
+      assert.equal(vendorMedia.headers.get('cross-origin-resource-policy'), 'cross-origin');
+      assert.equal((await vendorMedia.arrayBuffer()).byteLength, 8);
+
+      const serviceMedia = await get(`/api/platform/services/${serviceId}/media/${serviceMediaId}`);
+      assert.equal(serviceMedia.status, 200);
+      assert.equal(serviceMedia.headers.get('cross-origin-resource-policy'), 'cross-origin');
+      assert.equal((await serviceMedia.arrayBuffer()).byteLength, 8);
     });
 
     await context.test('public service packages and detail return correctly mapped optional data', async () => {
@@ -321,7 +352,7 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
           if (bookingId) await transaction.query('DELETE FROM bookings WHERE id = $1', [bookingId]);
           if (eventId) await transaction.query('DELETE FROM events WHERE id = $1', [eventId]);
           if (packageId) await transaction.query('DELETE FROM service_packages WHERE id = $1', [packageId]);
-          if (mediaId) await transaction.query('DELETE FROM vendor_media WHERE id = $1', [mediaId]);
+          if (vendorId) await transaction.query('DELETE FROM vendor_media WHERE vendor_id = $1', [vendorId]);
           if (serviceId) await transaction.query('DELETE FROM services WHERE id = $1', [serviceId]);
           if (vendorId) await transaction.query('DELETE FROM vendor_profiles WHERE id = $1', [vendorId]);
           await transaction.query('DELETE FROM users WHERE id = $1', [userId]);

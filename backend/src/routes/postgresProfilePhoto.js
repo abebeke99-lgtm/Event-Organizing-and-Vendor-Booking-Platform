@@ -1,4 +1,5 @@
 import express, { Router } from 'express';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import {
@@ -7,6 +8,10 @@ import {
 } from '../lib/profilePhoto.js';
 
 export function createPostgresProfilePhotoRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/', requirePlatformUser, asyncHandler(async (req, res) => {

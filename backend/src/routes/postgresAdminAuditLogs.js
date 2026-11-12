@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { hasPermission } from '../lib/rbac.js';
@@ -117,6 +118,10 @@ function validateFilters(res, parsed) {
 }
 
 export function createPostgresAdminAuditLogRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/audit-logs/options', requirePermission('audit_logs.view'), asyncHandler(async (req, res) => {

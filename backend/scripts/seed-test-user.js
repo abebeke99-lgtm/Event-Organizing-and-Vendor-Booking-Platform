@@ -1,8 +1,5 @@
 import bcrypt from 'bcryptjs';
-import dotenv from 'dotenv';
-import { fileURLToPath } from 'node:url';
-
-dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
+import '../src/lib/environment.js';
 
 const allowedRoles = new Set(['customer', 'organizer', 'vendor']);
 const email = (process.env.TEST_USER_EMAIL || 'eventhub.local@example.test').trim().toLowerCase();

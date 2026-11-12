@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
 import {
@@ -51,9 +53,22 @@ async function writeAudit(executor, { actorId, action, entityType = 'user', enti
 }
 
 export function createPostgresAdminRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
+  router.use(requireAdmin);
+
   router.get('/dashboard/overview', requirePermission('dashboard.view'), async (req, res, next) => {
+    const isAuthenticatedAdmin = Boolean(req.admin || (req.user && req.user.role === 'admin') || (req.user && req.user.is_admin));
+    if (!isAuthenticatedAdmin) {
+      if (req.cookies?.platform_session) {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
     const parsed = dashboardDateRangeSchema.safeParse(req.query);
     if (!parsed.success) {
       return res.status(400).json({ error: 'Provide a valid date range no longer than 366 days.' });

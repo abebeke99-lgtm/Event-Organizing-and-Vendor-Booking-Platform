@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { hasPermission, normalizePermissionKeys } from '../lib/rbac.js';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -515,6 +516,10 @@ async function loadReport(req, res, database, isExport) {
 }
 
 export function createPostgresAdminReportsRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
   router.get('/reports', requirePermission('reports.view'), (req, res) => loadReport(req, res, database, false));
   router.get('/reports/export', requirePermission('reports.export'), (req, res) => loadReport(req, res, database, true));

@@ -7,15 +7,17 @@ Database used: isolated Neon test database `eventhub` only. Production was not a
 
 `npm --workspace backend run audit` regenerated [docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv](docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv):
 
+See [POSTGRESQL_QUERY_CONVERSION_REPORT.md](./POSTGRESQL_QUERY_CONVERSION_REPORT.md) for this continuation's call-site evidence and limitations.
+
 | Measure | Current | Phase 1 baseline |
 |---|---:|---:|
-| Backend JavaScript source files scanned | 91 | 85 |
-| Database `.query()` / `.execute()` call sites | 1068 | 939 |
+| Backend JavaScript source files scanned | 92 | 85 |
+| Database `.query()` / `.execute()` call sites | 1074 | 939 |
 | PostgreSQL infrastructure calls | 18 | 18 |
-| Application call sites verified on isolated Neon | 12 | 0 |
+| Application call sites verified on isolated Neon | 18 | 0 |
 | Application calls not certified | 1038 | 921 |
 
-The inventory records explicit Neon verification metadata only for call sites with behavior-specific integration evidence. It does not certify a call based on filename or SQL-marker absence. The payment slice added 48 PostgreSQL query call sites, and the admin report/review slice has live Neon evidence for all 12 report types and the review/complaint workflows. This phase added explicit certification for 12 authentication query/adapter call sites; the authentication route was already PostgreSQL-native, so no application SQL conversion was needed. Unique-key race recovery and provider `pending` reconciliation remain unverified.
+The inventory records explicit Neon verification metadata only for call sites with behavior-specific integration evidence. It does not certify a call based on filename or SQL-marker absence. The payment slice added 48 PostgreSQL query call sites, and the admin report/review slice has live Neon evidence for all 12 report types and the review/complaint workflows. Authentication and customer account batches now have 18 explicitly certified query/adapter call sites. The auth and profile/password source routes are PostgreSQL-native; this batch added the customer profile/password replacement and Neon coverage without rewriting the legacy MySQL route. Unique-key race recovery and provider `pending` reconciliation remain unverified.
 
 ## PostgreSQL Tooling Follow-up
 
@@ -34,11 +36,24 @@ The PostgreSQL `db:init` path now runs the forward-only PostgreSQL migrations an
 
 The test also exercises availability, session lookup, `/me`, role redirect, user/admin logout, and invalid credentials. These calls use the route's `query(database, ...)` wrapper and are not separate `.query()`/`.execute()` member-call records in the static inventory. The inventory's 12 certified records are the explicit call sites listed above; no other auth source or other feature group is certified by this phase.
 
+## Completed Slice: Customer Profile and Password
+
+| Original file/function and location | Query behavior | Test file | Isolated Neon result | Limitations |
+|---|---|---|---|---|
+| `backend/src/routes/postgresCustomerAccount.js` profile update (line 47) | Parameterized update with `RETURNING` in a transaction | `backend/test/postgresAuthIntegration.test.js` | Passed | Customer/organizer account profile only |
+| `backend/src/routes/postgresCustomerAccount.js` profile audit (line 52) | JSONB audit insert in the same transaction | `backend/test/postgresAuthIntegration.test.js` | Passed | Tests valid profile update and rejects invalid input |
+| `backend/src/routes/postgresCustomerAccount.js` password lookup (line 90) | `SELECT ... FOR UPDATE` and password verification | `backend/test/postgresAuthIntegration.test.js` | Passed | Wrong-current-password response tested |
+| `backend/src/routes/postgresCustomerAccount.js` password update (line 98) | Parameterized password-hash update | `backend/test/postgresAuthIntegration.test.js` | Passed | New password is accepted and old password rejected by subsequent login |
+| `backend/src/routes/postgresCustomerAccount.js` session invalidation (line 102) | Deletes all other user sessions, preserving the active session | `backend/test/postgresAuthIntegration.test.js` | Passed | Tests one additional session fixture |
+| `backend/src/routes/postgresCustomerAccount.js` password audit (line 106) | Critical audit insert in the same transaction | `backend/test/postgresAuthIntegration.test.js` | Passed | Rollback on audit-insert failure is not separately injected |
+
+`backend/src/app.js` mounts this router only in PostgreSQL mode. The legacy customer route remains unchanged for MySQL mode. The focused customer/auth regression run passed 34/34 tests. The guarded Neon auth/account integration passed 1/1; its test cleanup removes only test-account-linked notifications, audit rows, vendor profiles, and users.
+
 ## Post-Runtime Validation (Node 20.x)
 
 Validation ran on Node `v20.20.2`. `npm ci` passed (320 packages installed, 323 audited, 0 reported vulnerabilities). The backend portion of `npm test` reported 460 passed, 0 failed, and 11 skipped opt-in Neon cases; a separate guarded Neon integration rerun passed 33/33 tests against the isolated `eventhub` test database. Frontend tests passed 172/172, and the production build passed with a compile-only `https://api.example.invalid/api` value. No production endpoint or database was accessed.
 
-The regenerated inventory contains 1,068 total calls (18 infrastructure, 12 application call sites verified on isolated Neon, and 1,038 application calls not certified). Neon integration coverage demonstrates only the tested workflows and does not certify every query call site. The PostgreSQL configuration explicitly selects `pg` and does not fall back to MySQL; MySQL development selects `mysql2`, but the local loopback database was unavailable (`ECONNREFUSED`). The `mysql2` dependency remains intentionally installed pending parity. Production `VITE_API_URL` remains unset and must be configured for a deployment build.
+The regenerated inventory contains 1,074 total calls (18 infrastructure, 18 application call sites verified on isolated Neon, and 1,038 application calls not certified). Neon integration coverage demonstrates only the tested workflows and does not certify every query call site. The PostgreSQL configuration explicitly selects `pg` and does not fall back to MySQL; MySQL development selects `mysql2`, but the local loopback database was unavailable (`ECONNREFUSED`). The `mysql2` dependency remains intentionally installed pending parity. Production `VITE_API_URL` remains unset and must be configured for a deployment build.
 
 ## Completed Slice: Administrator Reports, Reviews, and Complaints
 
@@ -73,8 +88,9 @@ MySQL remains in the legacy runtime, SQL modules, standard schema/migration file
 
 ## Tests and Checks
 
-- `npm --workspace backend run audit:postgres-queries`: passed; 1068 call sites inventoried across 91 files (18 infrastructure, 12 application call sites verified on isolated Neon, 1038 application calls not certified).
-- `RUN_NEON_INTEGRATION=true node --test backend/test/postgresAuthIntegration.test.js`: 1 passed, 0 failed, 0 skipped; exercises registration, notifications/history, duplicate and invalid credentials, customer/vendor login, session lookup/logout, `/me`, role redirect, vendor profile upsert, and transaction rollback on isolated Neon PostgreSQL 18 `eventhub`.
+- `npm --workspace backend run audit:postgres-queries`: passed; 1074 call sites inventoried across 92 files (18 infrastructure, 18 application call sites verified on isolated Neon, 1038 application calls not certified).
+- `RUN_NEON_INTEGRATION=true node --test backend/test/postgresAuthIntegration.test.js`: 1 passed, 0 failed, 0 skipped; exercises registration, notifications/history, duplicate and invalid credentials, customer/vendor login, session lookup/logout, `/me`, role redirect, vendor profile upsert, customer profile/password changes, session invalidation, and transaction rollback on isolated Neon PostgreSQL 18 `eventhub`.
+- Focused customer/auth regression tests: 34 passed, 0 failed.
 - `npm --workspace backend run migrate:neon-test`: latest guarded check reported the isolated Neon database was up to date through migration 010; schema-integrity checks passed.
 - `npm --workspace backend run db:check:neon-test`: previously passed on final retry; 51 application tables, 82 FKs, and 151 indexes were verified on isolated Neon. The latest migration check confirms migrations 001–010. Earlier retries in the prior session hit documented transient Neon acquisition failures.
 - Latest `RUN_NEON_INTEGRATION=true node --test backend/test/postgresPaymentIntegration.test.js`: 1 passed, 0 failed, 0 skipped. The prior combined migration + payment run passed 10/10; migration unit tests have not changed since that run.

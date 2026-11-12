@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { hashToken } from '../src/lib/security.js';
+import { getRolePermissionPolicy } from '../src/lib/rbac.js';
 import { loadNeonTestEnvironment } from '../src/lib/neonTestEnvironment.js';
 import { createPostgresDatabase } from '../src/postgresDb.js';
 
@@ -21,9 +22,16 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
   const adminToken = randomBytes(32).toString('hex');
   const userToken = randomBytes(32).toString('hex');
   let adminId;
+  let secondAdminId;
+  let rosterChangeAdminId;
   let userId;
   let adminRoleId;
+  let secondAdminRoleId;
+  let rosterChangeAdminRoleId;
   let testRoleId;
+  let secondAdminToken;
+  let organizerRoleId;
+  let organizerPermissionIds;
   let vendorProfileId;
   let eventId;
   let bookingId;
@@ -51,6 +59,11 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     assert.ok(roles.has('organizer'));
     assert.ok(roles.has('vendor'));
     assert.ok(roles.has('customer'));
+    organizerRoleId = roles.get('organizer').id;
+    organizerPermissionIds = (await database.runtimeAdapter.query(
+      'SELECT permission_id FROM role_permissions WHERE role_id = $1 ORDER BY permission_id',
+      [organizerRoleId],
+    )).rows.map((row) => row.permission_id);
 
     await database.inTransaction(async (client) => {
       const adminRole = await client.query(
@@ -182,7 +195,11 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
 
     const endDate = new Date().toISOString().slice(0, 10);
     const startDate = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const dashboardStartedAt = Date.now();
     const overviewResponse = await request(`/dashboard/overview?startDate=${startDate}&endDate=${endDate}`);
+    const dashboardDurationMs = Date.now() - dashboardStartedAt;
+    console.info(`NEON_DASHBOARD_RESPONSE_MS role=admin overview=${dashboardDurationMs}`);
+    assert.ok(dashboardDurationMs < 15000, 'admin dashboard must load before the 15-second client timeout');
     assert.equal(overviewResponse.status, 200);
     const overview = (await overviewResponse.json()).data;
     assert.deepEqual(overview.filters, { startDate, endDate });
@@ -214,7 +231,25 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       method: 'PATCH',
       body: { permission_keys: [] },
     });
-    assert.equal(permissionUpdate.status, 200);
+    assert.equal(permissionUpdate.status, 200, `Empty permission update failed: ${await permissionUpdate.text()}`);
+    const organizerPermissions = await database.runtimeAdapter.query(
+      'SELECT id, permission_key FROM permissions WHERE permission_key = ANY($1::text[]) ORDER BY permission_key LIMIT 1',
+      [getRolePermissionPolicy('organizer')],
+    );
+    assert.ok(organizerPermissions.rows[0], 'Expected an allowed organizer permission in the Neon test database.');
+    const permittedPermission = organizerPermissions.rows[0];
+    const nonEmptyPermissionUpdate = await request(`/roles/${organizerRoleId}/permissions`, {
+      method: 'PATCH',
+      body: { permission_keys: [permittedPermission.permission_key] },
+    });
+    assert.equal(nonEmptyPermissionUpdate.status, 200, await nonEmptyPermissionUpdate.text());
+    const persistedPermissionUpdate = await database.runtimeAdapter.query(
+      `SELECT p.permission_key FROM role_permissions rp
+       JOIN permissions p ON p.id = rp.permission_id
+       WHERE rp.role_id = $1 ORDER BY p.permission_key`,
+      [organizerRoleId],
+    );
+    assert.deepEqual(persistedPermissionUpdate.rows.map((row) => row.permission_key), [permittedPermission.permission_key]);
 
     const organizerRole = roles.get('organizer');
     const createdResponse = await request('/users', {
@@ -422,9 +457,79 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         [adminId, stored.rows.map((row) => String(row.id))],
       );
       assert.equal(announcementAudits.rows[0].count, stored.rowCount);
+      await database.inTransaction(async (client) => {
+        const role = await client.query(
+          `INSERT INTO roles (name, description, is_admin, is_active)
+           VALUES ($1, 'Temporary announcement roster fixture', TRUE, TRUE) RETURNING id`,
+          [`integration-roster-admin-${suffix}`],
+        );
+        rosterChangeAdminRoleId = role.rows[0].id;
+        const user = await client.query(
+          `INSERT INTO users (full_name, email, password_hash, status)
+           VALUES ('Postgres Announcement Roster Admin', $1, 'integration-only-not-a-login-hash', 'active')
+           RETURNING id`,
+          [`pg-announcement-roster-${suffix}@example.invalid`],
+        );
+        rosterChangeAdminId = user.rows[0].id;
+        await client.query(
+          'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)',
+          [rosterChangeAdminId, rosterChangeAdminRoleId],
+        );
+      });
       const duplicate = await request('/notifications/announcements', { method: 'POST', body: inAppAnnouncement });
       assert.equal(duplicate.status, 200);
-      assert.equal((await duplicate.json()).data.created, 0);
+      const duplicateBody = (await duplicate.json()).data;
+      assert.equal(duplicateBody.created, 0);
+      assert.equal(duplicateBody.deliveries.length, stored.rowCount);
+      const rosterAdminNotification = await database.runtimeAdapter.query(
+        'SELECT id FROM notifications WHERE user_id = $1 AND idempotency_key = $2',
+        [rosterChangeAdminId, `announcement:${inAppAnnouncementKey}:${rosterChangeAdminId}`],
+      );
+      assert.equal(rosterAdminNotification.rowCount, 0);
+      const conflictingReplay = await request('/notifications/announcements', {
+        method: 'POST',
+        body: { ...inAppAnnouncement, title: `Conflicting ${suffix}` },
+      });
+      assert.equal(conflictingReplay.status, 409);
+      const storedAfterDuplicate = await database.runtimeAdapter.query(
+        `SELECT id FROM notifications
+         WHERE LEFT(idempotency_key, CHAR_LENGTH($1)) = $1`,
+        [`announcement:${inAppAnnouncementKey}:`],
+      );
+      assert.equal(storedAfterDuplicate.rowCount, stored.rowCount);
+      await database.inTransaction(async (client) => {
+        await client.query('DELETE FROM user_roles WHERE user_id = $1', [rosterChangeAdminId]);
+        await client.query('DELETE FROM users WHERE id = $1', [rosterChangeAdminId]);
+        await client.query('DELETE FROM roles WHERE id = $1', [rosterChangeAdminRoleId]);
+      });
+      rosterChangeAdminId = undefined;
+      rosterChangeAdminRoleId = undefined;
+
+      const concurrentAnnouncement = {
+        title: `Concurrent announcement ${suffix}`,
+        message: `Concurrent announcement body ${suffix}`,
+        channel: 'in_app',
+        idempotencyKey: `announcement-concurrent-${suffix}`,
+      };
+      const concurrentResponses = await Promise.all([
+        request('/notifications/announcements', { method: 'POST', body: concurrentAnnouncement }),
+        request('/notifications/announcements', { method: 'POST', body: concurrentAnnouncement }),
+      ]);
+      const concurrentBodies = await Promise.all(concurrentResponses.map((response) => response.json()));
+      assert.deepEqual(concurrentResponses.map((response) => response.status).sort(), [200, 201]);
+      assert.equal(
+        concurrentBodies.reduce((total, body) => total + body.data.created, 0),
+        activeAdminRecipients.rows[0].count,
+      );
+      const concurrentStored = await database.runtimeAdapter.query(
+        `SELECT n.user_id, COUNT(*)::integer AS copies, COUNT(h.id)::integer AS history_count
+         FROM notifications n LEFT JOIN notification_history h ON h.notification_id = n.id
+         WHERE n.idempotency_key LIKE $1
+         GROUP BY n.user_id`,
+        [`announcement:${concurrentAnnouncement.idempotencyKey}:%`],
+      );
+      assert.equal(concurrentStored.rowCount, activeAdminRecipients.rows[0].count);
+      assert.ok(concurrentStored.rows.every((row) => row.copies === 1 && row.history_count === 1));
 
       const unavailableEmail = await request('/notifications/announcements', { method: 'POST', body: emailAnnouncement });
       assert.equal(unavailableEmail.status, 503);
@@ -525,6 +630,11 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       body: { full_name: 'Updated PostgreSQL User' },
     });
     assert.equal(updated.status, 200);
+    const duplicateEmail = await request(`/users/${userId}`, {
+      method: 'PATCH',
+      body: { email: adminEmail },
+    });
+    assert.equal(duplicateEmail.status, 409);
     const detail = await request(`/users/${userId}`);
     assert.equal((await detail.json()).data.full_name, 'Updated PostgreSQL User');
 
@@ -635,6 +745,69 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     const downloadResponse = await request(`/complaints/${complaintId}/attachments/${attachmentId}`);
     assert.equal(downloadResponse.status, 200);
     assert.equal(await downloadResponse.text(), '%PDF-1.7 integration evidence');
+
+    secondAdminToken = randomBytes(32).toString('hex');
+    await database.inTransaction(async (client) => {
+      const secondRole = await client.query(
+        `INSERT INTO roles (name, description, is_admin, is_active)
+         VALUES ($1, 'Temporary secondary admin role', TRUE, TRUE) RETURNING id`,
+        [`integration-secondary-admin-${suffix}`],
+      );
+      secondAdminRoleId = secondRole.rows[0].id;
+      const secondUser = await client.query(
+        `INSERT INTO users (full_name, email, password_hash, status)
+         VALUES ('Postgres Secondary Admin', $1, 'integration-only-not-a-login-hash', 'active')
+         RETURNING id`,
+        [`pg-secondary-admin-${suffix}@example.invalid`],
+      );
+      secondAdminId = secondUser.rows[0].id;
+      await client.query(
+        'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)',
+        [secondAdminId, secondAdminRoleId],
+      );
+      await client.query(
+        `INSERT INTO admin_sessions (token_hash, user_id, expires_at)
+         VALUES ($1, $2, NOW() + INTERVAL '1 hour')`,
+        [hashToken(secondAdminToken), secondAdminId],
+      );
+    });
+    const secondAdminRequest = (path, { method = 'GET', body } = {}) => fetch(`${baseUrl}${path}`, {
+      method,
+      headers: {
+        Cookie: `admin_session=${secondAdminToken}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const disableOriginalAdminRole = await request(`/roles/${adminRoleId}/status`, {
+      method: 'PATCH',
+      body: { is_active: false },
+    });
+    assert.equal(disableOriginalAdminRole.status, 200);
+    assert.equal((await database.runtimeAdapter.query(
+      'SELECT id FROM admin_sessions WHERE user_id = $1',
+      [adminId],
+    )).rowCount, 0, 'disabling the role should invalidate its administrator sessions');
+    const otherActiveAdmins = await database.runtimeAdapter.query(
+      `SELECT COUNT(DISTINCT u.id)::integer AS total
+       FROM users u JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE
+         AND r.id <> $1`,
+      [secondAdminRoleId],
+    );
+    const disableLastAdminRole = await secondAdminRequest(`/roles/${secondAdminRoleId}/status`, {
+      method: 'PATCH',
+      body: { is_active: false },
+    });
+    assert.equal(disableLastAdminRole.status, otherActiveAdmins.rows[0].total === 0 ? 409 : 200);
+    if (otherActiveAdmins.rows[0].total === 0) {
+      assert.match((await disableLastAdminRole.json()).error, /last active Administrator role/i);
+      assert.equal((await database.runtimeAdapter.query(
+        'SELECT is_active FROM roles WHERE id = $1',
+        [secondAdminRoleId],
+      )).rows[0].is_active, true);
+    }
   } finally {
     if (server?.listening) {
       server.close();
@@ -642,6 +815,15 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     }
     if (adminId) {
       await database.inTransaction(async (client) => {
+        if (organizerRoleId && organizerPermissionIds) {
+          await client.query('DELETE FROM role_permissions WHERE role_id = $1', [organizerRoleId]);
+          for (const permissionId of organizerPermissionIds) {
+            await client.query(
+              'INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)',
+              [organizerRoleId, permissionId],
+            );
+          }
+        }
         if (originalDescription !== undefined) {
           if (originalDescription) {
             await client.query(
@@ -673,7 +855,17 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
           );
           await client.query('DELETE FROM notifications WHERE id = ANY($1::bigint[])', [notificationIds]);
         }
-        await client.query('DELETE FROM audit_logs WHERE actor_id = $1', [adminId]);
+        const fixtureUserIds = [adminId, secondAdminId, rosterChangeAdminId, userId].filter(Boolean);
+        await client.query('DELETE FROM audit_logs WHERE actor_id = ANY($1::bigint[])', [fixtureUserIds]);
+        if (secondAdminId) {
+          await client.query('DELETE FROM admin_sessions WHERE user_id = $1', [secondAdminId]);
+          await client.query('DELETE FROM user_roles WHERE user_id = $1', [secondAdminId]);
+          await client.query('DELETE FROM users WHERE id = $1', [secondAdminId]);
+        }
+        if (rosterChangeAdminId) {
+          await client.query('DELETE FROM user_roles WHERE user_id = $1', [rosterChangeAdminId]);
+          await client.query('DELETE FROM users WHERE id = $1', [rosterChangeAdminId]);
+        }
         if (complaintId) {
           const notifications = await client.query(
             `SELECT id FROM notifications
@@ -705,6 +897,8 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         if (userId) await client.query('DELETE FROM users WHERE id = $1', [userId]);
         await client.query('DELETE FROM users WHERE id = $1', [adminId]);
         if (testRoleId) await client.query('DELETE FROM roles WHERE id = $1', [testRoleId]);
+        if (secondAdminRoleId) await client.query('DELETE FROM roles WHERE id = $1', [secondAdminRoleId]);
+        if (rosterChangeAdminRoleId) await client.query('DELETE FROM roles WHERE id = $1', [rosterChangeAdminRoleId]);
         if (adminRoleId) await client.query('DELETE FROM roles WHERE id = $1', [adminRoleId]);
       });
     }

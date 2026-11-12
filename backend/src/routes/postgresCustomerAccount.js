@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { hashToken } from '../lib/security.js';
@@ -11,6 +12,10 @@ function httpError(message, status) {
 }
 
 export function createPostgresCustomerAccountRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
   router.use(requirePlatformUser);
   router.use((req, res, next) => {

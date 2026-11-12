@@ -34,7 +34,7 @@ const users = new Map([
   }],
 ]);
 const sessions = new Map();
-let customerSessionToken;
+let loginRequestId = 0;
 
 function findUserById(id) {
   return [...users.values()].find((user) => String(user.id) === String(id));
@@ -57,7 +57,7 @@ const database = {
       const user = findUserById(session?.user_id);
       return [user?.is_admin ? [{ ...user, roles: 'Admin' }] : [], []];
     }
-    if (statement.includes('FROM user_sessions s') && statement.includes('SELECT 1 FROM user_sessions')) {
+    if (statement.includes('FROM user_sessions s') && statement.includes('r.is_admin = FALSE')) {
       const user = findUserById(findSession(values[0])?.user_id);
       return [user && user.status === 'active' && !user.is_admin ? [{ 1: 1 }] : [], []];
     }
@@ -66,6 +66,42 @@ const database = {
       return [user && user.status === 'active' && user.role_is_active
         ? [{ ...user, permission_keys: '' }]
         : [], []];
+    }
+    if (statement.includes('FROM user_sessions s') && statement.includes('WHERE s.token_hash = ?')) {
+      const session = findSession(values[0]);
+      const user = findUserById(session?.user_id);
+      if (!user || user.status !== 'active') return [[], []];
+      return [[{
+        id: user.id,
+        full_name: user.full_name,
+        email: user.email,
+        phone: null,
+        preferred_language: 'en',
+        status: user.status,
+        role: user.is_admin ? 'admin' : user.role,
+        is_admin: user.is_admin,
+        vendor_profile_id: null,
+        business_name: null,
+        category_name: null,
+      }]];
+    }
+    if (statement.includes('FROM admin_sessions s') && statement.includes('WHERE s.token_hash = ?')) {
+      const session = findSession(values[0]);
+      const user = findUserById(session?.user_id);
+      if (!user || user.status !== 'active') return [[], []];
+      return [[{
+        id: user.id,
+        full_name: user.full_name,
+        email: user.email,
+        phone: null,
+        preferred_language: 'en',
+        status: user.status,
+        role: 'admin',
+        is_admin: 1,
+        vendor_profile_id: null,
+        business_name: null,
+        category_name: null,
+      }]];
     }
     if (statement.includes('profile_photo IS NOT NULL')) {
       const user = findUserById(values[0]);
@@ -82,8 +118,26 @@ const database = {
     }
     throw new Error(`Unexpected authentication query: ${statement.slice(0, 60)}`);
   },
-  async query() {
-    return [[], []];
+  async query(statement, values = []) {
+    if (statement.includes('FROM users u') && statement.includes('r.is_admin = TRUE')) {
+      const session = findSession(values[0]);
+      const user = findUserById(session?.user_id);
+      return {
+        rows: user && user.status === 'active' && user.is_admin && user.role_is_active
+          ? [{ ...user, roles: 'Admin' }]
+          : [],
+      };
+    }
+    if (statement.includes('FROM user_sessions s') && statement.includes('s.token_hash = $1')) {
+      const session = findSession(values[0]);
+      const user = findUserById(session?.user_id);
+      return {
+        rows: user && user.status === 'active' && user.role_is_active
+          ? [{ ...user, preferred_language: 'en', permission_keys: [] }]
+          : [],
+      };
+    }
+    return { rows: [] };
   },
   async getConnection() {
     return {
@@ -120,8 +174,12 @@ after(async () => {
 async function login(email, password = syntheticPassword, endpoint = '/api/platform/login') {
   return fetch(`${baseUrl}${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-For': `198.51.100.${(loginRequestId++ % 250) + 1}`,
+    },
     body: JSON.stringify({ email, password }),
+    credentials: 'omit',
   });
 }
 
@@ -145,7 +203,6 @@ test('one platform login endpoint authenticates all four roles with a shared Htt
     assert.match(cookie, /SameSite=Lax/i);
     assert.ok(token);
     assert.ok(sessions.has(hashToken(decodeURIComponent(token))));
-    if (role === 'customer') customerSessionToken = token;
   }
 });
 
@@ -161,8 +218,8 @@ test('both session inspection endpoints accept the same admin session', async ()
   const token = (loginResponse.headers.get('set-cookie') || '').match(/platform_session=([^;]+)/)?.[1];
 
   const [adminResponse, platformResponse] = await Promise.all([
-    fetch(`${baseUrl}/api/auth/me`, { headers: { Cookie: `platform_session=${token}` } }),
-    fetch(`${baseUrl}/api/platform/me`, { headers: { Cookie: `platform_session=${token}` } }),
+    fetch(`${baseUrl}/api/auth/me`, { headers: { Cookie: `platform_session=${token}` }, credentials: 'omit' }),
+    fetch(`${baseUrl}/api/platform/me`, { headers: { Cookie: `platform_session=${token}` }, credentials: 'omit' }),
   ]);
   assert.equal(adminResponse.status, 200);
   assert.equal((await adminResponse.json()).user.role, 'admin');
@@ -192,12 +249,16 @@ test('incorrect or unknown credentials do not create a session', async () => {
 });
 
 test('admin API rejects unauthenticated and non-admin platform sessions', async () => {
-  const anonymousResponse = await fetch(`${baseUrl}/api/admin/dashboard/overview`);
+  const anonymousResponse = await fetch(`${baseUrl}/api/admin/dashboard/overview`, { credentials: 'omit' });
   assert.equal(anonymousResponse.status, 401);
 
+  const customerLogin = await login('customer@example.test');
+  const customerSessionToken = (customerLogin.headers.get('set-cookie') || '').match(/platform_session=([^;]+)/)?.[1];
   assert.ok(customerSessionToken);
+
   const deniedResponse = await fetch(`${baseUrl}/api/admin/dashboard/overview`, {
     headers: { Cookie: `platform_session=${customerSessionToken}` },
+    credentials: 'omit',
   });
   const body = await deniedResponse.json();
   assert.equal(deniedResponse.status, 403, JSON.stringify(body));

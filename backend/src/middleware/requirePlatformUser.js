@@ -2,6 +2,13 @@ import { pool } from '../db.js';
 import { getRolePermissionPolicy, isCriticalPermission } from '../lib/rbac.js';
 import { hashToken } from '../lib/security.js';
 import { getCookieOptions } from '../lib/cookieOptions.js';
+import { isTransientPostgresError } from '../lib/postgresRetry.js';
+
+function normalizePermissionKeys(value) {
+  if (Array.isArray(value)) return value.filter((permission) => typeof permission === 'string' && permission.trim());
+  if (typeof value === 'string') return value.split(',').map((permission) => permission.trim()).filter(Boolean);
+  return [];
+}
 
 async function loadPlatformUser(req, { includeAdmins = false } = {}) {
   const database = req.app?.locals?.database || pool;
@@ -27,11 +34,12 @@ async function loadPlatformUser(req, { includeAdmins = false } = {}) {
        LIMIT 1`,
       [hashToken(req.cookies.platform_session)],
     );
-    const user = result.rows[0];
+    const rows = Array.isArray(result) ? (result[0] || []) : (result?.rows || []);
+    const user = rows[0];
     if (!user) return null;
 
     const allowedPermissions = new Set(getRolePermissionPolicy(user.role));
-    const permissions = (user.permission_keys || [])
+    const permissions = normalizePermissionKeys(user.permission_keys)
       .filter((permission) => allowedPermissions.has(permission) && !isCriticalPermission(permission));
     return { ...user, name: user.full_name, permissions };
   }
@@ -84,6 +92,11 @@ export async function requirePlatformUser(req, res, next) {
     req.permissions = user.permissions;
     return next();
   } catch (error) {
+    if (isTransientPostgresError(error)) return next(error);
+    clearPlatformCookie(res);
+    if (req.cookies?.platform_session) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
     return next(error);
   }
 }
@@ -102,7 +115,11 @@ export function optionalPlatformUser(req, res, next) {
       req.platformUser = user;
       return next();
     })
-    .catch(next);
+    .catch((error) => {
+      if (isTransientPostgresError(error)) return next(error);
+      clearPlatformCookie(res);
+      return res.status(401).json({ message: 'Unauthorized' });
+    });
 }
 
 export function requirePlatformRole(...allowedRoles) {

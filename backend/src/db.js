@@ -1,16 +1,190 @@
-import dotenv from 'dotenv';
-import { fileURLToPath } from 'node:url';
+import './lib/environment.js';
 import { createDatabaseConfig } from './lib/databaseConfig.js';
 import { isPostgresConnectionError } from './lib/postgresRetry.js';
 import { getDatabaseDialect } from './lib/startupConfig.js';
 import { formatPostgresError, getPostgresFailureCode } from './postgresDb.js';
 
-dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
-
 export const databaseDialect = getDatabaseDialect();
 export const isPostgresDialect = databaseDialect === 'postgres';
-const postgresModule = isPostgresDialect ? await import('./postgresPool.js') : null;
-const mysqlModule = isPostgresDialect ? null : await import('mysql2/promise');
+const postgresModule = await import('./postgresPool.js');
+const normalizedAdapters = new WeakMap();
+
+export function normalizeDatabaseAdapter(database) {
+  if (!database || typeof database !== 'object') return database;
+  if (normalizedAdapters.has(database)) return normalizedAdapters.get(database);
+  const adapter = Object.isExtensible(database)
+    ? database
+    : new Proxy(Object.create(database), {
+      set(target, property, value) {
+        return Reflect.defineProperty(target, property, {
+          value,
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      },
+    });
+
+  function createQueryResult(rows, rowCount, fields, metadata = {}) {
+    return {
+      ...metadata,
+      rows,
+      rowCount,
+      fields,
+      [Symbol.iterator]: function* iterateLegacyResult() {
+        yield rows;
+        yield fields;
+      },
+    };
+  }
+
+  function normalizeQueryResult(result) {
+    if (result && typeof result === 'object' && 'rows' in result) {
+      return createQueryResult(
+        Array.isArray(result.rows) ? result.rows : [],
+        Number.isInteger(result.rowCount) ? result.rowCount : (Array.isArray(result.rows) ? result.rows.length : 0),
+        Array.isArray(result.fields) ? result.fields : [],
+        { command: result.command, oid: result.oid, rowsAffected: result.rowsAffected },
+      );
+    }
+    if (Array.isArray(result)) {
+      if (result.length === 2 && Array.isArray(result[1]) && !Array.isArray(result[0])) {
+        return createQueryResult(
+          [],
+          Number.isInteger(result[0]?.affectedRows) ? result[0].affectedRows : 0,
+          result[1],
+        );
+      }
+      const rows = Array.isArray(result[0])
+        && (result.length === 1 || (result.length === 2 && Array.isArray(result[1])))
+        ? result[0]
+        : result;
+      return createQueryResult(rows, rows.length, Array.isArray(result[1]) ? result[1] : []);
+    }
+    if (result === undefined) {
+      return createQueryResult([], 0, []);
+    }
+    return createQueryResult([], 0, []);
+  }
+
+  function normalizeExecuteResult(result) {
+    if (result && typeof result === 'object' && 'rows' in result) {
+      return [Array.isArray(result.rows) ? result.rows : [], Array.isArray(result.fields) ? result.fields : []];
+    }
+    if (Array.isArray(result)) {
+      if (Array.isArray(result[0])) {
+        return [result[0], Array.isArray(result[1]) ? result[1] : []];
+      }
+      if (result.length === 2 && Array.isArray(result[1])) {
+        return [result[0], result[1]];
+      }
+      if (result.length === 1 && result[0] && typeof result[0] === 'object') {
+        return [result[0], []];
+      }
+      return [result, []];
+    }
+    return [result ?? [], []];
+  }
+
+  const originalQuery = typeof database.query === 'function' ? database.query.bind(database) : null;
+  const originalExecute = typeof database.execute === 'function' ? database.execute.bind(database) : null;
+  const rewriteLegacyPlaceholders = (sql) => (typeof sql === 'string' ? sql.replace(/\$\d+/g, '?') : sql);
+  const callLegacyExecute = async (args, fallback = false) => {
+    if (!originalExecute) return null;
+    const [sql, ...rest] = args;
+    const candidates = fallback ? [args, [rewriteLegacyPlaceholders(sql), ...rest]] : [args, [rewriteLegacyPlaceholders(sql), ...rest]];
+    for (const candidate of candidates) {
+      try {
+        return await originalExecute(...candidate);
+      } catch (error) {
+        if (candidate === candidates[candidates.length - 1]) throw error;
+      }
+    }
+    return null;
+  };
+  if (typeof database.query !== 'function' && typeof database.execute === 'function') {
+    adapter.query = async (...args) => {
+      return normalizeQueryResult(await callLegacyExecute(args));
+    };
+  } else if (originalQuery) {
+    const currentQuery = originalQuery;
+    adapter.query = async (...args) => {
+      try {
+        const result = await currentQuery(...args);
+        const normalizedResult = normalizeQueryResult(result);
+        const isReadQuery = /^\s*(SELECT|WITH)\b/i.test(args[0]);
+        if (originalExecute && isReadQuery && Array.isArray(result) && normalizedResult.rows.length === 0) {
+          try {
+            return normalizeQueryResult(await callLegacyExecute(args));
+          } catch {
+            return normalizedResult;
+          }
+        }
+        return normalizedResult;
+      } catch (error) {
+        if (typeof originalExecute === 'function') {
+          const executeResult = await callLegacyExecute(args);
+          return normalizeQueryResult(executeResult);
+        }
+        throw error;
+      }
+    };
+  }
+
+  if (typeof database.execute !== 'function' && typeof adapter.query === 'function') {
+    adapter.execute = async (...args) => {
+      return normalizeExecuteResult(await adapter.query(...args));
+    };
+  } else if (originalExecute) {
+    const currentExecute = originalExecute;
+    adapter.execute = async (...args) => {
+      return normalizeExecuteResult(await currentExecute(...args));
+    };
+  }
+
+  if (typeof database.connect !== 'function' && typeof database.getConnection === 'function') {
+    adapter.connect = (...args) => database.getConnection(...args);
+  }
+
+  if (typeof adapter.inTransaction !== 'function' && (typeof database.getConnection === 'function' || typeof adapter.connect === 'function')) {
+    adapter.inTransaction = async (work) => {
+      const connection = typeof database.getConnection === 'function'
+        ? await database.getConnection()
+        : await adapter.connect();
+      const normalizedConnection = normalizeDatabaseAdapter(connection);
+      if (typeof normalizedConnection.beginTransaction === 'function') {
+        await normalizedConnection.beginTransaction();
+      }
+      try {
+        const result = await work(normalizedConnection);
+        if (typeof normalizedConnection.commit === 'function') {
+          await normalizedConnection.commit();
+        }
+        return result;
+      } catch (error) {
+        try {
+          if (typeof normalizedConnection.rollback === 'function') {
+            await normalizedConnection.rollback();
+          }
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            'Database transaction failed and rollback could not be completed.',
+          );
+        }
+        throw error;
+      } finally {
+        if (typeof normalizedConnection.release === 'function') {
+          normalizedConnection.release();
+        }
+      }
+    };
+  }
+
+  normalizedAdapters.set(database, adapter);
+  normalizedAdapters.set(adapter, adapter);
+  return adapter;
+}
 
 export {
   createDatabaseConfig,
@@ -19,31 +193,13 @@ export {
 } from './lib/databaseConfig.js';
 
 export function formatDatabaseError(error, password = process.env.DB_PASSWORD) {
-  if (isPostgresDialect) return formatPostgresError(error);
-  const details = [
-    typeof error?.code === 'string' ? error.code : error?.name,
-    Number.isInteger(error?.errno) ? `errno=${error.errno}` : null,
-    typeof error?.sqlState === 'string' ? `sqlState=${error.sqlState}` : null,
-  ].filter(Boolean);
-  const messages = [...new Set([error?.message, error?.sqlMessage]
-    .filter((message) => typeof message === 'string' && message))];
-  for (let message of messages) {
-    message = message
-      .replace(/((?:password|passwd|pwd)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1[REDACTED]')
-      .replace(/\b([a-z][a-z\d+.-]*:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[REDACTED]@');
-    if (password) message = message.replaceAll(password, '[REDACTED]');
-    message = message.replace(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g, '[REDACTED CERTIFICATE]');
-    details.push(message);
-  }
-  return details.join(': ') || 'Unknown database error';
+  return formatPostgresError(error, password);
 }
 
 let databasePool;
 function getDatabasePool() {
   if (!databasePool) {
-    databasePool = isPostgresDialect
-      ? postgresModule.getPostgresRuntimePool()
-      : mysqlModule.default.createPool(createDatabaseConfig());
+    databasePool = postgresModule.getPostgresRuntimePool();
   }
   return databasePool;
 }
@@ -72,66 +228,37 @@ export const pool = new Proxy({}, {
 
 export async function verifyDatabaseConnection(database = pool, expectedDatabase) {
   const client = database ?? getDatabasePool();
-  await client.query('SELECT 1');
-  if (expectedDatabase) {
-    const result = await client.query(
-      isPostgresDialect ? 'SELECT current_database() AS database_name' : 'SELECT DATABASE() AS database_name',
-    );
-    const rows = isPostgresDialect ? result.rows : result[0];
-    if (rows[0]?.database_name !== expectedDatabase) {
-      throw new Error('Connected database does not match DB_NAME.');
-    }
+  const result = await client.query('SELECT version() AS server_version, current_database() AS database_name');
+  if (expectedDatabase && result.rows[0]?.database_name !== expectedDatabase) {
+    throw new Error('Connected database does not match DB_NAME.');
   }
 }
 
 export function getDatabaseFailureCode(error) {
-  if (isPostgresDialect) return getPostgresFailureCode(error);
-  if (error?.message === 'Connected database does not match DB_NAME.') return 'DB_NAME_MISMATCH';
-  if (['ER_ACCESS_DENIED_ERROR', 'ER_DBACCESS_DENIED_ERROR', 'ER_ACCESS_DENIED_NO_PASSWORD_ERROR'].includes(error?.code)) {
-    return 'DB_AUTH_FAILED';
-  }
-  if (/^(CERT_|ERR_TLS|ERR_SSL|UNABLE_TO_VERIFY|HANDSHAKE_SSL)/i.test(error?.code || '')
-    || /certificate|tls|ssl handshake/i.test(error?.message || '')) {
-    return 'DB_TLS_FAILED';
-  }
-  return 'DB_CONNECT_FAILED';
+  return getPostgresFailureCode(error);
 }
 
 export async function inTransaction(work) {
-  if (isPostgresDialect) {
-    const connection = await pool.connect();
-    let releaseError;
-    try {
-      await connection.query('BEGIN');
-      const result = await work(connection);
-      await connection.query('COMMIT');
-      return result;
-    } catch (error) {
-      if (isPostgresConnectionError(error)) releaseError = error;
-      try {
-        await connection.query('ROLLBACK');
-      } catch (rollbackError) {
-        releaseError = rollbackError;
-        throw new AggregateError(
-          [error, rollbackError],
-          'PostgreSQL transaction failed and rollback could not be completed.',
-        );
-      }
-      throw error;
-    } finally {
-      connection.release(releaseError);
-    }
-  }
-  const connection = await pool.getConnection();
+  const connection = await pool.connect();
+  let releaseError;
   try {
-    await connection.beginTransaction();
+    await connection.query('BEGIN');
     const result = await work(connection);
-    await connection.commit();
+    await connection.query('COMMIT');
     return result;
   } catch (error) {
-    await connection.rollback();
+    if (isPostgresConnectionError(error)) releaseError = error;
+    try {
+      await connection.query('ROLLBACK');
+    } catch (rollbackError) {
+      releaseError = rollbackError;
+      throw new AggregateError(
+        [error, rollbackError],
+        'PostgreSQL transaction failed and rollback could not be completed.',
+      );
+    }
     throw error;
   } finally {
-    connection.release();
+    connection.release(releaseError);
   }
 }

@@ -13,11 +13,15 @@ Regenerated with `npm --workspace backend run audit:postgres-queries`:
 | MySQL `.execute()` semantics | 644 | Requires conversion or explicit MySQL-only classification |
 | Query calls with detected MySQL syntax | 5 | Requires conversion; markers include MySQL-only SQL constructs |
 | Query calls without detected markers, not certified | 389 | Absence of a marker is not PostgreSQL certification |
-| Application call sites verified on isolated Neon | 12 | Explicit source-location metadata backed by the authentication API integration |
+| Application call sites verified on isolated Neon | 18 | Explicit source-location metadata backed by auth and customer-account integration |
 | Total application calls not certified by the inventory | 1038 | Most application calls remain unverified |
-| Total calls inventoried | 1068 | Scanned from 91 backend source JavaScript files |
+| Total calls inventoried | 1074 | Scanned from 92 backend source JavaScript files |
 
-The exact per-call inventory is [docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv](docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv). The payment call sites comprise 30 in `postgresPaymentManagement.js`, 13 in `postgresAdminPayments.js`, and 5 in `postgresBookings.js`; admin reports and review/complaint routes are also exercised by Neon integration tests. This phase added explicit inventory certification for 12 PostgreSQL authentication query/adapter call sites; the authentication source was already PostgreSQL-native, so no SQL source conversion was required. The authentication test also exercises wrapper-invoked availability, login, `/me`, role redirect, and logout queries, which are not separate `.query()`/`.execute()` member-call records in the scanner. All unlisted calls remain uncertified.
+The exact per-call inventory is [docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv](docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv). The payment call sites comprise 30 in `postgresPaymentManagement.js`, 13 in `postgresAdminPayments.js`, and 5 in `postgresBookings.js`; admin reports and review/complaint routes are also exercised by Neon integration tests. Eighteen individual call sites are explicitly recorded as Neon-verified: 12 authentication and six customer profile/password operations. Authentication was already PostgreSQL-native; this continuation added a PostgreSQL customer-account router without changing the legacy MySQL customer route. The authentication test also exercises wrapper-invoked availability, login, `/me`, role redirect, and logout queries, which are not separate `.query()`/`.execute()` member-call records in the scanner. All unlisted calls remain uncertified.
+
+Each CSV row has a deterministic path/line/column/method ID and separate dialect, migration-stage, PostgreSQL test, Neon verification, and remaining-issue columns. The static AST pass is not semantic query inspection: 1,038 application calls are currently `Not inspected` at call-site level. Eighteen infrastructure calls are counted separately and are not included in the 1,056 application-call total.
+
+See [POSTGRESQL_QUERY_CONVERSION_REPORT.md](./POSTGRESQL_QUERY_CONVERSION_REPORT.md) for the batch-level evidence and limits.
 
 ## Database Schema
 
@@ -46,6 +50,7 @@ Migration `009_payment_status_width.sql` is additive and widens `payments.status
 | Admin reports | PostgreSQL converted; live Neon verified for all 12 report types | Filtered listing, summary/chart payloads, CSV export and audit logging exercised |
 | Admin reviews/complaints | PostgreSQL converted; live Neon verified for listing, moderation, assignment/status update, history, notifications, and attachments | Live update exposed and fixed invalid `FOR UPDATE` behavior on nullable joins |
 | Authentication | PostgreSQL-native route; 12 inventory call sites explicitly Neon-verified | Registration, notifications/history, duplicate/error paths, customer/vendor login, sessions/logout, `/me`, redirect, vendor profile upsert, and transaction rollback exercised |
+| Customer account profile/password | PostgreSQL route added; 6 inventory call sites explicitly Neon-verified | Profile read/update, validation, password verification/change, other-session invalidation, audit writes, and subsequent login behavior exercised |
 | MySQL payment/refund route set | MySQL-only legacy path retained | MySQL fake-executor unit suite is 9/9; no MySQL database connection was used for that unit run |
 | Full application query inventory | Not complete | 1038 application calls remain uncertified; audit modules and feature routes incrementally |
 | Production schema/data migration | Not started | No production credentials, authorization, backup, or recovery point available |
@@ -62,6 +67,7 @@ The repository still contains MySQL-style `?` placeholders/`execute()` result ha
 - MySQL payment-management unit tests: 9 passed, 0 failed; these use test doubles and do not certify a MySQL database.
 - Latest complete backend suite: 490 passed, 0 failed, 0 skipped with serial test-file execution and Neon integrations enabled. Legacy-mode unit tests used `DB_DIALECT=mysql` with non-connecting local placeholders; the live Neon suites use the guarded isolated `eventhub` test database. No production database was accessed.
 - Authentication Neon integration: 1 passed, 0 failed, 0 skipped; the isolated test covers the PostgreSQL auth API and a forced foreign-key failure to verify transactional rollback.
+- Customer/auth focused regression tests: 34 passed, 0 failed; latest Neon authentication plus customer-account integration: 1 passed, 0 failed, 0 skipped.
 - Earlier full backend diagnostic forced globally into PostgreSQL mode: 446 total, 252 passed, 184 failed, 10 skipped. This remains evidence that legacy tests/routes are not ready for a PostgreSQL-only runtime; it is distinct from the latest passing mixed test suite.
 - Frontend tests: 172 passed, 0 failed.
 - Vite production build: passed with a compile-only API URL placeholder.

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 
 const idSchema = z.coerce.number().int().positive();
@@ -113,10 +114,70 @@ async function validateExpenseRelations(database, organizerId, eventId, expense)
 }
 
 export function createPostgresOrganizerPlanningRouter({ database }) {
-  if (!database || typeof database.query !== 'function') {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
     throw new TypeError('A PostgreSQL database adapter is required.');
   }
   const router = Router();
+
+  router.get('/overview', asyncHandler(async (req, res) => {
+    if (req.platformUser?.role !== 'organizer') {
+      return res.status(403).json({ error: 'Organizer access is required.' });
+    }
+    const result = await database.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM events e WHERE e.organizer_id = $1) AS total_events,
+         (SELECT COUNT(*)::int FROM events e
+          WHERE e.organizer_id = $1 AND e.start_date >= NOW()
+            AND e.status NOT IN ('cancelled', 'completed')) AS upcoming_events,
+         (SELECT COUNT(*)::int FROM events e
+          WHERE e.organizer_id = $1
+            AND (e.status = 'in_progress' OR (e.start_date <= NOW() AND e.end_date >= NOW()))
+            AND e.status NOT IN ('cancelled', 'completed')) AS ongoing_events,
+         (SELECT COALESCE(SUM(e.budget), 0) FROM events e
+          WHERE e.organizer_id = $1) AS allocated_budget,
+         (SELECT COUNT(*)::int FROM bookings b
+          JOIN events e ON e.id = b.event_id WHERE e.organizer_id = $1) AS total_bookings,
+         (SELECT COUNT(*)::int FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1 AND b.status IN ('requested', 'under_review', 'quoted')) AS pending_bookings,
+         (SELECT COUNT(*)::int FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress')) AS confirmed_bookings,
+         (SELECT COUNT(*)::int FROM bookings b JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1 AND b.status = 'completed') AS completed_bookings,
+         (SELECT COALESCE(SUM(x.planned_amount), 0) FROM event_expenses x
+          JOIN events e ON e.id = x.event_id WHERE e.organizer_id = $1) AS planned_expenses,
+         (SELECT COALESCE(SUM(x.actual_amount), 0) FROM event_expenses x
+          JOIN events e ON e.id = x.event_id WHERE e.organizer_id = $1) AS actual_expenses,
+         (SELECT COUNT(*)::int FROM messages m
+          JOIN bookings b ON b.id = m.booking_id
+          JOIN events e ON e.id = b.event_id
+          WHERE e.organizer_id = $1 AND m.recipient_id = $1 AND m.read_at IS NULL) AS unread_messages,
+         (SELECT COUNT(*)::int FROM notifications n
+          WHERE n.user_id = $1 AND n.status <> 'read') AS unread_notifications`,
+      [req.platformUser.id],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('PostgreSQL organizer overview query returned no result.');
+    const allocated = Number(row.allocated_budget || 0);
+    const actual = Number(row.actual_expenses || 0);
+    return res.json({ data: {
+      totalEvents: Number(row.total_events || 0),
+      upcomingEvents: Number(row.upcoming_events || 0),
+      ongoingEvents: Number(row.ongoing_events || 0),
+      totalBookings: Number(row.total_bookings || 0),
+      pendingBookings: Number(row.pending_bookings || 0),
+      confirmedBookings: Number(row.confirmed_bookings || 0),
+      completedBookings: Number(row.completed_bookings || 0),
+      budget: {
+        allocated,
+        plannedExpenses: Number(row.planned_expenses || 0),
+        actualExpenses: actual,
+        remaining: allocated - actual,
+      },
+      unreadMessages: Number(row.unread_messages || 0),
+      unreadNotifications: Number(row.unread_notifications || 0),
+    } });
+  }));
 
   router.get('/events/:eventId/budget', asyncHandler(async (req, res) => {
     const eventId = idSchema.safeParse(req.params.eventId);

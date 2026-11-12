@@ -110,23 +110,41 @@ test('admin overview applies the selected date range to every metric and chart q
 test('PostgreSQL admin overview uses positional parameters, PostgreSQL aggregates, and one transaction', async () => {
   const { loadAdminDashboardOverview } = await import('../src/lib/dashboardFilters.js');
   const responses = [
-    [{ total_users: 7 }],
-    [{ total_administrators: 1, total_customers: 2, total_organizers: 3, total_vendors: 1 }],
-    [{ total_vendors: 4, verified_vendors: 2, pending_vendors: 1 }],
-    [{ total_events: 5, published_events: 3, upcoming_events: 2 }],
-    [{ total_bookings: 8, pending_bookings: 2, confirmed_bookings: 3, completed_bookings: 2, cancelled_bookings: 1 }],
-    [{ total_payments: 9, successful_payments: 4, pending_payments: 2, refund_requests: 1 }],
-    [{ currency: 'ETB', total: '1500.00' }],
-    [{ total_complaints: 3, open_complaints: 2 }],
-    [{ total_reviews: 5 }],
+    [{
+      total_users: 7,
+      total_administrators: 1,
+      total_customers: 2,
+      total_organizers: 3,
+      total_vendors: 1,
+      verified_vendors: 2,
+      pending_vendors: 1,
+      total_events: 5,
+      published_events: 3,
+      upcoming_events: 2,
+      total_bookings: 8,
+      pending_bookings: 2,
+      confirmed_bookings: 3,
+      completed_bookings: 2,
+      cancelled_bookings: 1,
+      total_payments: 9,
+      successful_payments: 4,
+      pending_payments: 2,
+      refund_requests: 1,
+      total_complaints: 3,
+      open_complaints: 2,
+      total_reviews: 5,
+      revenue_by_currency: [{ currency: 'ETB', total: '1500.00' }],
+      event_categories: [{ category: 'Wedding', total: 2 }],
+      booking_statuses: [{ status: 'accepted', total: 3 }],
+    }],
     [{ id: 21, organizer_name: 'Organizer', vendor_name: 'Vendor', event_title: 'Conference' }],
     [{ id: 9, applicant_name: 'Applicant' }],
     [{ id: 8, subject: 'Support request' }],
     [{ id: 7, rating: 5, vendor_name: 'Vendor' }],
-    [{ period: '2026-10-01', total: 3 }],
-    [{ period: '2026-10-01', currency: 'ETB', transactions: 2, total: '500.00' }],
-    [{ category: 'Wedding', total: 2 }],
-    [{ status: 'accepted', total: 3 }],
+    [{
+      booking_trend: [{ period: '2026-10-01', total: 3 }],
+      payment_trend: [{ period: '2026-10-01', currency: 'ETB', transactions: 2, total: '500.00' }],
+    }],
     [{ id: 1, action: 'auth.login', entity_type: 'session', actor_name: 'Admin' }],
   ];
   const queries = [];
@@ -154,16 +172,17 @@ test('PostgreSQL admin overview uses positional parameters, PostgreSQL aggregate
 
   assert.equal(transactionCount, 1);
   assert.equal(maximumConcurrentQueries, 1);
-  assert.equal(queries.length, 18);
+  assert.equal(queries.length, 7);
   for (const { sql, values } of queries) {
     assert.deepEqual(values, ['2026-10-01', '2026-10-07']);
     assert.match(sql, /\$1::date/);
     assert.match(sql, /\$2::date/);
     assert.doesNotMatch(sql, /\?|DATE_ADD|DATE_FORMAT|SUM\([^)]*status\s*=/i);
   }
-  assert.match(queries[2].sql, /COUNT\(\*\) FILTER \(WHERE vp\.verification_status = 'verified'\)/);
-  assert.match(queries[13].sql, /TO_CHAR\(b\.created_at, 'YYYY-MM-DD'\)/);
-  assert.match(queries[17].sql, /FROM audit_logs a/);
+  assert.match(queries[0].sql, /COUNT\(\*\) FILTER \(WHERE vp\.verification_status = 'verified'\)/);
+  assert.match(queries[0].sql, /LEFT JOIN user_roles ur/);
+  assert.match(queries[5].sql, /TO_CHAR\(b\.created_at, 'YYYY-MM-DD'\)/);
+  assert.match(queries[6].sql, /FROM audit_logs a/);
   assert.deepEqual(result.bookingTrend, [{
     period: '2026-10-01',
     bookings: 3,

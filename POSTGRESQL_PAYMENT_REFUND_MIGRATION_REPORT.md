@@ -1,6 +1,6 @@
 # PostgreSQL Payment and Refund Migration Report
 
-Updated: 2026-11-11  
+Updated: 2026-11-12
 Database scope: verified isolated Neon PostgreSQL test project/database `eventhub` only. No production Neon, Render, or Netlify settings were accessed or changed.
 
 ## Result
@@ -38,6 +38,8 @@ Customer reads and refund creation are scoped to the authenticated event owner. 
 ## Transaction and Provider Behavior
 
 - Refund requests lock the payment row before calculating reserved pending/processing/succeeded refunds. A live concurrent test submits two requests that together exceed the remaining balance; exactly one succeeds and the other receives a `409`.
+- Two same-key refund requests are synchronized after both initial lookups return no row; Neon commits one insert, rejects the other on the unique key, and the fallback reads and returns the winner as a duplicate. The test verifies both responses share the same ID and exactly one row exists.
+- A failed refund webhook with payment status `refund_pending` recalculates succeeded-refund totals and restores the correct partial-refund status; the persisted state and history count are asserted.
 - Idempotency uses unique refund keys and `ON CONFLICT` event insertion; replayed provider event IDs do not repeat state changes.
 - Provider payment/refund events, status transitions, payment history, and refund history share a PostgreSQL transaction. Invalid event data rolls back the provider-event row.
 - An out-of-order failure cannot reverse a confirmed payment.
@@ -52,13 +54,13 @@ Customer reads and refund creation are scoped to the authenticated event owner. 
 | Neon test identity | PostgreSQL 18, database `eventhub`; pooled and direct test endpoints passed |
 | Test schema | 51 application table names, 82 foreign keys, 151 indexes, 52 public base tables including migration history |
 | Applied migrations | `001_initial_schema.sql` through `009_payment_status_width.sql` |
-| Latest payment/refund Neon integration | 1 passed, 0 failed, 0 skipped |
+| Latest payment/refund Neon integration | 1 passed, 0 failed, 0 skipped; exercises unique-conflict idempotency fallback and failed-refund recount |
 | PostgreSQL migration unit tests, latest run | 9 passed, 0 failed, 0 skipped |
 | Existing MySQL payment unit suite | 9 passed, 0 failed; tests use injected fake executors and a non-connecting dummy pool configuration, so this is not database-backed MySQL compatibility evidence |
 | Full backend suite under PostgreSQL runtime settings | 446 total: 252 passed, 184 failed, 10 skipped. Legacy MySQL route/configuration tests remain incompatible with PostgreSQL mode; this is a failing regression gate, not a pass |
 | Frontend tests | 172 passed, 0 failed, 0 skipped |
 | Vite production build | Passed with compile-only `https://api.example.invalid/api`; this is not a production API configuration |
-| Query inventory | 987 call sites; 18 infrastructure calls; 969 application calls not certified |
+| Query inventory | 1,116 call sites across 93 files; 18 infrastructure, 426 application call sites Neon-certified, and 672 application calls not certified |
 
 Neon pooler acquisition timed out intermittently during this work; final isolated Neon schema checks and live payment integration did pass after retries. Expected unauthorized/invalid-signature/provider-timeout responses are logged as sanitized generic PostgreSQL request failures by the existing error middleware.
 

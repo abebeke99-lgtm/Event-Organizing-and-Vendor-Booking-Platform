@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { getRequestId } from '../lib/requestContext.js';
 import { sanitizeAuditDetails } from '../lib/auditSanitizer.js';
 import { isNotificationEmailConfigured, sendNotificationEmail } from '../lib/notificationService.js';
@@ -82,6 +83,10 @@ function safeDeliveryError(error) {
 }
 
 export function createPostgresAdminNotificationsRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/notifications/options', requirePermission('notifications.manage'), asyncHandler(async (req, res) => {
@@ -241,7 +246,38 @@ export function createPostgresAdminNotificationsRouter({ database }) {
       return sendError(req, res, 503, 'Email notifications are not configured.', 'የኢሜይል ማሳወቂያዎች አልተዋቀሩም።');
     }
 
-    const recipients = await database.inTransaction(async (transaction) => {
+    const announcement = await database.inTransaction(async (transaction) => {
+      const idempotencyPrefix = `announcement:${parsed.data.idempotencyKey}:`;
+      await transaction.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`admin-announcement:${parsed.data.idempotencyKey}`],
+      );
+      const existing = await transaction.query(
+        `SELECT n.id, n.user_id AS recipient_id, n.title, n.message, n.delivery_channel,
+                n.delivery_status, u.email
+         FROM notifications n LEFT JOIN users u ON u.id = n.user_id
+         WHERE LEFT(n.idempotency_key, CHAR_LENGTH($1)) = $1
+         ORDER BY n.id`,
+        [idempotencyPrefix],
+      );
+      if (existing.rowCount) {
+        const payloadMatches = existing.rows.every((row) => (
+          row.title === parsed.data.title
+          && row.message === parsed.data.message
+          && row.delivery_channel === parsed.data.channel
+        ));
+        if (!payloadMatches) return { conflict: true };
+        return {
+          recipients: existing.rows.map((row) => ({
+            id: Number(row.id),
+            recipientId: row.recipient_id === null ? null : Number(row.recipient_id),
+            email: row.email,
+            alreadyExists: true,
+            deliveryStatus: row.delivery_status || 'pending',
+          })),
+        };
+      }
+
       const admins = await transaction.query(
         `SELECT DISTINCT u.id, u.email
          FROM users u JOIN user_roles ur ON ur.user_id = u.id
@@ -291,11 +327,20 @@ export function createPostgresAdminNotificationsRouter({ database }) {
           deliveryStatus: existing.rows[0].delivery_status || 'pending',
         });
       }
-      return created;
+      return { recipients: created };
     });
+    if (announcement.conflict) {
+      return sendError(
+        req,
+        res,
+        409,
+        'This idempotency key was already used for a different announcement.',
+        'ይህ የድግግሞሽ መከላከያ ቁልፍ ለተለየ ማስታወቂያ አስቀድሞ ተጠቅሟል።',
+      );
+    }
 
     const outcomes = [];
-    for (const notification of recipients) {
+    for (const notification of announcement.recipients) {
       if (notification.alreadyExists) {
         outcomes.push({ id: notification.id, deliveryStatus: notification.deliveryStatus, alreadyExists: true });
         continue;

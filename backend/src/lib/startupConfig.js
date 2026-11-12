@@ -1,10 +1,12 @@
-import { getDatabaseConfigurationErrors } from './databaseConfig.js';
 import { getPostgresConfigurationErrors } from './postgresConfig.js';
 
 export function getDatabaseDialect(environment = process.env) {
-  const dialect = environment.DB_DIALECT?.trim() || 'mysql';
-  if (!['mysql', 'postgres'].includes(dialect)) {
-    throw new Error('DB_DIALECT must be mysql or postgres.');
+  const dialect = environment.DB_DIALECT?.trim() || 'postgres';
+  if (dialect === 'mysql') {
+    throw new Error('DB_DIALECT must be postgres. MySQL runtime support has been removed.');
+  }
+  if (dialect !== 'postgres') {
+    throw new Error('DB_DIALECT must be postgres.');
   }
   return dialect;
 }
@@ -24,12 +26,16 @@ function isValidOriginList(value, isProduction) {
 }
 
 export function getStartupConfigurationErrors(environment = process.env) {
-  const databaseDialect = environment.DB_DIALECT?.trim() || 'mysql';
-  const errors = databaseDialect === 'postgres'
-    ? getPostgresConfigurationErrors(environment, { purpose: 'runtime' })
-    : databaseDialect === 'mysql'
-      ? getDatabaseConfigurationErrors(environment)
-      : [`DB_DIALECT (set to mysql or postgres)`];
+  const databaseDialect = environment.DB_DIALECT?.trim() || 'postgres';
+  const errors = [];
+  if (databaseDialect === 'mysql') {
+    errors.push('DB_DIALECT (must be postgres; MySQL runtime is no longer supported)');
+  } else if (databaseDialect !== 'postgres') {
+    errors.push('DB_DIALECT (set to postgres)');
+  } else {
+    errors.push(...getPostgresConfigurationErrors(environment, { purpose: 'runtime' }));
+  }
+
   const isProduction = environment.NODE_ENV === 'production';
 
   if (!environment.NODE_ENV?.trim()) {

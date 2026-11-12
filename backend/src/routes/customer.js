@@ -789,30 +789,63 @@ getRoute('/payments', async (req, res) => {
   })));
 });
 
-getRoute('/refunds', async (req, res) => {
-  const [rows] = await databaseFor(req).execute(
-    `SELECT rr.id, rr.payment_id, rr.amount,
-            COALESCE(NULLIF(TRIM(rr.currency), ''), 'ETB') AS currency, rr.reason, rr.status,
-            rr.decision_reason, rr.created_at, rr.decided_at, p.provider_reference
-     FROM refund_requests rr
-     JOIN payments p ON p.id = rr.payment_id
+getRoute('/payments/:id', async (req, res) => {
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Payment ID is invalid.' });
+  const database = databaseFor(req);
+  const [[row]] = await database.execute(
+    `SELECT p.id, p.booking_id, p.amount,
+            COALESCE(NULLIF(TRIM(p.currency), ''), 'ETB') AS currency,
+            p.provider, p.provider_reference, p.status, p.created_at,
+            b.service_description, e.title AS event_title
+     FROM payments p
      JOIN bookings b ON b.id = p.booking_id
      JOIN events e ON e.id = b.event_id
-     WHERE e.organizer_id = ? ORDER BY rr.created_at DESC`,
-    [req.platformUser.id],
+     WHERE p.id = ? AND e.organizer_id = ? LIMIT 1`,
+    [id.data, req.platformUser.id],
   );
-  return ok(res, rows.map((row) => ({
-    id: Number(row.id),
-    paymentId: Number(row.payment_id),
-    reference: row.provider_reference || null,
-    amount: Number(row.amount),
-    currency: row.currency,
-    reason: row.reason,
-    status: row.status,
-    decisionReason: row.decision_reason || null,
-    createdAt: row.created_at,
-    decidedAt: row.decided_at,
-  })));
+  if (!row) return res.status(404).json({ error: 'Payment not found.' });
+  const [refundResult, historyResult] = await Promise.all([
+    database.execute(
+      `SELECT id, amount, currency, reason, status, decision_reason, created_at, decided_at, processed_at
+       FROM refund_requests WHERE payment_id = ? ORDER BY created_at DESC, id DESC`,
+      [id.data],
+    ),
+    database.execute(
+      `SELECT id, refund_id, action, from_status, to_status, created_at
+       FROM payment_history WHERE payment_id = ? ORDER BY created_at DESC, id DESC`,
+      [id.data],
+    ),
+  ]);
+  const refundRows = refundResult[0];
+  const historyRows = historyResult[0];
+  return res.json({
+    success: true,
+    data: {
+      payment: {
+        id: Number(row.id),
+        bookingId: Number(row.booking_id),
+        reference: row.provider_reference || `PAY-${String(row.id).padStart(6, '0')}`,
+        provider: row.provider || null,
+        status: row.status,
+        amount: Number(row.amount || 0),
+        currency: row.currency,
+        service: row.service_description,
+        event: row.event_title,
+        date: row.created_at,
+      },
+      refunds: refundRows.map((refund) => ({
+        ...refund,
+        id: Number(refund.id),
+        amount: Number(refund.amount),
+      })),
+      history: historyRows.map((entry) => ({
+        ...entry,
+        id: Number(entry.id),
+        refund_id: entry.refund_id === null ? null : Number(entry.refund_id),
+      })),
+    },
+  });
 });
 
 getRoute('/refunds', async (req, res) => {

@@ -13,6 +13,25 @@ function createDatabase() {
   const database = {
     async query(sql, values = []) {
       queries.push({ sql, values });
+      if (sql.includes('AS total_events') && sql.includes('AS unread_notifications')) {
+        return {
+          rows: [{
+            total_events: 2,
+            upcoming_events: 1,
+            ongoing_events: 0,
+            allocated_budget: '10000.00',
+            total_bookings: 4,
+            pending_bookings: 1,
+            confirmed_bookings: 1,
+            completed_bookings: 2,
+            planned_expenses: '2500.00',
+            actual_expenses: '1500.00',
+            unread_messages: 3,
+            unread_notifications: 2,
+          }],
+          rowCount: 1,
+        };
+      }
       if (sql.startsWith('SELECT id, title, budget, start_date, end_date FROM events')) {
         return {
           rows: Number(values[0]) === 10 && Number(values[1]) === 44
@@ -144,7 +163,7 @@ const database = createDatabase();
 const app = express();
 app.use(express.json());
 app.use((req, _res, next) => {
-  req.platformUser = { id: 44, role: 'organizer' };
+  req.platformUser = { id: 44, role: req.get('x-test-role') || 'organizer' };
   next();
 });
 app.use('/api/platform/organizer', createPostgresOrganizerPlanningRouter({ database }));
@@ -152,13 +171,41 @@ const server = app.listen(0, '127.0.0.1');
 await once(server, 'listening');
 const baseUrl = `http://127.0.0.1:${server.address().port}/api/platform/organizer`;
 
-async function request(path, { method = 'GET', body } = {}) {
+async function request(path, { method = 'GET', body, headers = {} } = {}) {
   return fetch(`${baseUrl}${path}`, {
     method,
-    ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    headers: {
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...headers,
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(8000),
   });
 }
+
+test('PostgreSQL organizer overview is role-scoped and returns persisted aggregate fields', async () => {
+  const queryCount = database.queries.length;
+  const response = await request('/overview');
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).data, {
+    totalEvents: 2,
+    upcomingEvents: 1,
+    ongoingEvents: 0,
+    totalBookings: 4,
+    pendingBookings: 1,
+    confirmedBookings: 1,
+    completedBookings: 2,
+    budget: { allocated: 10000, plannedExpenses: 2500, actualExpenses: 1500, remaining: 8500 },
+    unreadMessages: 3,
+    unreadNotifications: 2,
+  });
+  assert.equal(database.queries.length, queryCount + 1);
+  const overviewQuery = database.queries.at(-1);
+  assert.deepEqual(overviewQuery.values, [44]);
+  assert.match(overviewQuery.sql, /e\.organizer_id = \$1/);
+  assert.doesNotMatch(overviewQuery.sql, /\?|DATE_ADD|DATE_FORMAT/);
+  assert.equal((await request('/overview', { headers: { 'x-test-role': 'customer' } })).status, 403);
+});
 
 test('PostgreSQL organizer planning routes enforce event ownership and validate input', async () => {
   assert.equal((await request('/events/99/budget')).status, 404);

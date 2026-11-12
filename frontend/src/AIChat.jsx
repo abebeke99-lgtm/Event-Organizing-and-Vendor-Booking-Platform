@@ -22,6 +22,8 @@ export default function AIChat({ user, currentPath, onNavigate }) {
   );
   const routeId = currentPath.match(/^\/ai-chat\/(\d+)(?:\?|$)/)?.[1] || null;
   const [config, setConfig] = useState(null);
+  const [providerStatus, setProviderStatus] = useState(null);
+  const [checkingProviderStatus, setCheckingProviderStatus] = useState(true);
   const [conversations, setConversations] = useState([]);
   const [messages, setMessages] = useState([]);
   const [search, setSearch] = useState('');
@@ -42,6 +44,7 @@ export default function AIChat({ user, currentPath, onNavigate }) {
   const [attachment, setAttachment] = useState(null);
   const [voiceListening, setVoiceListening] = useState(false);
   const streamController = useRef(null);
+  const providerStatusRequest = useRef(null);
   const voiceRecognition = useRef(null);
   const voiceTranscript = useRef('');
   const fileInput = useRef(null);
@@ -50,6 +53,32 @@ export default function AIChat({ user, currentPath, onNavigate }) {
   const endOfMessages = useRef(null);
   const inputRef = useRef(null);
   const retryIsRegeneration = useRef(false);
+  async function refreshProviderStatus() {
+    providerStatusRequest.current?.abort();
+    const controller = new AbortController();
+    providerStatusRequest.current = controller;
+    setCheckingProviderStatus(true);
+    try {
+      const response = await apiClient.get('/ai/health', { timeout: 7000, signal: controller.signal });
+      const status = response.data;
+      if (typeof status?.placeholderKeyDetected === 'boolean'
+        && ['configured', 'missing', 'invalid'].includes(status.validApiKey)
+        && typeof status.online === 'boolean'
+        && typeof status.liveChatVerified === 'boolean') {
+        setProviderStatus(status);
+      } else {
+        setProviderStatus(null);
+      }
+    } catch (issue) {
+      if (issue?.code !== 'ERR_CANCELED') setProviderStatus(null);
+    } finally {
+      if (providerStatusRequest.current === controller) {
+        providerStatusRequest.current = null;
+        setCheckingProviderStatus(false);
+      }
+    }
+  }
+
   async function loadConversations(query = '', archived = showArchived) {
     const response = await apiClient.get('/ai/conversations', {
       params: { ...(query ? { search: query } : {}), ...(archived ? { archived: 'true' } : {}) },
@@ -60,6 +89,7 @@ export default function AIChat({ user, currentPath, onNavigate }) {
 
   useEffect(() => {
     let active = true;
+    void refreshProviderStatus();
     Promise.all([apiClient.get('/ai/config'), apiClient.get('/ai/conversations')])
       .then(([configResponse, historyResponse]) => {
         if (!active) return;
@@ -82,6 +112,8 @@ export default function AIChat({ user, currentPath, onNavigate }) {
       });
     return () => {
       active = false;
+      providerStatusRequest.current?.abort();
+      providerStatusRequest.current = null;
       modelVerificationRequest.current += 1;
       streamController.current?.abort();
     };
@@ -284,11 +316,13 @@ export default function AIChat({ user, currentPath, onNavigate }) {
       if (buffer.trim()) handleEvent(buffer);
       if (!completed) throw new Error('The AI stream ended before the response was complete. Please retry.');
       await loadConversations(search);
+      void refreshProviderStatus();
     } catch (issue) {
       if (editId && !editPersisted) setMessages(messages);
       if (isRegeneration && !completedGeneration) setMessages(messages);
       if (issue.name !== 'AbortError') {
         setError(getErrorMessage(issue, language));
+        void refreshProviderStatus();
         setMessages((items) => items.map((item) => item.id === assistantMessage.id
           ? { ...item, pending: false }
           : item));
@@ -466,6 +500,18 @@ export default function AIChat({ user, currentPath, onNavigate }) {
           </button>}
         </div>}
       </header>
+      <div className="ai-provider-status" role="status" aria-label={t('aiChatStatusTitle')}>
+        {providerStatus ? <>
+          <span><strong>{t('aiChatPlaceholderKey')}:</strong> {t(providerStatus.placeholderKeyDetected ? 'aiChatDetected' : 'aiChatNotDetected')}</span>
+          <span><strong>{t('aiChatValidApiKey')}:</strong> {t(
+            providerStatus.validApiKey === 'configured'
+              ? 'aiChatConfigured'
+              : providerStatus.validApiKey === 'invalid' ? 'aiChatInvalid' : 'aiChatMissing',
+          )}</span>
+          <span><strong>{t('aiChatProviderOnline')}:</strong> {t(providerStatus.online ? 'aiChatYes' : 'aiChatNo')}</span>
+          <span><strong>{t('aiChatLiveChat')}:</strong> {t(providerStatus.liveChatVerified ? 'aiChatVerified' : 'aiChatNotVerified')}</span>
+        </> : <span>{t(checkingProviderStatus ? 'aiChatStatusChecking' : 'aiChatStatusUnavailable')}</span>}
+      </div>
       <div className={`ai-chat-content ${messages.length ? 'has-messages' : ''}`}>
         {messages.length === 0 ? <div className="ai-welcome">
           <div className="ai-welcome-mark"><Sparkles size={25}/></div>

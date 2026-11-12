@@ -278,7 +278,9 @@ test('Neon PostgreSQL registration, login, session, and logout use persisted aut
     const expiredMeResponse = await fetchWithTimeout(`${baseUrl}/api/platform/me`, {
       headers: { Cookie: loginCookie },
     });
-    assert.deepEqual(await expiredMeResponse.json(), { data: { user: null } });
+    assert.equal(expiredMeResponse.status, 401);
+    assert.deepEqual(await expiredMeResponse.json(), { message: 'Unauthorized' });
+    assert.match(expiredMeResponse.headers.get('set-cookie') || '', /^platform_session=;/);
 
     const refreshedLogin = await fetchWithTimeout(`${baseUrl}/api/platform/login`, {
       method: 'POST',
@@ -295,7 +297,9 @@ test('Neon PostgreSQL registration, login, session, and logout use persisted aut
     const afterLogout = await fetchWithTimeout(`${baseUrl}/api/platform/me`, {
       headers: { Cookie: refreshedCookie },
     });
-    assert.deepEqual(await afterLogout.json(), { data: { user: null } });
+    assert.equal(afterLogout.status, 401);
+    assert.deepEqual(await afterLogout.json(), { message: 'Unauthorized' });
+    assert.match(afterLogout.headers.get('set-cookie') || '', /^platform_session=;/);
 
     console.log('Neon PostgreSQL auth integration verified: registration, bcrypt, role assignment, invalid/valid login, session lookup/expiry/logout, customer/vendor/admin authorization.');
   } finally {

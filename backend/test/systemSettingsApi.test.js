@@ -48,8 +48,27 @@ const database = {
     }
     return [[], []];
   },
-  async query() {
-    return [[], []];
+  async query(statement, values = []) {
+    if (statement.includes('admin_sessions s')) {
+      return {
+        rows: values[0] === hashToken(adminToken) ? [{
+          id: 1,
+          full_name: 'Settings Admin',
+          email: 'admin@example.test',
+          phone: null,
+          status: 'active',
+          roles: 'Admin',
+        }] : [],
+      };
+    }
+    if (statement.startsWith('SELECT setting_key, setting_value FROM system_settings')) {
+      return {
+        rows: values.length
+          ? storedSettings.filter((row) => values.includes(row.setting_key))
+          : storedSettings,
+      };
+    }
+    return { rows: [] };
   },
   async getConnection() {
     return {

@@ -198,8 +198,9 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     const registrationNotification = await database.runtimeAdapter.query(
       `SELECT n.id, COUNT(h.id)::integer AS history_count
        FROM notifications n LEFT JOIN notification_history h ON h.notification_id = n.id
-       WHERE n.idempotency_key LIKE $1 GROUP BY n.id`,
-      [`user-registration:${userId}:%`],
+       WHERE n.idempotency_key = $1 AND n.user_id = $2
+       GROUP BY n.id`,
+      [`user-registration:${userId}:${admin.rows[0].id}`, admin.rows[0].id],
     );
     assert.equal(registrationNotification.rowCount, 1);
     assert.equal(registrationNotification.rows[0].history_count, 1);
@@ -357,7 +358,8 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     const adminMe = await fetch(`${baseUrl}/api/auth/me`, {
       headers: { Cookie: `admin_session=${adminToken}` },
     });
-    assert.deepEqual(await adminMe.json(), { user: null });
+    assert.equal(adminMe.status, 401);
+    assert.deepEqual(await adminMe.json(), { error: 'Authentication required.' });
     const adminLogout = await fetch(`${baseUrl}/api/auth/logout`, {
       method: 'POST',
       headers: { Cookie: `admin_session=${adminToken}` },

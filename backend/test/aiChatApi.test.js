@@ -141,8 +141,10 @@ const aiClient = {
 
 const originalModels = process.env.OPENAI_CHAT_MODELS;
 const originalModel = process.env.OPENAI_MODEL;
+const originalApiKey = process.env.OPENAI_API_KEY;
 process.env.OPENAI_CHAT_MODELS = 'gpt-4o-mini';
 process.env.OPENAI_MODEL = 'gpt-4o-mini';
+process.env.OPENAI_API_KEY = 'mock-openai-client-key';
 const app = createApp({
   database,
   aiClient,
@@ -174,6 +176,8 @@ after(async () => {
   else process.env.OPENAI_CHAT_MODELS = originalModels;
   if (originalModel === undefined) delete process.env.OPENAI_MODEL;
   else process.env.OPENAI_MODEL = originalModel;
+  if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = originalApiKey;
 });
 
 async function request(path, { method = 'GET', body, authenticated = true } = {}) {
@@ -269,6 +273,8 @@ test('AI responses stream and both user and assistant messages are persisted', a
     { role: 'assistant', content: 'Start with the guest list.' },
     { role: 'user', content: 'Suggest a color palette' },
   ]);
+  const status = await request('/api/ai/status');
+  assert.equal((await status.json()).data.liveChatVerified, true);
 });
 
 test('secret disclosure and prompt-injection requests are blocked with the required safe response', async () => {

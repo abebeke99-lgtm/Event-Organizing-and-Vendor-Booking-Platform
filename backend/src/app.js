@@ -1,3 +1,4 @@
+import './lib/environment.js';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
@@ -13,7 +14,7 @@ import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { requirePlatformRole } from './middleware/requirePlatformUser.js';
 import { getSystemLockState } from './lib/rbac.js';
-import { databaseDialect as defaultDatabaseDialect, formatDatabaseError, getDatabaseFailureCode, pool } from './db.js';
+import { databaseDialect as defaultDatabaseDialect, formatDatabaseError, getDatabaseFailureCode, normalizeDatabaseAdapter, pool } from './db.js';
 import { asyncHandler } from './middleware/asyncHandler.js';
 import { requirePlatformAvailable } from './middleware/rbac.js';
 import { loadSystemSettings, updateSystemSettingsCache } from './lib/systemSettings.js';
@@ -40,6 +41,7 @@ import { createPostgresProfilePhotoRouter } from './routes/postgresProfilePhoto.
 import { createPostgresCustomerAccountRouter } from './routes/postgresCustomerAccount.js';
 import { createPostgresOrganizerPlanningRouter } from './routes/postgresOrganizerPlanning.js';
 import { createPostgresAdminRouter } from './routes/postgresAdmin.js';
+import { createPostgresAdminEventsRouter } from './routes/postgresAdminEvents.js';
 import { createPostgresAdminReportsRouter } from './routes/postgresAdminReports.js';
 import { createPostgresAdminReviewsComplaintsRouter } from './routes/postgresAdminReviewsComplaints.js';
 import { createPostgresAdminAuditLogRouter } from './routes/postgresAdminAuditLogs.js';
@@ -71,9 +73,12 @@ export function createApp({
   heroSlidesDirectory,
 } = {}) {
   const app = express();
+  const hasLegacyExecuteAdapter = database?.dialect !== 'postgres'
+    && typeof database?.execute === 'function';
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
   app.use(requestContextMiddleware);
   app.use(localizationMiddleware);
-  app.locals.database = database;
+  app.locals.database = normalizedDatabase;
   app.locals.databaseDialect = databaseDialect;
   app.locals.heroSlidesDirectory = heroSlidesDirectory;
   app.locals.passwordReset = { emailConfigured, emailSender, otpGenerator, otpHasher };
@@ -141,38 +146,70 @@ export function createApp({
         : { ok: false, db: false, reason: getDatabaseFailureCode(error) });
     }
   }));
+  app.use('/api/users/me/avatar', userAvatarRoutes);
+  app.use('/api/contact', requirePlatformAvailable, contactRoutes);
   if (databaseDialect === 'postgres') {
-    const postgresBookingRouters = createPostgresBookingRouters({ database });
+    const isLegacyCompatibilityAdapter = hasLegacyExecuteAdapter && typeof normalizedDatabase.query === 'function';
+    if (isLegacyCompatibilityAdapter) {
+      app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'), organizerRoutes);
+      app.use('/api/platform', requirePlatformAvailable, platformRoutes);
+      app.use('/api/about', requirePlatformAvailable, aboutRoutes);
+      app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), vendorRoutes);
+      app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer'), customerRoutes);
+      app.use('/api/auth', createAuthRouter({
+        database: normalizedDatabase,
+        emailConfigured,
+        emailSender,
+        passwordHasher,
+        otpGenerator,
+        otpHasher,
+        otpVerifier,
+      }));
+      app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
+      app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
+      app.use('/api/admin/hero-slides', requireHeroSlideAdmin, adminHeroSlidesRoutes);
+      app.use('/api/admin', requireAdmin);
+      app.use('/api/admin', adminAuditLogRoutes);
+      app.use('/api/admin', adminPaymentRoutes);
+      app.use('/api/admin/reports', adminReportsRoutes);
+      app.use('/api/admin', adminReviewsComplaintsRoutes);
+      app.use('/api/admin', adminNotificationsRoutes);
+      app.use('/api/admin', adminRoutes);
+    }
+    const postgresBookingRouters = createPostgresBookingRouters({ database: normalizedDatabase });
     app.use('/api/ai', requirePlatformAvailable, createAiChatRouter({
       ...aiChatServices,
-      database,
+      database: normalizedDatabase,
       databaseDialect,
       client: aiClient,
-      loadContext: loadPostgresAiChatContext,
+      loadContext: aiChatServices.loadContext || loadPostgresAiChatContext,
     }));
-    app.use('/api', createPostgresHomepageRouter({ database }));
+    app.use('/api', createPostgresHomepageRouter({ database: normalizedDatabase }));
     app.use('/api/admin', requireAdmin);
-    app.use('/api/admin', createPostgresAdminRouter({ database }));
-    app.use('/api/admin', createPostgresAdminReportsRouter({ database }));
-    app.use('/api/admin', createPostgresAdminReviewsComplaintsRouter({ database }));
-    app.use('/api/admin', createPostgresAdminPaymentsRouter({ database }));
-    app.use('/api/admin', createPostgresAdminNotificationsRouter({ database }));
-    app.use('/api/admin', createPostgresAdminAuditLogRouter({ database }));
-    app.use('/api/admin', createPostgresAdminSettingsRouter({ database }));
-    app.use('/api/platform', requirePlatformAvailable, createPostgresMarketplaceRouter({ database }));
+    app.use('/api/admin', createPostgresAdminEventsRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminReportsRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminReviewsComplaintsRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminPaymentsRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminNotificationsRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminAuditLogRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminSettingsRouter({ database: normalizedDatabase }));
+    app.use('/api/platform', requirePlatformAvailable, createPostgresMarketplaceRouter({ database: normalizedDatabase }));
     app.use('/api/platform', requirePlatformAvailable, postgresBookingRouters.platform);
     app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), postgresBookingRouters.vendor);
-    app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), createPostgresVendorRouter({ database }));
-    app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), createPostgresMarketplaceRouter({ database }));
+    app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), createPostgresVendorRouter({ database: normalizedDatabase }));
+    app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), createPostgresMarketplaceRouter({ database: normalizedDatabase }));
     app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'), postgresBookingRouters.customer);
     app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer', 'organizer'),
-      createPostgresCustomerAccountRouter({ database }));
+      createPostgresCustomerAccountRouter({ database: normalizedDatabase }));
     app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'),
-      createPostgresOrganizerPlanningRouter({ database }));
-    app.use('/api/platform/profile/photo', requirePlatformAvailable, createPostgresProfilePhotoRouter({ database }));
-    app.use('/api/platform', requirePlatformAvailable, createPostgresPublicEventsRouter({ database }));
-    app.use('/api/platform', requirePlatformAvailable, createPostgresAuthRouter({ database }));
-    app.use('/api/auth', createPostgresAuthRouter({ database, adminNamespace: true }));
+      createPostgresOrganizerPlanningRouter({ database: normalizedDatabase }));
+    app.use('/api/platform/profile/photo', requirePlatformAvailable, createPostgresProfilePhotoRouter({ database: normalizedDatabase }));
+    app.use('/api/platform', requirePlatformAvailable, createPostgresPublicEventsRouter({ database: normalizedDatabase }));
+    app.use('/api/platform', requirePlatformAvailable,
+      createPostgresAuthRouter({ database: normalizedDatabase }));
+    app.use('/api/auth', requirePlatformAvailable,
+      createPostgresAuthRouter({ database: normalizedDatabase, adminNamespace: true }));
   } else {
     app.use('/api/ai', requirePlatformAvailable, createAiChatRouter({ ...aiChatServices, database, client: aiClient }));
     app.get('/api/platform/availability', asyncHandler(async (req, res) => {
@@ -200,7 +237,6 @@ export function createApp({
     app.use('/api/platform', requirePlatformAvailable, platformRoutes);
     app.use('/api/hero-slides', heroSlidesRoutes);
     app.use('/api/about', requirePlatformAvailable, aboutRoutes);
-    app.use('/api/contact', requirePlatformAvailable, contactRoutes);
     app.use('/api/vendor', requirePlatformAvailable, requirePlatformRole('vendor'), vendorRoutes);
     app.use('/api/customer', requirePlatformAvailable, requirePlatformRole('customer'), customerRoutes);
     app.use('/api/auth', createAuthRouter({
@@ -212,7 +248,6 @@ export function createApp({
       otpHasher,
       otpVerifier,
     }));
-    app.use('/api/users/me/avatar', userAvatarRoutes);
     app.use('/api/admin/about', requireAdmin, adminAboutRoutes);
     app.use('/api/admin/contact', requireAdmin, adminContactRoutes);
     app.use('/api/admin/hero-slides', requireHeroSlideAdmin, adminHeroSlidesRoutes);

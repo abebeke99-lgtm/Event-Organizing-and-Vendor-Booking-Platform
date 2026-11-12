@@ -1,17 +1,17 @@
 # PostgreSQL Application Compatibility Report
 
-Updated: 2026-11-11  
+Updated: 2026-11-12
 Scope: Current source and isolated Neon payment/refund verification. This is not a full-application certification.
 
 ## Summary
 
 The application remains mixed-dialect. PostgreSQL mode uses a shared `pg` runtime pool and native route implementations for selected features; legacy MySQL modules and `mysql2` remain in source and runtime configuration. The root and backend package manifests, server default, and deployment documentation still permit or default to MySQL. Do not remove MySQL dependencies or make a production cutover on the evidence in this report.
 
-The regenerated AST inventory has 987 call sites in 88 backend source JavaScript files: 18 infrastructure calls and 969 application calls not certified by the scanner. Of the 969 application calls, 644 use the MySQL-oriented `.execute()` API and 325 use `.query()`; 5 of those `.query()` call sites have detected MySQL-specific syntax, while 320 have no detected marker but remain uncertified by static syntax inspection. A no-marker call is not proof of PostgreSQL compatibility.
+The regenerated AST inventory has 1,116 call sites across 93 backend source JavaScript files: 18 infrastructure calls and 1,098 application calls. Of the application calls, 426 have callsite-specific Neon evidence and 672 remain uncertified (628 `.execute()` and 44 `.query()`); 569 uncertified calls have detected MySQL-specific markers and 103 do not. Marker absence is not proof of PostgreSQL compatibility.
 
 ## Verified Against Isolated Neon
 
-The isolated Neon `eventhub` test database is PostgreSQL 18. Migration 009 is recorded there. Read-only schema checks still find all 51 application table names, 82 foreign keys, and 151 indexes (52 public base tables including the migration history table). These are test database counts, not production counts or complete schema parity evidence.
+The isolated Neon `eventhub` test database is PostgreSQL 18. Read-only schema checks find all 51 application table names, 82 foreign keys, and 151 indexes (52 public base tables including the migration history table). These are test database counts, not production counts or complete schema parity evidence.
 
 Live PostgreSQL integration coverage now exercises:
 
@@ -22,11 +22,11 @@ Live PostgreSQL integration coverage now exercises:
 - Administrator payment/refund listing, detail, report, CSV exports, pagination, status/search/UTC date filters, and decisions.
 - Atomic rollback for mismatched provider data, persisted payment/refund history and audit rows, unauthenticated admin denial, and FK rejection.
 
-The live test proves only the branches it executed. It does not certify duplicate-key race recovery, a provider `pending` reconciliation result, every filter boundary, all payment/refund response edge cases, or production payment-provider behavior.
+The live test proves only the branches it executed. It verifies duplicate-key race recovery and failed-refund recounting, but does not certify a provider `pending` reconciliation result, every filter boundary, all payment/refund response edge cases, or production payment-provider behavior.
 
 ## Known PostgreSQL Coverage Gaps
 
-PostgreSQL mode still does not provide complete application parity. The existing migration audit identifies remaining/unmounted legacy feature areas including event administration/mutations, vendor verification, service/package management, many customer/vendor/organizer operations, messaging, reviews/complaints moderation, notifications, payment management beyond the new tested slice, detailed reports, system/security controls, and AI chat. The route and query inventory must continue to be reconciled endpoint by endpoint.
+PostgreSQL mode still does not provide complete application parity. The current inventory records 672 application calls without callsite-specific Neon certification. Certified calls cover selected authentication, booking/availability, vendor, admin, payment/refund, marketplace/event, AI-chat, notification, and settings workflows; remaining calls include unconverted MySQL feature paths, untested alternate branches, seed and operational scripts, and workflows not yet mapped to real Neon evidence. The route and query inventory must continue to be reconciled endpoint by endpoint.
 
 No comprehensive semantic comparison has been completed for every PostgreSQL table/column/type/default/check/unique/index/trigger/FK against `backend/schema.sql` plus the 40 legacy MySQL migration files. Standalone names requested for event media, schedules, attendees, addresses, invoices, and other domain concepts must be reconciled with existing columns/JSON/tables before adding schema. Do not create duplicates based only on naming.
 
@@ -38,8 +38,8 @@ The payment/refund PostgreSQL implementation is separate from the legacy MySQL s
 
 ## Test Status
 
-- PostgreSQL migration unit tests, latest run: 9 passed, 0 failed, 0 skipped. Latest expanded live Neon payment integration: 1 passed, 0 failed, 0 skipped.
-- Latest expanded live Neon payment integration: 1 passed, 0 failed, 0 skipped. Existing MySQL payment unit tests: 9 passed, 0 failed with a non-connecting dummy pool configuration.
+- PostgreSQL migration unit tests, latest run: 9 passed, 0 failed, 0 skipped. Latest expanded live Neon payment integration: 1 passed, 0 failed, 0 skipped; the same-key race exercised unique-conflict recovery and the failed-refund recount.
+- Existing MySQL payment unit tests: 9 passed, 0 failed with a non-connecting dummy pool configuration.
 - Frontend tests: 172 passed, 0 failed. Production Vite build passed with a compile-only non-routable HTTPS `VITE_API_URL` placeholder; this does not verify a production API origin.
 - Live Neon database evidence is limited to the test project/database. Neon pooled connection acquisition has intermittent timeouts; one retry was required during this work. The exact SQL export query was separately confirmed directly on the isolated database, while the HTTP export issue was traced to Zod schema refinement/omit behavior and fixed.
 - Full backend suite under isolated Neon PostgreSQL runtime settings: 446 total, 252 passed, 184 failed, 10 skipped. Failures are concentrated in legacy MySQL route/configuration assumptions and database fixture mismatches; full PostgreSQL application compatibility is not established. Complete role-based browser journeys, backup/restore rehearsal, and production deployment were not run.

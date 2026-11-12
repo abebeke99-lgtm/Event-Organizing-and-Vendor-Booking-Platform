@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { normalizeDatabaseAdapter } from '../src/db.js';
 import { createPostgresAdapter } from '../src/lib/postgresAdapter.js';
 
 function createPool() {
@@ -42,6 +43,18 @@ test('PostgreSQL adapter passes parameterized query results through without MySQ
     database.query('SELECT $1', 'not-an-array'),
     /parameters must be provided as an array/,
   );
+});
+
+test('database normalization wraps frozen PostgreSQL adapters without mutating them', async () => {
+  const rawAdapter = Object.freeze(createPostgresAdapter(createPool()));
+  const database = normalizeDatabaseAdapter(rawAdapter);
+  const result = await database.query('SELECT $1::integer AS id', [1]);
+
+  assert.notStrictEqual(database, rawAdapter);
+  assert.strictEqual(normalizeDatabaseAdapter(rawAdapter), database);
+  assert.equal(Object.isFrozen(rawAdapter), true);
+  assert.deepEqual(result.rows, [{ id: '1' }]);
+  assert.equal(result.rowCount, 1);
 });
 
 test('PostgreSQL adapter destroys clients after connection failures but reuses clients after SQL errors', async () => {

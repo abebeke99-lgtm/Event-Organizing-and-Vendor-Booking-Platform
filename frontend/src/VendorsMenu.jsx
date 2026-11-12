@@ -1,7 +1,32 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Star, Store, Tags } from 'lucide-react';
 import { translate, translateNavigationLabel, useLanguage } from './language.js';
 import { navigateAndCloseMenu, routeIsActive } from './publicNavigationUtils.js';
+import apiClient from './api/axios.js';
+
+function resolveCategoryImageUrl(path) {
+  if (typeof path !== 'string' || !path.trim()) return '';
+  const imagePath = path.trim();
+  if (!imagePath.startsWith('/api/')) return imagePath;
+  const baseUrl = apiClient.defaults.baseURL;
+  if (!baseUrl || baseUrl.startsWith('/')) return imagePath;
+  return new URL(imagePath, baseUrl).toString();
+}
+
+function CategoryVisual({ category }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageUrl = resolveCategoryImageUrl(category.image || category.icon);
+  const Icon = typeof category.icon === 'function'
+    || (category.icon && typeof category.icon === 'object')
+    ? category.icon
+    : Tags;
+
+  if (imageUrl && !imageFailed) {
+    return <img className="public-nav-category-icon" src={imageUrl} alt=""
+      aria-hidden="true" loading="lazy" decoding="async" onError={() => setImageFailed(true)} />;
+  }
+  return <Icon className="public-nav-category-icon" aria-hidden="true" />;
+}
 
 function focusMenuItem(menu, direction = 1) {
   const items = Array.from(menu?.querySelectorAll(':scope > li > [role="menuitem"]') || []);
@@ -159,14 +184,13 @@ export default function VendorsMenu({
             }
           }}>
           {categories.map((child) => {
-            const Icon = child.icon || Tags;
             const selected = routeIsActive(child.path, routePath);
             return <li role="none" key={child.key}>
               <a role="menuitem" href={child.path} title={translateNavigationLabel(child, language)}
                 className={selected ? 'active' : ''}
                 aria-current={selected ? 'page' : undefined}
                 onClick={(event) => { event.preventDefault(); navigate(child.path); }}>
-                <Icon className="public-nav-category-icon" aria-hidden="true" />
+                <CategoryVisual category={child} />
                 <span className="public-nav-label">{translateNavigationLabel(child, language)}</span>
                 {Number.isFinite(child.count) && <span className="public-nav-category-count">
                   {child.count.toLocaleString(language === 'am' ? 'am-ET' : 'en-US')}

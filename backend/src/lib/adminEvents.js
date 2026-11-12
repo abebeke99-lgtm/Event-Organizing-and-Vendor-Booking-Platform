@@ -82,6 +82,26 @@ export function parseAdminEventInput(input, { partial = false } = {}) {
 }
 
 export function hasScheduleOverlap(executor, { organizerId, startDate, endDate, excludingEventId = null }) {
+  const usePostgres = executor?.dialect === 'postgres';
+  const startValue = toMysqlDateTime(startDate);
+  const endValue = endDate ? toMysqlDateTime(endDate) : null;
+  if (usePostgres) {
+    const exclusion = excludingEventId === null ? '' : ' AND id <> $4';
+    const query = `SELECT id, title FROM events
+       WHERE organizer_id = $1
+         AND status NOT IN ('cancelled', 'completed')
+         AND start_date < COALESCE($2, ($3::timestamp + INTERVAL '1 second'))
+         AND COALESCE(end_date, start_date + INTERVAL '1 second') > $3${exclusion}
+       LIMIT 1`;
+    const values = [
+      organizerId,
+      endValue,
+      startValue,
+      ...(excludingEventId === null ? [] : [excludingEventId]),
+    ];
+    return executor.query(query, values).then((result) => result.rows[0] || null);
+  }
+
   const exclusion = excludingEventId === null ? '' : ' AND id <> ?';
   return executor.execute(
     `SELECT id, title FROM events
@@ -92,9 +112,9 @@ export function hasScheduleOverlap(executor, { organizerId, startDate, endDate, 
      LIMIT 1`,
     [
       organizerId,
-      endDate ? toMysqlDateTime(endDate) : null,
-      toMysqlDateTime(startDate),
-      toMysqlDateTime(startDate),
+      endValue,
+      startValue,
+      startValue,
       ...(excludingEventId === null ? [] : [excludingEventId]),
     ],
   ).then(([rows]) => rows[0] || null);

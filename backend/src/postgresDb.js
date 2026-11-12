@@ -36,6 +36,7 @@ export function getPostgresFailureCode(error) {
   if (/^(PostgreSQL configuration|Neon test configuration|Neon test configuration is unavailable)/.test(error?.message || '')) {
     return 'DB_CONFIG_INVALID';
   }
+  if (error?.message === 'Connected database does not match DB_NAME.') return 'DB_NAME_MISMATCH';
   const cause = getPostgresErrorCause(error);
   if (cause?.code === '28P01' || cause?.code === '28000') return 'DB_AUTH_FAILED';
   if (cause?.code === '3D000') return 'DB_NAME_MISSING';

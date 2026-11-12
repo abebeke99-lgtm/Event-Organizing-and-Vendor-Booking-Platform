@@ -2,12 +2,19 @@ import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Router } from 'express';
+import { normalizeDatabaseAdapter } from '../db.js';
+import { buildAboutPagePayload } from '../lib/aboutContent.js';
 import { isSafeHeroImageName, toPublicHeroSlide } from '../lib/heroSlides.js';
+import { loadPostgresPublicMarketplace } from '../lib/postgresMarketplace.js';
 
 const defaultUploadDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../uploads/hero-slides');
 const validId = /^\d+$/;
 
 export function createPostgresHomepageRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/hero-slides', async (req, res, next) => {
@@ -52,6 +59,63 @@ export function createPostgresHomepageRouter({ database }) {
         return next(error);
       });
       return stream.pipe(res);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.get('/about', async (req, res, next) => {
+    try {
+      const [contentResult, marketplace, bookingResult, testimonialResult] = await Promise.all([
+        database.query(
+          `SELECT page_title, content, language, updated_at
+           FROM site_content
+           WHERE page_key = 'about_us' AND is_published = TRUE
+           ORDER BY (language = $1) DESC, updated_at DESC
+           LIMIT 1`,
+          [req.language || 'en'],
+        ),
+        loadPostgresPublicMarketplace(database),
+        database.query("SELECT status FROM bookings WHERE status = 'completed'"),
+        database.query(`
+          SELECT r.id, r.rating, r.comment, r.status, r.created_at,
+                 vp.business_name AS vendor_name,
+                 COALESCE(s.title, b.service_description) AS service_name
+          FROM reviews r
+          JOIN bookings b ON b.id = r.booking_id
+          JOIN vendor_profiles vp ON vp.id = b.vendor_id AND vp.verification_status = 'verified'
+          JOIN users u ON u.id = vp.user_id AND u.status = 'active'
+          LEFT JOIN services s ON s.id = b.service_id AND s.status = 'active'
+          WHERE r.status = 'published' AND r.comment IS NOT NULL AND BTRIM(r.comment) <> ''
+          ORDER BY r.created_at DESC, r.id DESC
+          LIMIT 12
+        `),
+      ]);
+      const row = contentResult.rows[0];
+      const content = row && row.content && typeof row.content === 'object'
+        ? {
+          ...row.content,
+          page_title: row.content.page_title || row.page_title,
+          language: row.language,
+          updated_at: row.updated_at,
+        }
+        : {};
+      return res.json({
+        success: true,
+        data: buildAboutPagePayload(content, {
+          ...marketplace,
+          bookings: bookingResult.rows,
+          testimonials: testimonialResult.rows.map((testimonial) => ({
+            id: Number(testimonial.id),
+            rating: Number(testimonial.rating),
+            comment: testimonial.comment,
+            status: testimonial.status,
+            vendorName: testimonial.vendor_name,
+            serviceName: testimonial.service_name,
+            createdAt: testimonial.created_at,
+          })),
+        }),
+      });
     } catch (error) {
       return next(error);
     }

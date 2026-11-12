@@ -1,9 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import dotenv from 'dotenv';
-import { fileURLToPath } from 'node:url';
-
-dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
+import '../src/lib/environment.js';
 
 const categories = [
   ['Photography and Videography', 'Photography and video production for events.'],

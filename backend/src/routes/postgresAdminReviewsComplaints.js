@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { getRequestId } from '../lib/requestContext.js';
 import { sanitizeAuditDetails } from '../lib/auditSanitizer.js';
 import {
@@ -174,6 +175,10 @@ async function createNotification(transaction, { userId, title, message, related
 }
 
 export function createPostgresAdminReviewsComplaintsRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/reviews/vendors', requirePermission('reviews.moderate'), asyncHandler(async (_req, res) => {

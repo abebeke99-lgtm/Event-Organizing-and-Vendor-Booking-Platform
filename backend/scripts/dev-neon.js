@@ -1,3 +1,4 @@
+import '../src/lib/environment.js';
 import { loadNeonTestEnvironment } from '../src/lib/neonTestEnvironment.js';
 
 const environment = await loadNeonTestEnvironment();

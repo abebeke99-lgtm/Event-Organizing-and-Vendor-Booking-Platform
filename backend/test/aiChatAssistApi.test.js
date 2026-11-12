@@ -47,6 +47,8 @@ const aiClient = {
   },
 };
 
+const originalApiKey = process.env.OPENAI_API_KEY;
+process.env.OPENAI_API_KEY = 'mock-openai-client-key';
 const app = createApp({
   database,
   aiClient,
@@ -68,9 +70,10 @@ const app = createApp({
     },
   },
 });
-const originalApiKey = process.env.OPENAI_API_KEY;
 process.env.OPENAI_API_KEY = '';
 const unconfiguredApp = createApp({ database });
+process.env.OPENAI_API_KEY = 'sk-placeholder';
+const placeholderApp = createApp({ database });
 if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY;
 else process.env.OPENAI_API_KEY = originalApiKey;
 app.locals.platformSettingsCache = {
@@ -81,28 +84,33 @@ unconfiguredApp.locals.platformSettingsCache = {
   values: { platform_status: 'open', maintenance_mode: 'false', maintenance_message: '' },
   expiresAt: Date.now() + 60_000,
 };
+placeholderApp.locals.platformSettingsCache = {
+  values: { platform_status: 'open', maintenance_mode: 'false', maintenance_message: '' },
+  expiresAt: Date.now() + 60_000,
+};
 const server = app.listen(0, '127.0.0.1');
 const unconfiguredServer = unconfiguredApp.listen(0, '127.0.0.1');
+const placeholderServer = placeholderApp.listen(0, '127.0.0.1');
 let baseUrl;
 let unconfiguredBaseUrl;
+let placeholderBaseUrl;
 
 before(async () => {
-  await Promise.all([server, unconfiguredServer].map((instance) => (
+  await Promise.all([server, unconfiguredServer, placeholderServer].map((instance) => (
     instance.listening ? Promise.resolve() : once(instance, 'listening')
   )));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
   unconfiguredBaseUrl = `http://127.0.0.1:${unconfiguredServer.address().port}`;
+  placeholderBaseUrl = `http://127.0.0.1:${placeholderServer.address().port}`;
 });
 
 after(async () => {
-  await new Promise((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-    server.closeAllConnections();
-  });
-  await new Promise((resolve, reject) => {
-    unconfiguredServer.close((error) => error ? reject(error) : resolve());
-    unconfiguredServer.closeAllConnections();
-  });
+  await Promise.all([server, unconfiguredServer, placeholderServer].map((instance) => (
+    new Promise((resolve, reject) => {
+      instance.close((error) => error ? reject(error) : resolve());
+      instance.closeAllConnections();
+    })
+  )));
 });
 
 async function request(path, { method = 'GET', body, authenticated = false, base = baseUrl } = {}) {
@@ -119,22 +127,141 @@ async function request(path, { method = 'GET', body, authenticated = false, base
 test('public AI status exposes configuration without authentication or secrets', async () => {
   const response = await request('/api/ai/status');
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { data: { configured: true } });
+  const status = await response.json();
+  assert.deepEqual(status, {
+    data: {
+      configured: true,
+      placeholderKeyDetected: false,
+      validApiKey: 'configured',
+      providerOnline: false,
+      liveChatVerified: false,
+    },
+  });
+  assert.equal(JSON.stringify(status).includes('OPENAI_API_KEY'), false);
 });
 
-test('public health check is guest-accessible and only reports a configured provider online', async () => {
+test('public health check verifies a bounded provider completion and caches success briefly', async () => {
+  const before = completionRequests.length;
   const onlineResponse = await request('/api/ai/health');
   assert.equal(onlineResponse.status, 200);
-  assert.deepEqual(await onlineResponse.json(), { online: true });
+  assert.deepEqual(await onlineResponse.json(), {
+    configured: true,
+    online: true,
+    provider: 'OpenAI',
+    verification: 'VERIFIED',
+    placeholderKeyDetected: false,
+    validApiKey: 'configured',
+    liveChatVerified: false,
+  });
+  assert.equal(completionRequests.length, before + 1);
+  assert.equal(completionRequests.at(-1).messages.at(-1).content, 'Reply with the single word OK.');
+  assert.equal(completionOptions.at(-1).timeout, 5000);
+
+  const cachedResponse = await request('/api/ai/health');
+  assert.deepEqual(await cachedResponse.json(), {
+    configured: true,
+    online: true,
+    provider: 'OpenAI',
+    verification: 'VERIFIED',
+    placeholderKeyDetected: false,
+    validApiKey: 'configured',
+    liveChatVerified: false,
+  });
+  assert.equal(completionRequests.length, before + 1);
 
   const offlineResponse = await request('/api/ai/health', { base: unconfiguredBaseUrl });
   assert.equal(offlineResponse.status, 200);
-  assert.deepEqual(await offlineResponse.json(), { online: false });
+  assert.deepEqual(await offlineResponse.json(), {
+    configured: false,
+    online: false,
+    provider: 'OpenAI',
+    verification: 'NOT_VERIFIED',
+    placeholderKeyDetected: false,
+    validApiKey: 'missing',
+    liveChatVerified: false,
+  });
+});
+
+test('provider health reports offline when a real completion probe fails', async () => {
+  let probeCount = 0;
+  const probeApiKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'mock-openai-client-key';
+  const probeApp = createApp({
+    database,
+    aiClient: {
+      chat: {
+        completions: {
+          async create() {
+            probeCount += 1;
+            throw Object.assign(new Error('private provider details'), {
+              status: 429,
+              code: 'rate_limit_exceeded',
+            });
+          },
+        },
+      },
+    },
+  });
+  if (probeApiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = probeApiKey;
+  probeApp.locals.platformSettingsCache = {
+    values: { platform_status: 'open', maintenance_mode: 'false', maintenance_message: '' },
+    expiresAt: Date.now() + 60_000,
+  };
+  const probeServer = probeApp.listen(0, '127.0.0.1');
+  await once(probeServer, 'listening');
+  try {
+    const url = `http://127.0.0.1:${probeServer.address().port}/api/ai/health`;
+    const first = await fetch(url);
+    assert.deepEqual(await first.json(), {
+      configured: true,
+      online: false,
+      provider: 'OpenAI',
+      verification: 'NOT_VERIFIED',
+      placeholderKeyDetected: false,
+      validApiKey: 'configured',
+      liveChatVerified: false,
+    });
+    const cached = await fetch(url);
+    assert.deepEqual(await cached.json(), {
+      configured: true,
+      online: false,
+      provider: 'OpenAI',
+      verification: 'NOT_VERIFIED',
+      placeholderKeyDetected: false,
+      validApiKey: 'configured',
+      liveChatVerified: false,
+    });
+    assert.equal(probeCount, 1);
+  } finally {
+    await new Promise((resolve, reject) => {
+      probeServer.close((error) => error ? reject(error) : resolve());
+      probeServer.closeAllConnections();
+    });
+  }
 });
 
 test('missing backend key reports unavailable and never returns a fabricated answer', async () => {
   const status = await request('/api/ai/status', { base: unconfiguredBaseUrl });
-  assert.deepEqual(await status.json(), { data: { configured: false } });
+  assert.deepEqual(await status.json(), {
+    data: {
+      configured: false,
+      placeholderKeyDetected: false,
+      validApiKey: 'missing',
+      providerOnline: false,
+      liveChatVerified: false,
+    },
+  });
+  const health = await request('/api/ai/health', { base: unconfiguredBaseUrl });
+  assert.deepEqual(await health.json(), {
+    configured: false,
+    online: false,
+    provider: 'OpenAI',
+    verification: 'NOT_VERIFIED',
+    placeholderKeyDetected: false,
+    validApiKey: 'missing',
+    liveChatVerified: false,
+  });
   const response = await request('/api/ai/assist', {
     method: 'POST',
     body: { message: 'Find an event', language: 'en' },
@@ -150,6 +277,29 @@ test('missing backend key reports unavailable and never returns a fabricated ans
   });
   assert.equal(chatResponse.status, 503);
   assert.match((await chatResponse.json()).error, /OPENAI_API_KEY/);
+});
+
+test('placeholder key is detected but never classified as configured', async () => {
+  const statusResponse = await request('/api/ai/status', { base: placeholderBaseUrl });
+  assert.deepEqual(await statusResponse.json(), {
+    data: {
+      configured: false,
+      placeholderKeyDetected: true,
+      validApiKey: 'missing',
+      providerOnline: false,
+      liveChatVerified: false,
+    },
+  });
+  const healthResponse = await request('/api/ai/health', { base: placeholderBaseUrl });
+  assert.deepEqual(await healthResponse.json(), {
+    configured: false,
+    online: false,
+    provider: 'OpenAI',
+    verification: 'NOT_VERIFIED',
+    placeholderKeyDetected: true,
+    validApiKey: 'missing',
+    liveChatVerified: false,
+  });
 });
 
 test('public chat accepts guest messages, grounds the prompt, and returns a reply', async () => {
@@ -175,6 +325,9 @@ test('public chat accepts guest messages, grounds the prompt, and returns a repl
   assert.match(completionRequests.at(-1).messages[0].content, /The user is a visitor/);
   assert.match(completionRequests.at(-1).messages[0].content, /Addis Ababa/);
   assert.equal(completionRequests.at(-1).messages.at(-1).content, 'Find a vendor near me');
+  assert.equal(completionOptions.at(-1).timeout, 30_000);
+  const statusResponse = await request('/api/ai/status');
+  assert.equal((await statusResponse.json()).data.liveChatVerified, true);
   assert.equal(completionOptions.at(-1).timeout, 30_000);
 });
 
@@ -253,5 +406,55 @@ test('provider failures are returned as errors rather than success-shaped answer
     assert.match((await response.json()).error, /temporarily unavailable/i);
   } finally {
     completionError = null;
+  }
+});
+
+test('invalid keys, rate limits, timeouts, and network failures are surfaced safely', async () => {
+  const failures = [
+    {
+      failure: { status: 401, code: 'invalid_api_key' },
+      expectedStatus: 503,
+      expectedMessage: 'OpenAI rejected the server API key.',
+      validApiKey: 'invalid',
+    },
+    {
+      failure: { status: 429, code: 'rate_limit_exceeded' },
+      expectedStatus: 429,
+      expectedMessage: 'OpenAI is rate limiting requests.',
+      validApiKey: 'configured',
+    },
+    {
+      failure: { name: 'TimeoutError' },
+      expectedStatus: 504,
+      expectedMessage: 'took too long',
+      validApiKey: 'configured',
+    },
+    {
+      failure: { name: 'APIConnectionError' },
+      expectedStatus: 503,
+      expectedMessage: 'Could not reach OpenAI.',
+      validApiKey: 'configured',
+    },
+  ];
+
+  for (const { failure, expectedStatus, expectedMessage, validApiKey } of failures) {
+    completionError = null;
+    const health = await request('/api/ai/health');
+    assert.equal((await health.json()).online, true);
+    completionError = Object.assign(new Error('private upstream details OPENAI_API_KEY=secret-value'), failure);
+    try {
+      const response = await request('/api/ai/chat', {
+        method: 'POST',
+        body: { messages: [{ role: 'user', content: 'Test provider failure handling' }] },
+      });
+      assert.equal(response.status, expectedStatus);
+      const body = await response.text();
+      assert.match(body, new RegExp(expectedMessage));
+      assert.equal(body.includes('secret-value'), false);
+      const status = await request('/api/ai/status');
+      assert.equal((await status.json()).data.validApiKey, validApiKey);
+    } finally {
+      completionError = null;
+    }
   }
 });

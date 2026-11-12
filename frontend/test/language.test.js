@@ -36,6 +36,23 @@ test('AI chat labels are translated in English and Amharic', () => {
   assert.equal(translate('aiChatAssistant', 'en'), 'AI Assistant');
   assert.equal(translate('aiChatAssistant', 'am'), 'የAI ረዳት');
   assert.equal(translate('aiChatArchive', 'am'), 'ወደ ማህደር አስገባ');
+  assert.deepEqual(
+    ['aiChatPlaceholderKey', 'aiChatValidApiKey', 'aiChatProviderOnline', 'aiChatLiveChat']
+      .map((key) => translate(key, 'en')),
+    ['Placeholder Key', 'Valid API Key', 'Provider Online', 'Live Chat'],
+  );
+  assert.deepEqual(
+    ['aiChatDetected', 'aiChatNotDetected', 'aiChatConfigured', 'aiChatMissing', 'aiChatInvalid',
+      'aiChatYes', 'aiChatNo', 'aiChatVerified', 'aiChatNotVerified'].map((key) => translate(key, 'en')),
+    ['Detected', 'Not Detected', 'Configured', 'Missing', 'Invalid', 'Yes', 'No', 'Verified', 'Not Verified'],
+  );
+  for (const key of [
+    'aiChatPlaceholderKey', 'aiChatValidApiKey', 'aiChatProviderOnline', 'aiChatLiveChat',
+    'aiChatDetected', 'aiChatNotDetected', 'aiChatConfigured', 'aiChatMissing', 'aiChatInvalid',
+    'aiChatYes', 'aiChatNo', 'aiChatVerified', 'aiChatNotVerified',
+  ]) {
+    assert.notEqual(translate(key, 'am'), translate(key, 'en'));
+  }
 });
 
 test('footer attribution is translated without a copyright symbol or design credit', () => {

@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { requirePermission } from '../middleware/rbac.js';
@@ -164,6 +165,10 @@ async function notify(database, { userId, title, message, type, relatedType, rel
 }
 
 export function createPostgresVendorRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
   wrapAsyncRoutes(router);
 

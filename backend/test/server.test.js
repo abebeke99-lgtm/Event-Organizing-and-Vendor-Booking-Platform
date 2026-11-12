@@ -17,25 +17,23 @@ import {
 } from '../src/db.js';
 import { getDatabaseDialect, getStartupConfigurationErrors } from '../src/lib/startupConfig.js';
 import { getCookieOptions } from '../src/lib/cookieOptions.js';
+import { requireAdmin } from '../src/middleware/requireAdmin.js';
+import { requirePlatformUser } from '../src/middleware/requirePlatformUser.js';
 
 const databaseCredentials = {
-  DB_DIALECT: 'mysql',
-  DB_HOST: 'mysql.example.test',
-  DB_PORT: '11713',
-  DB_NAME: 'defaultdb',
-  DB_USER: 'test-user',
-  DB_PASSWORD: 'test-only',
+  DB_DIALECT: 'postgres',
+  DATABASE_URL: 'postgresql://test-user:test-password@ep-eventhub-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+  DB_SSL: 'true',
 };
 
 test('database TLS verifies certificates and normalizes escaped CA newlines', () => {
   const certificateAuthority = rootCertificates[0];
   const config = createDatabaseConfig({
     ...databaseCredentials,
-    DB_SSL: 'true',
     DB_SSL_CA: certificateAuthority.replace(/\n/g, '\\n'),
   });
-  assert.equal(config.host, 'mysql.example.test');
-  assert.equal(config.port, 11713);
+  assert.equal(config.database, 'eventhub');
+  assert.equal(config.port, 5432);
   assert.deepEqual(config.ssl, {
     rejectUnauthorized: true,
     ca: certificateAuthority.trim(),
@@ -50,7 +48,6 @@ test('database TLS loads and verifies CA certificates from a file path', () => {
     writeFileSync(certificatePath, certificateAuthority);
     const config = createDatabaseConfig({
       ...databaseCredentials,
-      DB_SSL: 'true',
       DB_SSL_CA: certificatePath,
     });
     assert.equal(config.ssl.ca, certificateAuthority.trim());
@@ -69,32 +66,27 @@ test('database TLS rejects an invalid custom CA certificate', () => {
   assert.throws(
     () => createDatabaseConfig({
       ...databaseCredentials,
-      DB_SSL: 'true',
       DB_SSL_CA: '-----BEGIN CERTIFICATE-----invalid-----END CERTIFICATE-----',
     }),
     /DB_SSL_CA or DB_SSL_CA_BASE64/,
   );
 });
 
-test('production database configuration requires credentials and TLS but not a custom CA', () => {
+test('production database configuration requires a Neon DATABASE_URL and TLS but not a custom CA', () => {
   assert.deepEqual(getDatabaseConfigurationErrors({}, { requireTls: true })
     .map((error) => error.split(/[ (]/)[0]), [
-    'DB_HOST',
-    'DB_PORT',
-    'DB_NAME',
-    'DB_USER',
-    'DB_PASSWORD',
+    'DATABASE_URL',
     'DB_SSL',
   ]);
 });
 
-test('DATABASE_URL supplies the MySQL connection credentials', () => {
+test('DATABASE_URL supplies the PostgreSQL connection credentials', () => {
   const config = createDatabaseConfig({
-    DATABASE_URL: 'mysql://db-user:pass%40word@mysql.example.test:3307/events',
+    DATABASE_URL: 'postgresql://db-user:pass%40word@ep-eventhub-pooler.us-east-2.aws.neon.tech/events?sslmode=require',
     DB_SSL: 'true',
   });
-  assert.equal(config.host, 'mysql.example.test');
-  assert.equal(config.port, 3307);
+  assert.equal(config.host, 'ep-eventhub-pooler.us-east-2.aws.neon.tech');
+  assert.equal(config.port, 5432);
   assert.equal(config.database, 'events');
   assert.equal(config.user, 'db-user');
   assert.equal(config.password, 'pass@word');
@@ -102,26 +94,23 @@ test('DATABASE_URL supplies the MySQL connection credentials', () => {
 });
 
 test('production database configuration rejects loopback database hosts', () => {
-  const productionDatabaseSettings = { NODE_ENV: 'production', DB_SSL: 'true' };
-  assert.ok(getDatabaseConfigurationErrors({
+  const productionDatabaseSettings = { NODE_ENV: 'production', DB_SSL: 'true', DB_DIALECT: 'postgres' };
+  const errors = getDatabaseConfigurationErrors({
     ...databaseCredentials,
     ...productionDatabaseSettings,
-    DB_HOST: '127.0.0.12',
-  }).some((error) => error.startsWith('DB_HOST ')));
-  assert.ok(getDatabaseConfigurationErrors({
-    DATABASE_URL: 'mysql://validation-user:placeholder-only@[::1]/events',
-    ...productionDatabaseSettings,
-  }).some((error) => error.startsWith('DATABASE_URL ')));
-  assert.deepEqual(getDatabaseConfigurationErrors({
+    DATABASE_URL: 'postgresql://validation-user:placeholder-only@127.0.0.1/eventhub?sslmode=require',
+  });
+  assert.ok(errors.some((error) => error.startsWith('DATABASE_URL ')));
+  assert.equal(getDatabaseConfigurationErrors({
     ...databaseCredentials,
     ...productionDatabaseSettings,
-  }), []);
+  }).length, 0);
 });
 
 test('production configuration accepts DATABASE_URL with verified TLS and secure cross-site cookies', () => {
   const configuration = {
-    DB_DIALECT: 'mysql',
-    DATABASE_URL: 'mysql://validation-user@db.example.test/events',
+    DB_DIALECT: 'postgres',
+    DATABASE_URL: 'postgresql://validation-user:placeholder-only@ep-eventhub-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
     DB_SSL: 'true',
     WEB_ORIGIN: 'https://infobekele.netlify.app',
     COOKIE_SECURE: 'true',
@@ -136,7 +125,6 @@ test('database TLS accepts a base64-encoded custom CA', () => {
   const certificateAuthority = rootCertificates[0];
   const config = createDatabaseConfig({
     ...databaseCredentials,
-    DB_SSL: 'true',
     DB_SSL_CA_BASE64: Buffer.from(certificateAuthority).toString('base64'),
   });
   assert.equal(config.ssl.ca, certificateAuthority.trim());
@@ -145,6 +133,7 @@ test('database TLS accepts a base64-encoded custom CA', () => {
 test('database TLS is omitted when SSL is disabled for local development', () => {
   const config = createDatabaseConfig({
     ...databaseCredentials,
+    DATABASE_URL: 'postgresql://test-user:test-password@127.0.0.1:5432/eventhub?sslmode=disable',
     DB_SSL: 'false',
   });
 
@@ -154,18 +143,19 @@ test('database TLS is omitted when SSL is disabled for local development', () =>
 test('database pool has a bounded connection timeout', () => {
   const config = createDatabaseConfig(databaseCredentials);
 
-  assert.equal(config.connectTimeout, 10000);
+  assert.equal(config.connectionTimeoutMillis, 15000);
 });
 
-test('database verifier executes only the read-only SELECT 1 query', async () => {
+test('database verifier executes the PostgreSQL database identity query', async () => {
   const statements = [];
   await verifyDatabaseConnection({
     async query(statement) {
       statements.push(statement);
+      return { rows: [{ server_version: 'PostgreSQL 16', database_name: 'eventhub' }] };
     },
   });
 
-  assert.deepEqual(statements, ['SELECT 1']);
+  assert.deepEqual(statements, ['SELECT version() AS server_version, current_database() AS database_name']);
 });
 
 test('database verifier checks the selected database when requested', async () => {
@@ -173,24 +163,18 @@ test('database verifier checks the selected database when requested', async () =
   await verifyDatabaseConnection({
     async query(statement) {
       statements.push(statement);
-      if (statement === 'SELECT DATABASE() AS database_name') {
-        return [[{ database_name: 'defaultdb' }], []];
-      }
-      return [[], []];
+      return { rows: [{ server_version: 'PostgreSQL 16', database_name: 'defaultdb' }] };
     },
   }, 'defaultdb');
 
-  assert.deepEqual(statements, ['SELECT 1', 'SELECT DATABASE() AS database_name']);
+  assert.deepEqual(statements, ['SELECT version() AS server_version, current_database() AS database_name']);
 });
 
 test('database verifier rejects a connection to a different database', async () => {
   await assert.rejects(
     verifyDatabaseConnection({
-      async query(statement) {
-        if (statement === 'SELECT DATABASE() AS database_name') {
-          return [[{ database_name: 'unexpected' }], []];
-        }
-        return [[], []];
+      async query() {
+        return { rows: [{ server_version: 'PostgreSQL 16', database_name: 'unexpected' }] };
       },
     }, 'defaultdb'),
     { message: 'Connected database does not match DB_NAME.' },
@@ -199,33 +183,27 @@ test('database verifier rejects a connection to a different database', async () 
 
 test('database diagnostics retain error details while redacting passwords and connection strings', () => {
   const error = Object.assign(new Error(
-    'Access failed for password=secret-pass mysql://avnadmin:secret-pass@db.example:11713',
-  ), { code: 'ER_ACCESS_DENIED_ERROR', errno: 1045, sqlState: '28000' });
+    'password=secret-pass postgresql://test-user:secret-pass@db.example.test:5432/eventhub?sslmode=require',
+  ), { code: '28P01' });
 
   const diagnostic = formatDatabaseError(error, 'secret-pass');
 
-  assert.match(diagnostic, /ER_ACCESS_DENIED_ERROR/);
-  assert.match(diagnostic, /errno=1045/);
-  assert.match(diagnostic, /sqlState=28000/);
+  assert.match(diagnostic, /28P01/);
   assert.doesNotMatch(diagnostic, /secret-pass/);
-  assert.doesNotMatch(diagnostic, /avnadmin:/);
+  assert.doesNotMatch(diagnostic, /test-user:secret-pass/);
 });
 
 test('database failure diagnostics map to safe reason codes', () => {
-  assert.equal(getDatabaseFailureCode({ code: 'ER_ACCESS_DENIED_ERROR' }), 'DB_AUTH_FAILED');
+  assert.equal(getDatabaseFailureCode({ code: '28P01' }), 'DB_AUTH_FAILED');
   assert.equal(getDatabaseFailureCode({ code: 'CERT_HAS_EXPIRED' }), 'DB_TLS_FAILED');
   assert.equal(getDatabaseFailureCode({ code: 'ECONNREFUSED' }), 'DB_CONNECT_FAILED');
   assert.equal(getDatabaseFailureCode(new Error('Connected database does not match DB_NAME.')), 'DB_NAME_MISMATCH');
 });
 
 test('startup configuration validation reports missing environment variable names only', () => {
-  const errors = getStartupConfigurationErrors({});
+  const errors = getStartupConfigurationErrors({ DB_DIALECT: 'postgres' });
   assert.deepEqual(errors.map((error) => error.split(/[ (]/)[0]), [
-    'DB_HOST',
-    'DB_PORT',
-    'DB_NAME',
-    'DB_USER',
-    'DB_PASSWORD',
+    'DATABASE_URL',
     'NODE_ENV',
     'WEB_ORIGIN',
     'COOKIE_SECURE',
@@ -234,14 +212,18 @@ test('startup configuration validation reports missing environment variable name
   assert.equal(new Set(errors).size, errors.length);
 });
 
-test('database dialect defaults to MySQL, trims explicit selection, and rejects unknown values', () => {
-  assert.equal(getDatabaseDialect({}), 'mysql');
+test('database dialect defaults to postgres and rejects MySQL or invalid values', () => {
+  assert.equal(getDatabaseDialect({}), 'postgres');
   assert.equal(getDatabaseDialect({ DB_DIALECT: ' postgres ' }), 'postgres');
   assert.throws(
-    () => getDatabaseDialect({ DB_DIALECT: 'postgre' }),
-    /DB_DIALECT must be mysql or postgres/,
+    () => getDatabaseDialect({ DB_DIALECT: 'mysql' }),
+    /DB_DIALECT must be postgres/,
   );
-  assert.ok(getStartupConfigurationErrors({ DB_DIALECT: 'postgre' })
+  assert.throws(
+    () => getDatabaseDialect({ DB_DIALECT: 'postgre' }),
+    /DB_DIALECT must be postgres/,
+  );
+  assert.ok(getStartupConfigurationErrors({ DB_DIALECT: 'mysql' })
     .some((error) => error.includes('DB_DIALECT')));
 });
 
@@ -327,6 +309,7 @@ test('production startup requires HTTPS origin and cross-site secure cookies', (
   };
   assert.deepEqual(getStartupConfigurationErrors(configuration)
     .map((error) => error.split(/[ (]/)[0]), [
+    'DB_DIALECT',
     'WEB_ORIGIN',
     'COOKIE_SECURE',
     'COOKIE_SAME_SITE',
@@ -555,7 +538,7 @@ test('database health route returns ready only after a successful database query
   const response = await fetch(`${baseUrl}/api/health`);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true, db: true });
+  assert.deepEqual(await response.json(), { status: 'ok', db: true });
   assert.equal(healthQueryCount, 1);
 });
 
@@ -587,7 +570,7 @@ test('database health route returns unavailable and a safe failure code when the
     }
 
     assert.equal(response.status, 503);
-    assert.deepEqual(body, { ok: false, db: false, reason: 'DB_CONNECT_FAILED' });
+    assert.deepEqual(body, { status: 'ok', db: false });
     assert.equal(Object.hasOwn(body, 'error'), false);
     assert.doesNotMatch(JSON.stringify(body), /health-test-secret/);
     assert.doesNotMatch(loggedErrors.join(' '), /health-test-secret/);
@@ -682,7 +665,7 @@ test('successful session checks do not exhaust session probe rate limits', async
   }
 });
 
-test('session endpoints return 401 when a cookie is present but invalid', async () => {
+test('session endpoints reject invalid cookies with 401 and clear them', async () => {
   const adminResponse = await fetch(`${baseUrl}/api/auth/me`, {
     headers: { Cookie: 'admin_session=invalid-test-session' },
   });

@@ -56,11 +56,11 @@ Status: Inventory and limited cleanup; PostgreSQL-only migration is incomplete. 
 
 ## Latest PostgreSQL Route Continuation
 
-- The authentication integration passed **1/1** against isolated Neon, covering registration and rollback, customer/vendor login, session creation and cleanup, notification/history writes, `/me`, role redirect, and logout. Twelve authentication inventory call sites are explicitly recorded as verified; the auth route was already PostgreSQL-native.
+- The authentication/customer-account integration passed **1/1** against isolated Neon, covering registration and rollback, customer/vendor login, session creation and cleanup, notification/history writes, `/me`, role redirect, profile update, password change, session invalidation, and logout. Eighteen authentication/customer-account inventory call sites are explicitly recorded as verified; the auth route was already PostgreSQL-native.
 - The isolated Neon admin integration passed **8/8** and exercised all 12 admin report types plus review/complaint listing, moderation, assignment/status updates, history, notifications, and protected attachments.
 - The public vendor/category/service marketplace integration passed **12/12** using unique, FK-safe fixtures in the isolated Neon database. It no longer requires a local MySQL server.
 - Focused report/review regression tests passed **15/15**; static Amharic message coverage passed **6/6**.
-- The refreshed query inventory contains **1068 calls across 91 files** (18 infrastructure, 12 authentication call sites verified on isolated Neon, 1038 application calls uncertified).
+- The refreshed query inventory contains **1074 calls across 92 files** (18 infrastructure, 18 authentication/customer-account call sites verified on isolated Neon, 1038 application calls uncertified).
 - The latest complete backend suite passed **490/490** with guarded Neon integrations enabled. A prior baseline's 11 local-MySQL-dependent vendor-public tests are now Neon integration tests. The suite retained `DB_DIALECT=mysql` for remaining legacy-mode tests; it is not PostgreSQL-only runtime acceptance.
 - The earlier full-suite diagnostic with `DB_DIALECT=postgres` reported **446 total: 252 passed, 184 failed, 10 skipped**. Those legacy runtime/test failures remain a blocker to removing MySQL.
 - The Neon integration run initially found a PostgreSQL nullable-join row-lock error in complaint updates. The route now uses `FOR UPDATE OF c`, and the rerun passed.
@@ -97,12 +97,12 @@ The refreshed per-call inventory is `docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.
 
 | AST inventory classification | Count |
 |---|---:|
-| Query/execute call sites across 91 backend source files | 1068 |
+| Query/execute call sites across 92 backend source files | 1074 |
 | PostgreSQL infrastructure calls | 18 |
-| Application call sites verified on isolated Neon | 12 |
+| Application call sites verified on isolated Neon | 18 |
 | Application calls not certified by the scanner | 1038 |
 | Application `.execute()` calls requiring MySQL result/parameter semantics review | 644 |
-| Application `.query()` calls | 406 |
+| Application `.query()` calls | 412 |
 | `.query()` calls with detected MySQL-specific SQL markers | 5 |
 | `.query()` calls without detected markers and not certified | 389 |
 

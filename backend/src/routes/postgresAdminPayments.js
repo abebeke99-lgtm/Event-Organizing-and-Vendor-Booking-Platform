@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import {
@@ -193,6 +194,10 @@ function normalizeRefund(row) {
 }
 
 export function createPostgresAdminPaymentsRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/payments', requirePermission('payments.view'), asyncHandler(async (req, res) => {

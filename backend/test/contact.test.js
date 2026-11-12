@@ -128,6 +128,63 @@ function createContactApp(database, { emailConfigured = false, emailSender = asy
   return createApp({ database, notificationEmailConfigured: () => emailConfigured, notificationEmailSender: emailSender });
 }
 
+test('native PostgreSQL contact routes read settings and accept parameterized submissions', async () => {
+  const messages = [];
+  const statements = [];
+  const database = {
+    dialect: 'postgres',
+    async query(statement, values = []) {
+      statements.push(statement);
+      if (statement.includes('FROM system_settings')) return { rows: [], rowCount: 0 };
+      if (statement.startsWith('INSERT INTO contact_messages')) {
+        messages.push(values);
+        return { rows: [{ id: messages.length }], rowCount: 1 };
+      }
+      throw new Error(`Unexpected PostgreSQL contact query: ${statement}`);
+    },
+  };
+  const app = createApp({
+    database,
+    databaseDialect: 'postgres',
+    notificationEmailConfigured: () => false,
+  });
+
+  await withContactServer(app, async (baseUrl) => {
+    const contactResponse = await fetch(`${baseUrl}/api/contact`);
+    assert.equal(contactResponse.status, 200);
+    assert.deepEqual((await contactResponse.json()).data.contact, {
+      email: '',
+      phone: '',
+      address: '',
+      hours: '',
+      socials: [],
+    });
+
+    const submissionResponse = await fetch(`${baseUrl}/api/contact`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(validContactMessage),
+    });
+    assert.equal(submissionResponse.status, 201);
+    const result = await submissionResponse.json();
+    assert.equal(result.success, true);
+    assert.match(result.data.reference, /^EH-[0-9A-F]{24}$/);
+    assert.equal(messages.length, 1);
+    assert.deepEqual(messages[0].slice(1), [
+      validContactMessage.full_name,
+      validContactMessage.email,
+      null,
+      validContactMessage.subject,
+      'general_inquiry',
+      validContactMessage.message,
+      'new',
+    ]);
+  });
+
+  assert.ok(statements.some((statement) => statement.includes('ANY($1::varchar[])')));
+  assert.ok(statements.some((statement) => statement.includes('VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8)')));
+});
+
 test('contact API persists a valid message and reports unconfigured email delivery', async (context) => {
   const database = createContactDatabase();
   await withContactServer(createContactApp(database), async (baseUrl) => {

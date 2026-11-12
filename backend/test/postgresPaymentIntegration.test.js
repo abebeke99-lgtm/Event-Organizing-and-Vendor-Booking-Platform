@@ -72,7 +72,7 @@ async function removePaymentFixtures(database, suffix) {
 
 test('Neon PostgreSQL payment provider events persist atomically and deduplicate replays', {
   skip: integrationEnabled ? false : 'Set RUN_NEON_INTEGRATION=true to use backend/.env.neon-test.',
-  timeout: 90000,
+  timeout: 120000,
 }, async () => {
   const environment = await loadNeonTestEnvironment();
   const environmentKeys = ['DB_DIALECT', 'DATABASE_URL', 'DIRECT_URL', 'DB_SSL', 'NODE_ENV'];
@@ -365,13 +365,13 @@ test('Neon PostgreSQL payment provider events persist atomically and deduplicate
     assert.equal(refundList.status, 200);
     assert.ok((await refundList.json()).data.some((row) => row.id === requestedRefund.id));
     const adminRefundList = await fetch(
-      `${baseUrl}/api/admin/refunds?page=1&pageSize=1&status=pending&dateFrom=${dateFilter}&dateTo=${dateFilter}`,
+      `${baseUrl}/api/admin/refunds?page=1&pageSize=25&status=pending&dateFrom=${dateFilter}&dateTo=${dateFilter}&q=${encodeURIComponent(String(requestedRefund.id))}`,
       { headers: { Cookie: adminCookie }, signal: AbortSignal.timeout(15000) },
     );
     assert.equal(adminRefundList.status, 200);
     const adminRefundListBody = await adminRefundList.json();
     assert.equal(adminRefundListBody.pagination.total, 1);
-    assert.equal(adminRefundListBody.data[0].id, requestedRefund.id);
+    assert.ok(adminRefundListBody.data.some((row) => row.id === requestedRefund.id));
     const refundDetail = await fetch(`${baseUrl}/api/admin/refunds/${requestedRefund.id}`, {
       headers: { Cookie: adminCookie },
       signal: AbortSignal.timeout(15000),
@@ -395,6 +395,46 @@ test('Neon PostgreSQL payment provider events persist atomically and deduplicate
       await createPostgresRefundRequest(database.runtimeAdapter, refundRequest),
       { id: requestedRefund.id, status: 'pending', duplicate: true },
     );
+    let idempotencyReadCount = 0;
+    let releaseIdempotencyBarrier;
+    const idempotencyBarrier = new Promise((resolve) => {
+      releaseIdempotencyBarrier = resolve;
+    });
+    const coordinatedDatabase = {
+      query: (...args) => database.runtimeAdapter.query(...args),
+      inTransaction: (work) => database.runtimeAdapter.inTransaction((transaction) => work({
+        ...transaction,
+        query: async (sql, values) => {
+          const result = await transaction.query(sql, values);
+          if (sql.includes('FROM refund_requests WHERE idempotency_key = $1 FOR UPDATE')) {
+            assert.equal(result.rowCount, 0, 'Both concurrent requests must observe the missing key.');
+            idempotencyReadCount += 1;
+            if (idempotencyReadCount === 2) releaseIdempotencyBarrier();
+            await idempotencyBarrier;
+          }
+          return result;
+        },
+      })),
+    };
+    const sameKeyRequest = {
+      ...refundRequest,
+      amount: '1.00',
+      reason: 'Concurrent idempotent refund request',
+      idempotencyKey: randomUUID(),
+    };
+    const sameKeyResults = await Promise.all([
+      createPostgresRefundRequest(coordinatedDatabase, sameKeyRequest),
+      createPostgresRefundRequest(coordinatedDatabase, sameKeyRequest),
+    ]);
+    assert.equal(idempotencyReadCount, 2);
+    assert.equal(sameKeyResults[0].id, sameKeyResults[1].id);
+    assert.equal(sameKeyResults.filter((result) => result.duplicate).length, 1);
+    assert.equal(sameKeyResults.filter((result) => !result.duplicate).length, 1);
+    const sameKeyRows = await database.runtimeAdapter.query(
+      'SELECT COUNT(*)::integer AS count FROM refund_requests WHERE idempotency_key = $1',
+      [sameKeyRequest.idempotencyKey],
+    );
+    assert.equal(sameKeyRows.rows[0].count, 1);
     const concurrentRequests = await Promise.allSettled([
       createPostgresRefundRequest(database.runtimeAdapter, {
         ...refundRequest,
@@ -424,7 +464,7 @@ test('Neon PostgreSQL payment provider events persist atomically and deduplicate
        WHERE payment_id = $1 AND status IN ('pending', 'processing', 'succeeded')`,
       [paymentId],
     );
-    assert.equal(Number(reservedTotal.rows[0].reserved), 15);
+    assert.equal(Number(reservedTotal.rows[0].reserved), 16);
     await assert.rejects(
       createPostgresRefundRequest(database.runtimeAdapter, { ...refundRequest, amount: '6.00' }),
       (error) => error.status === 409,
@@ -504,7 +544,7 @@ test('Neon PostgreSQL payment provider events persist atomically and deduplicate
     assert.equal(refunded.rows[0].refund_status, 'succeeded');
     assert.equal(refunded.rows[0].provider_refund_reference, `provider-refund-${suffix}`);
     assert.equal(refunded.rows[0].payment_status, 'partially_refunded');
-    assert.equal(refunded.rows[0].history_count, 11);
+    assert.equal(refunded.rows[0].history_count, 12);
 
     await database.runtimeAdapter.query(
       "UPDATE payments SET status = 'refund_pending' WHERE id = $1",
@@ -539,7 +579,7 @@ test('Neon PostgreSQL payment provider events persist atomically and deduplicate
     );
     assert.equal(failedRefund.rows[0].refund_status, 'failed');
     assert.equal(failedRefund.rows[0].payment_status, 'partially_refunded');
-    assert.equal(failedRefund.rows[0].history_count, 13);
+    assert.equal(failedRefund.rows[0].history_count, 14);
 
     const retryRefund = await createPostgresRefundRequest(database.runtimeAdapter, {
       paymentId,

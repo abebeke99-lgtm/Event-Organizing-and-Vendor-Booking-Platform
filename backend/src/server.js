@@ -1,12 +1,14 @@
-import dotenv from 'dotenv';
-import { fileURLToPath } from 'node:url';
+import { getOpenAiApiKey } from './lib/openaiConfig.js';
 import { getDatabaseDialect, getStartupConfigurationErrors } from './lib/startupConfig.js';
 
-dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
-
-if (process.env.NODE_ENV !== 'production' && process.env.DB_DIALECT?.trim() !== 'postgres') {
+const configuredDialect = process.env.DB_DIALECT?.trim();
+if (process.env.NODE_ENV !== 'production' && !configuredDialect) {
   const { loadNeonTestEnvironment } = await import('./lib/neonTestEnvironment.js');
   Object.assign(process.env, await loadNeonTestEnvironment(), { DB_DIALECT: 'postgres' });
+}
+
+if (configuredDialect === 'mysql') {
+  throw new Error('DB_DIALECT must be postgres. MySQL runtime support has been removed.');
 }
 
 const configuredPort = process.env.PORT?.trim();
@@ -14,7 +16,7 @@ const PORT = configuredPort ? Number(configuredPort) : 4000;
 const HOST = '0.0.0.0';
 const configurationErrors = getStartupConfigurationErrors();
 
-if (!process.env.OPENAI_API_KEY?.trim()) {
+if (!getOpenAiApiKey()) {
   console.warn('AI chat is unavailable: set OPENAI_API_KEY in backend/.env to enable the EventHub AI endpoints.');
 }
 
@@ -36,17 +38,12 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     await verifyDatabaseConnection();
     databaseConnected = true;
   } catch (error) {
-    const dialect = databaseDialect === 'postgres' ? 'PostgreSQL' : 'MySQL';
-    if (databaseDialect === 'postgres') {
-      console.error(`${dialect} connection failed [${getDatabaseFailureCode(error)}]:`, formatDatabaseError(error));
-      process.exitCode = 1;
-    } else {
-      console.warn(`${dialect} connection failed [${getDatabaseFailureCode(error)}]; the API will start with database health unavailable:`, formatDatabaseError(error));
-    }
+    console.error(`PostgreSQL connection failed [${getDatabaseFailureCode(error)}]:`, formatDatabaseError(error));
+    process.exitCode = 1;
   }
 
   if (!process.exitCode) {
-    if (databaseConnected) console.log(databaseDialect === 'postgres' ? 'Database connected.' : 'MySQL connected.');
+    if (databaseConnected) console.log('Database connected.');
     const paymentProvider = await loadPaymentProvider();
     const app = createApp({ paymentProvider, databaseDialect });
     const server = app.listen(PORT, HOST, () => {

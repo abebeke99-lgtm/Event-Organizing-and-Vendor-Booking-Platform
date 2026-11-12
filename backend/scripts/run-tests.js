@@ -14,7 +14,8 @@ if (!testFiles.length) {
   throw new Error(`No explicit .test.js files found in ${testDirectory}.`);
 }
 
-const result = spawnSync(process.execPath, ['--test', ...testFiles], {
+// Neon integration files share the isolated database, so their fixtures must not overlap.
+const result = spawnSync(process.execPath, ['--test', '--test-concurrency=1', ...testFiles], {
   cwd: backendDirectory,
   stdio: 'inherit',
 });

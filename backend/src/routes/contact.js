@@ -70,11 +70,17 @@ function buildContactSettings(rows = []) {
   };
 }
 
-async function getContactSettings(database) {
-  const [rows] = await database.execute(
-    'SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (?, ?, ?, ?, ?)',
-    ['support_email', 'support_phone', 'support_address', 'support_hours', 'social_links']
-  );
+async function getContactSettings(database, isPostgres) {
+  const keys = ['support_email', 'support_phone', 'support_address', 'support_hours', 'social_links'];
+  const rows = isPostgres
+    ? (await database.query(
+      'SELECT setting_key, setting_value FROM system_settings WHERE setting_key = ANY($1::varchar[])',
+      [keys],
+    )).rows
+    : (await database.execute(
+      'SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN (?, ?, ?, ?, ?)',
+      keys,
+    ))[0];
   return buildContactSettings(rows);
 }
 
@@ -104,7 +110,7 @@ async function getEmailConfiguration(services) {
 
 publicRouter.get('/', asyncHandler(async (req, res) => {
   const database = req.app.locals.database || pool;
-  const settings = await getContactSettings(database);
+  const settings = await getContactSettings(database, database.dialect === 'postgres');
   res.json({
     success: true,
     data: {
@@ -166,20 +172,31 @@ publicRouter.post('/', contactLimiter, asyncHandler(async (req, res) => {
   }
 
   const database = req.app.locals.database || pool;
+  const isPostgres = database.dialect === 'postgres';
   const reference = `EH-${randomBytes(12).toString('hex').toUpperCase()}`;
-  await database.execute(
-    'INSERT INTO contact_messages (reference_id, user_id, full_name, email, phone, subject, inquiry_type, message, status) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)',
-    [
-      reference,
-      parsed.data.full_name,
-      parsed.data.email.toLowerCase(),
-      parsed.data.phone?.trim() || null,
-      parsed.data.subject,
-      parsed.data.inquiry_type,
-      parsed.data.message,
-      'new',
-    ]
-  );
+  const values = [
+    reference,
+    parsed.data.full_name,
+    parsed.data.email.toLowerCase(),
+    parsed.data.phone?.trim() || null,
+    parsed.data.subject,
+    parsed.data.inquiry_type,
+    parsed.data.message,
+    'new',
+  ];
+  if (isPostgres) {
+    await database.query(
+      `INSERT INTO contact_messages
+       (reference_id, user_id, full_name, email, phone, subject, inquiry_type, message, status)
+       VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8)`,
+      values,
+    );
+  } else {
+    await database.execute(
+      'INSERT INTO contact_messages (reference_id, user_id, full_name, email, phone, subject, inquiry_type, message, status) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)',
+      values,
+    );
+  }
 
   const services = req.app.locals.notificationServices || {};
   const isEmailConfigured = await getEmailConfiguration(services);
@@ -188,13 +205,14 @@ publicRouter.post('/', contactLimiter, asyncHandler(async (req, res) => {
 
   if (isEmailConfigured) {
     try {
-      const [administrators] = await database.execute(
-        `SELECT DISTINCT u.email FROM users u
+      const administratorQuery = `SELECT DISTINCT u.email FROM users u
          JOIN user_roles ur ON ur.user_id = u.id
          JOIN roles r ON r.id = ur.role_id
          WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE
-           AND u.email IS NOT NULL AND u.email <> ''`
-      );
+           AND u.email IS NOT NULL AND u.email <> ''`;
+      const administrators = isPostgres
+        ? (await database.query(administratorQuery)).rows
+        : (await database.execute(administratorQuery))[0];
       if (!administrators.length) {
         administratorEmail = 'no_recipients';
       } else {

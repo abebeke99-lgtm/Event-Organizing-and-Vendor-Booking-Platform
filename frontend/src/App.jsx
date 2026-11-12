@@ -57,6 +57,8 @@ const AIChat = React.lazy(() => import('./AIChat.jsx'));
 import AIChatWidget from './AIChatWidget.jsx';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import { formatCustomerMoney } from './customerMoney.js';
+import { getCustomerDashboardEndpoints } from './customerDashboardData.js';
+import { getVendorDashboardEndpoints } from './vendorDashboardData.js';
 const AdminUserManagement = React.lazy(() => import('./AdminUserManagement.jsx'));
 const AdminRoleManagement = React.lazy(() => import('./AdminRoleManagement.jsx'));
 const AdminVendorVerification = React.lazy(() => import('./AdminVendorVerification.jsx'));
@@ -4272,26 +4274,32 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
   }
 
   useEffect(() => {
+    const controller = new AbortController();
     async function load() {
       try {
         setLoading(true);
-        const endpoints = ['overview', 'profile', 'verification', 'services', 'categories', 'pricing', 'availability', 'booking-requests', 'bookings', 'history', 'tasks', 'quotations', 'payments', 'messages', 'reviews', 'notifications', 'reports', 'account', 'packages', 'media'];
-        const results = await Promise.all(endpoints.map((endpoint) => api(`/vendor/${endpoint}`)));
+        setError('');
+        const endpoints = getVendorDashboardEndpoints(slug);
+        const results = await Promise.all(endpoints.map((endpoint) => (
+          api(`/vendor/${endpoint}`, { signal: controller.signal })
+        )));
+        if (controller.signal.aborted) return;
         const next = {};
         endpoints.forEach((endpoint, index) => { next[endpoint] = results[index].data; });
-        setData(next);
+        setData((current) => ({ ...current, ...next }));
       } catch (issue) {
-        setError(issue.message);
+        if (!controller.signal.aborted) setError(issue.message);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     load();
-  }, [refreshKey]);
+    return () => controller.abort();
+  }, [refreshKey, slug]);
 
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
-    if (error) return <div className="alert error">{error}</div>;
+    if (error) return <section className="dashboard-error" role="alert"><div className="alert error">{error}</div><button className="button" type="button" onClick={() => setRefreshKey((current) => current + 1)}>Retry dashboard</button></section>;
     if (slug !== 'verification') return <VendorWorkspace view={slug} data={data} api={api} user={user} onNavigate={setSlug} onUserChange={onUserChange} onRefresh={() => setRefreshKey((current) => current + 1)} />;
 
     switch (slug) {
@@ -4414,12 +4422,16 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
   }
 
   useEffect(() => {
+    const controller = new AbortController();
     async function load() {
       try {
         setLoading(true);
         setError('');
-        const endpoints = ['overview', 'vendors', 'services', 'categories', 'bookings', 'events', 'favorites', 'saved-services', 'quotations', 'payments', 'refunds', 'messages', 'reviews', 'notifications', 'profile'];
-        const results = await Promise.all(endpoints.map((endpoint) => api(`/customer/${endpoint}`)));
+        const endpoints = getCustomerDashboardEndpoints(slug);
+        const results = await Promise.all(endpoints.map((endpoint) => (
+          api(`/customer/${endpoint}`, { signal: controller.signal })
+        )));
+        if (controller.signal.aborted) return;
         const next = {};
         const objectEndpoints = new Set(['overview', 'profile']);
         endpoints.forEach((endpoint, index) => {
@@ -4427,13 +4439,14 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
         });
         setData(next);
       } catch (issue) {
-        setError(issue.message);
+        if (!controller.signal.aborted) setError(issue.message);
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     load();
-  }, [refreshKey]);
+    return () => controller.abort();
+  }, [refreshKey, slug]);
 
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
@@ -4507,26 +4520,35 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
   const [vendors, setVendors] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
+    const controller = new AbortController();
     async function load() {
       try {
+        setLoading(true);
+        setError('');
         const [overviewResponse, eventsResponse, vendorsResponse, bookingsResponse] = await Promise.all([
-          api('/platform/organizer/overview'),
-          api('/platform/events/mine'),
-          api('/platform/vendors?page=1&limit=4&sort=recommended'),
-          api('/platform/bookings')
+          api('/platform/organizer/overview', { signal: controller.signal }),
+          api('/platform/events/mine', { signal: controller.signal }),
+          api('/platform/vendors?page=1&limit=4&sort=recommended', { signal: controller.signal }),
+          api('/platform/bookings', { signal: controller.signal })
         ]);
+        if (controller.signal.aborted) return;
         setOverview(overviewResponse.data);
         setEvents(eventsResponse.data || []);
         setVendors(vendorsResponse.data || []);
         setBookings(bookingsResponse.data || []);
       } catch (issue) {
-        setError(issue.message);
+        if (!controller.signal.aborted) setError(issue.message);
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     load();
-  }, []);
+    return () => controller.abort();
+  }, [retryCount]);
 
   function toggleSidebar() {
     if (window.matchMedia('(max-width: 760px)').matches) setSidebarOpen((current) => !current);
@@ -4543,8 +4565,8 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
     return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={translate('organizerDashboard', language).toUpperCase()} groups={[{ id: 'organizer', label: 'nav.dashboard.groupWorkspace', items: organizerMenu }]} activePage={dashboardView} onNavigate={setDashboardView} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isOrganizer onNavigate={setDashboardView} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{content}</div></main></div>;
   }
 
-  if (error) return renderDashboard(<div className="alert error">{translateText(error, language)}</div>);
-  if (!overview) return renderDashboard(<div className="loading"><span className="spinner"/>{t('loading')}</div>);
+  if (error) return renderDashboard(<section className="dashboard-error" role="alert"><div className="alert error">{translateText(error, language)}</div><button className="button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Retry dashboard</button></section>);
+  if (loading || !overview) return renderDashboard(<div className="loading"><span className="spinner"/>{t('loading')}</div>);
 
   const derivedSummary = summarizeOrganizerDashboard(events, bookings);
   const summary = {

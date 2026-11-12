@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { loadNeonTestEnvironment } from '../src/lib/neonTestEnvironment.js';
@@ -14,10 +18,23 @@ test('Neon PostgreSQL homepage hero slides and statistics APIs', {
   const database = createPostgresDatabase(environment);
   const app = createApp({ database: database.runtimeAdapter, databaseDialect: 'postgres' });
   const server = app.listen(0, '127.0.0.1');
+  let slideId;
+  let uploadDirectory;
   await once(server, 'listening');
   const baseUrl = `http://127.0.0.1:${server.address().port}/api`;
 
   try {
+    uploadDirectory = await mkdtemp(join(tmpdir(), 'eventhub-neon-hero-'));
+    const imageName = `${randomUUID()}.png`;
+    const imageBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    await writeFile(join(uploadDirectory, imageName), imageBytes);
+    app.locals.heroSlidesDirectory = uploadDirectory;
+    slideId = (await database.runtimeAdapter.query(
+      `INSERT INTO hero_slides (image_path, image_mime, alt_text, sort_order, is_active)
+       VALUES ($1, 'image/png', 'Neon integration slide', 5, TRUE) RETURNING id`,
+      [imageName],
+    )).rows[0].id;
+
     const slidesResponse = await fetch(`${baseUrl}/hero-slides`);
     assert.equal(slidesResponse.status, 200);
     assert.match(slidesResponse.headers.get('cache-control'), /max-age=60/);
@@ -28,6 +45,10 @@ test('Neon PostgreSQL homepage hero slides and statistics APIs', {
       assert.equal(slide.imageUrl, `/api/hero-slides/${slide.id}/image`);
       assert.equal(typeof slide.altText, 'string');
     }
+
+    const imageResponse = await fetch(`${baseUrl}/hero-slides/${slideId}/image`);
+    assert.equal(imageResponse.status, 200);
+    assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), imageBytes);
 
     const invalidImage = await fetch(`${baseUrl}/hero-slides/not-an-id/image`);
     assert.equal(invalidImage.status, 404);
@@ -57,8 +78,13 @@ test('Neon PostgreSQL homepage hero slides and statistics APIs', {
     assert.equal(Number(statistics.confirmedOrCompletedBookingCount), Number(expected.rows[0].bookings));
     assert.equal(Number(statistics.completedBookingCount), Number(expected.rows[0].completed));
   } finally {
-    server.close();
-    await once(server, 'close');
-    await database.close();
+    try {
+      server.close();
+      await once(server, 'close');
+      if (slideId) await database.runtimeAdapter.query('DELETE FROM hero_slides WHERE id = $1', [slideId]);
+      if (uploadDirectory) await rm(uploadDirectory, { recursive: true, force: true });
+    } finally {
+      await database.close();
+    }
   }
 });

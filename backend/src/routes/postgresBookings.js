@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { loadSystemSettings } from '../lib/systemSettings.js';
 import { mapBookingRecord } from '../lib/marketplace.js';
+import { mapDatabaseEvent } from '../lib/eventCatalog.js';
 import { createBookingSnapshot } from '../lib/bookingRules.js';
 import {
   checkBookingDateAvailability,
@@ -17,6 +19,11 @@ import {
   createPostgresRefundRequest,
   isSafePostgresFinancialNote,
 } from '../lib/postgresPaymentManagement.js';
+import {
+  complaintAttachmentParser,
+  sanitizeComplaintAttachmentName,
+  validateComplaintAttachment,
+} from '../lib/complaintAttachments.js';
 
 const activeBookingStatuses = ['requested', 'under_review', 'quoted', 'accepted', 'confirmed', 'in_progress'];
 const reservedBookingStatuses = ['accepted', 'confirmed', 'in_progress'];
@@ -110,6 +117,10 @@ function mapQuote(row) {
 }
 
 function createPostgresPlatformRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/bookings', requirePlatformUser, asyncHandler(async (req, res) => {
@@ -145,6 +156,25 @@ function createPostgresPlatformRouter({ database }) {
       ));
     }
     return res.json({ data: rows.map(mapBookingRecord) });
+  }));
+
+  router.get('/events/mine', requirePlatformUser, asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT id, title, event_type, description, city, venue, cover_image_url,
+              gallery_images, start_date, end_date, budget, guest_count, capacity,
+              notes, status, published_at, created_at
+       FROM events
+       WHERE organizer_id = $1
+       ORDER BY start_date DESC, id DESC`,
+      [req.platformUser.id],
+    );
+    return res.json({
+      data: rowsOf(result).map((row) => ({
+        ...mapDatabaseEvent(row),
+        notes: row.notes || '',
+        guestCount: row.guest_count === null ? null : Number(row.guest_count),
+      })),
+    });
   }));
 
   router.post('/bookings', requirePlatformUser, asyncHandler(async (req, res) => {
@@ -533,6 +563,10 @@ function createPostgresPlatformRouter({ database }) {
 }
 
 function createPostgresCustomerRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/overview', requirePlatformUser, asyncHandler(async (req, res) => {
@@ -1276,10 +1310,199 @@ function createPostgresCustomerRouter({ database }) {
     });
     return res.json({ data: { id: id.data, status: parsed.data.status } });
   }));
+
+  router.get('/complaints', requirePlatformUser, asyncHandler(async (req, res) => {
+    const result = await database.query(
+      `SELECT c.id, c.booking_id, c.subject, c.details, c.status, c.resolution, c.created_at,
+              vp.business_name AS vendor_name
+       FROM complaints c LEFT JOIN bookings b ON b.id = c.booking_id
+       LEFT JOIN vendor_profiles vp ON vp.id = b.vendor_id
+       WHERE c.user_id = $1 ORDER BY c.created_at DESC LIMIT 100`,
+      [req.platformUser.id],
+    );
+    return res.json({ success: true, data: result.rows.map((row) => ({
+      ...row,
+      id: Number(row.id),
+      booking_id: row.booking_id === null ? null : Number(row.booking_id),
+      reference: `CMP-${String(row.id).padStart(6, '0')}`,
+    })) });
+  }));
+
+  router.post('/complaints', requirePlatformUser, asyncHandler(async (req, res) => {
+    const parsed = z.object({
+      bookingId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
+      subject: z.string().trim().min(3).max(180),
+      details: z.string().trim().min(10).max(10000),
+    }).strict().safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Complaint details are invalid.' });
+    }
+
+    try {
+      const complaintId = await database.inTransaction(async (tx) => {
+        if (parsed.data.bookingId) {
+          const booking = await tx.query(
+            `SELECT b.id FROM bookings b JOIN events e ON e.id = b.event_id
+             WHERE b.id = $1 AND e.organizer_id = $2`,
+            [parsed.data.bookingId, req.platformUser.id],
+          );
+          if (!booking.rows[0]) throw httpError('Booking not found.', 404);
+        }
+
+        const inserted = await tx.query(
+          `INSERT INTO complaints (user_id, booking_id, subject, details, status)
+           VALUES ($1, $2, $3, $4, 'open') RETURNING id`,
+          [req.platformUser.id, parsed.data.bookingId || null, parsed.data.subject, parsed.data.details],
+        );
+        const id = Number(inserted.rows[0].id);
+        await tx.query(
+          `INSERT INTO complaint_history (complaint_id, actor_id, action, to_status)
+           VALUES ($1, $2, 'created', 'open')`,
+          [id, req.platformUser.id],
+        );
+        await audit(tx, req, {
+          actorId: req.platformUser.id,
+          action: 'complaint.created',
+          entityType: 'complaint',
+          entityId: id,
+          details: { bookingId: parsed.data.bookingId || null },
+        });
+
+        const settings = await loadSystemSettings(tx, ['notify_admin_complaints']);
+        if (settings.notify_admin_complaints) {
+          const administrators = await tx.query(
+            `SELECT DISTINCT u.id FROM users u
+             JOIN user_roles ur ON ur.user_id = u.id
+             JOIN roles r ON r.id = ur.role_id
+             WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE`,
+          );
+          for (const administrator of administrators.rows) {
+            await notify(tx, {
+              userId: administrator.id,
+              title: 'New customer complaint',
+              message: `Complaint CMP-${String(id).padStart(6, '0')} requires review.`,
+              type: 'complaint',
+              relatedType: 'complaint',
+              relatedId: id,
+              actorId: req.platformUser.id,
+              idempotencyKey: `complaint:${id}:${administrator.id}`,
+            });
+          }
+        }
+        return id;
+      });
+      return res.status(201).json({
+        success: true,
+        data: { id: complaintId, reference: `CMP-${String(complaintId).padStart(6, '0')}`, status: 'open' },
+      });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
+      throw error;
+    }
+  }));
+
+  router.get('/complaints/:id', requirePlatformUser, asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Complaint ID is invalid.' });
+    const complaint = await database.query(
+      `SELECT id, booking_id, subject, details, status, resolution, created_at
+       FROM complaints WHERE id = $1 AND user_id = $2`,
+      [id.data, req.platformUser.id],
+    );
+    const row = complaint.rows[0];
+    if (!row) return res.status(404).json({ error: 'Complaint not found.' });
+    const [attachments, history] = await Promise.all([
+      database.query(
+        `SELECT id, original_name, content_type, file_size, created_at
+         FROM complaint_attachments WHERE complaint_id = $1 ORDER BY id DESC`,
+        [id.data],
+      ),
+      database.query(
+        `SELECT action, from_status, to_status, reason, created_at
+         FROM complaint_history WHERE complaint_id = $1 ORDER BY id DESC`,
+        [id.data],
+      ),
+    ]);
+    return res.json({ success: true, data: {
+      ...row,
+      id: Number(row.id),
+      booking_id: row.booking_id === null ? null : Number(row.booking_id),
+      reference: `CMP-${String(id.data).padStart(6, '0')}`,
+      attachments: attachments.rows.map((attachment) => ({ ...attachment, id: Number(attachment.id) })),
+      history: history.rows,
+    } });
+  }));
+
+  router.post('/complaints/:id/attachments', requirePlatformUser, complaintAttachmentParser, asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Complaint ID is invalid.' });
+    if (!Buffer.isBuffer(req.body)) return res.status(415).json({ error: 'Upload a PDF, JPEG, PNG, or WebP attachment.' });
+    const contentType = req.headers['content-type']?.split(';')[0]?.trim().toLowerCase();
+    const validation = validateComplaintAttachment(req.body, contentType);
+    if (!validation.valid) return res.status(400).json({ error: validation.error });
+
+    const created = await database.inTransaction(async (tx) => {
+      const complaint = await tx.query(
+        'SELECT id, status FROM complaints WHERE id = $1 AND user_id = $2 FOR UPDATE',
+        [id.data, req.platformUser.id],
+      );
+      if (!complaint.rows[0]) throw httpError('Complaint not found.', 404);
+      const inserted = await tx.query(
+        `INSERT INTO complaint_attachments
+         (complaint_id, uploaded_by, original_name, content_type, file_size, sha256, file_data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [id.data, req.platformUser.id, sanitizeComplaintAttachmentName(req.query.filename),
+          contentType, validation.fileSize, validation.sha256, req.body],
+      );
+      const attachmentId = Number(inserted.rows[0].id);
+      await tx.query(
+        `INSERT INTO complaint_history (complaint_id, actor_id, action, from_status, to_status, details)
+         VALUES ($1, $2, 'attachment_added', $3, $3, $4::jsonb)`,
+        [id.data, req.platformUser.id, complaint.rows[0].status,
+          JSON.stringify({ attachmentId, contentType, fileSize: validation.fileSize })],
+      );
+      await audit(tx, req, {
+        actorId: req.platformUser.id,
+        action: 'complaint.attachment_added',
+        entityType: 'complaint',
+        entityId: id.data,
+        details: { attachmentId, contentType, fileSize: validation.fileSize },
+      });
+      return attachmentId;
+    });
+    return res.status(201).json({ success: true, data: { id: created } });
+  }));
+
+  router.get('/complaints/:id/attachments/:attachmentId', requirePlatformUser, asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    const attachmentId = z.coerce.number().int().positive().safeParse(req.params.attachmentId);
+    if (!id.success || !attachmentId.success) return res.status(400).json({ error: 'Attachment ID is invalid.' });
+    const result = await database.query(
+      `SELECT a.original_name, a.content_type, a.file_size, a.file_data
+       FROM complaint_attachments a JOIN complaints c ON c.id = a.complaint_id
+       WHERE a.id = $1 AND c.id = $2 AND c.user_id = $3`,
+      [attachmentId.data, id.data, req.platformUser.id],
+    );
+    const file = result.rows[0];
+    if (!file) return res.status(404).json({ error: 'Attachment not found.' });
+    res.set({
+      'Content-Type': file.content_type,
+      'Content-Length': file.file_size,
+      'Content-Disposition': `attachment; filename="${sanitizeComplaintAttachmentName(file.original_name)}"`,
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.send(file.file_data);
+  }));
+
   return router;
 }
 
 function createPostgresVendorRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   async function ownVendor(req) {
@@ -1485,9 +1708,13 @@ function createPostgresVendorRouter({ database }) {
 }
 
 export function createPostgresBookingRouters({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   return {
-    platform: createPostgresPlatformRouter({ database }),
-    customer: createPostgresCustomerRouter({ database }),
-    vendor: createPostgresVendorRouter({ database }),
+    platform: createPostgresPlatformRouter({ database: normalizedDatabase }),
+    customer: createPostgresCustomerRouter({ database: normalizedDatabase }),
+    vendor: createPostgresVendorRouter({ database: normalizedDatabase }),
   };
 }

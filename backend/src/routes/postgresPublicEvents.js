@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { buildEventFilters, mapDatabaseEvent } from '../lib/eventCatalog.js';
 import { isValidCategoryName } from '../lib/categoryName.js';
 
@@ -182,6 +183,10 @@ function buildListing(raw = {}) {
 }
 
 export function createPostgresPublicEventsRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/events', async (req, res, next) => {

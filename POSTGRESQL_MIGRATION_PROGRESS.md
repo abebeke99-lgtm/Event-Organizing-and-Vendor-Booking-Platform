@@ -15,7 +15,7 @@ The post-runtime configuration and test validation used Node `v20.20.2`. Environ
 | Frontend production build | Passed with compile-only `https://api.example.invalid/api`; the production API URL remains unset and is required at deployment/build time |
 | Production access | None; no production database connection or migration was attempted |
 
-This validates the MySQL and PostgreSQL configuration paths independently, not full PostgreSQL feature parity. The current inventory has 1,068 call sites: 18 infrastructure calls, 12 authentication call sites verified on isolated Neon, and 1,038 application calls not certified. A historical full-PostgreSQL-mode diagnostic had 184 failures; those legacy-path incompatibilities remain unresolved.
+This validates the MySQL and PostgreSQL configuration paths independently, not full PostgreSQL feature parity. The current inventory has 1,074 call sites: 18 infrastructure calls, 18 application call sites verified on isolated Neon, and 1,038 application calls not certified. A historical full-PostgreSQL-mode diagnostic had 184 failures; those legacy-path incompatibilities remain unresolved.
 
 ## PostgreSQL Tooling Follow-up
 
@@ -42,6 +42,7 @@ This validates the MySQL and PostgreSQL configuration paths independently, not f
 - Normalized PostgreSQL dialect selection across startup, the runtime pool, and app routing; invalid dialect values now fail closed instead of silently constructing a MySQL pool.
 - Regenerated `docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv`.
 - Added isolated Neon API integration coverage for PostgreSQL authentication: registration/rollback, customer and vendor login, sessions, notifications/history, `/me`, role redirect, logout, and vendor profile upsert. Added explicit source-location certification metadata for 12 inventory call sites; no authentication SQL source conversion was needed.
+- Added PostgreSQL customer profile read/update and password-change routes, including transactional auditing and invalidation of other user sessions. Isolated Neon integration verifies the six query call sites, wrong-password behavior, profile validation, and successful login only with the changed password. Legacy MySQL customer routes remain unchanged.
 
 ## Current Evidence
 
@@ -51,6 +52,8 @@ This validates the MySQL and PostgreSQL configuration paths independently, not f
 | Neon runtime/direct connectivity | Read-only check passed for both endpoints with certificate-verified TLS, DNS resolution, `SELECT 1`, expected database identity, and successful pool shutdown |
 | Database driver installation | `pg@8.23.1` and `mysql2@3.24.6` are installed |
 | Focused database configuration, adapter, retry, and startup tests | 75 passed, 0 failed |
+| Focused customer/auth regression tests | 34 passed, 0 failed |
+| Latest auth/customer-account Neon integration | 1 passed, 0 failed, 0 skipped |
 | Neon pooled/direct concurrency and cleanup | 186 queries passed; each pool capped at 2 clients with 0 active and 0 waiting clients after each run |
 | Local MySQL connection | Not available: the guarded loopback-only `SELECT 1` check returned `ECONNREFUSED`; MySQL configuration/TLS unit tests pass |
 | PostgreSQL migrations + live payment suite | 10 passed, 0 failed, 0 skipped |
@@ -63,7 +66,7 @@ This validates the MySQL and PostgreSQL configuration paths independently, not f
 | Backend suite forced globally into PostgreSQL mode | Earlier diagnostic: 446 total, 252 passed, 184 failed, 10 skipped; legacy tests/routes remain incompatible with global PostgreSQL mode |
 | Frontend tests | 172 passed, 0 failed |
 | Production Vite build | Passed with compile-only `https://api.example.invalid/api`; not a real deployment URL |
-| Query inventory | 1068 total calls, 18 infrastructure, 12 authentication call sites verified on isolated Neon, 1038 application calls not certified |
+| Query inventory | 1074 total calls, 18 infrastructure, 18 auth/customer-account call sites verified on isolated Neon, 1038 application calls not certified |
 
 The prior 11 vendor-public failures were caused by tests using the default MySQL pool and fixtures; those tests now pass against Neon without a local MySQL server. The 490-test suite used `DB_DIALECT=mysql` for legacy-mode tests and explicitly enabled the guarded Neon integrations; it is not proof that the full application can run in PostgreSQL-only mode. Node 20 validation is summarized above. The earlier global-PostgreSQL diagnostic still shows 184 failures in legacy paths and remains migration work.
 
@@ -71,7 +74,7 @@ The prior 11 vendor-public failures were caused by tests using the default MySQL
 
 - Convert and live-test all other application feature groups, especially administrator/event/vendor/customer/organizer operations, messaging, and remaining settings/security/payment-adjacent routes.
 - Reconcile all 51 PostgreSQL tables semantically with the legacy schema and all 40 MySQL migrations; table/FK/index counts alone are insufficient.
-- Continue certifying individual query call sites only after behavior-specific PostgreSQL tests; only 12 PostgreSQL authentication call sites are explicitly certified in the inventory so far.
+- Continue certifying individual query call sites only after behavior-specific PostgreSQL tests; only 18 PostgreSQL authentication/customer-account call sites are explicitly certified in the inventory so far.
 - Investigate and resolve the 184 failures from the earlier global-PostgreSQL diagnostic; retain the exact test environment when comparing runs.
 - Replace MySQL runtime defaults/deployment variables only after full feature parity and regression evidence. `render.yaml` and `DEPLOYMENT.md` remain MySQL-oriented.
 - Keep the `mysql2` dependency and MySQL implementations until PostgreSQL parity is verified; the local MySQL service was unavailable during this validation.

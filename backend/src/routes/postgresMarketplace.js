@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { normalizeDatabaseAdapter } from '../db.js';
 import { getPublicServiceById } from '../lib/serviceCatalog.js';
 import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
 import { listPublicServices } from '../lib/serviceCatalog.js';
@@ -65,6 +66,10 @@ const serviceFiltersSchema = z.object({
 });
 
 export function createPostgresMarketplaceRouter({ database }) {
+  const normalizedDatabase = normalizeDatabaseAdapter(database);
+  if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
   const router = Router();
 
   router.get('/categories', async (req, res, next) => {
