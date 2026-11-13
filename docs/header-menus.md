@@ -50,13 +50,19 @@ implementation.
 
 | Menu item label | Route and query parameters | Static or loaded from the database (and API endpoint) | File and line where it is defined | Translation key(s) | Route exists? | Target applies URL filter? |
 |---|---|---|---|---|---|---|
-| Six highest-count categories | `/categories/<slug>` | Database-backed via `/api/platform/categories`; ordered by `vendorCount + serviceCount`, up to six; optional category image shown as an icon | `frontend/src/publicNavigationUtils.js:39-44, 61`; path built by `categoryLink` at `:1-27` | API name passed through `translateText`; known category names resolve to existing keys | Yes | Not applicable; opens the category detail page by slug |
-| View All Categories | `/categories` | Static | `frontend/src/publicNavigationUtils.js:62` | `publicNavViewAllCategories` | Yes | Not applicable; no filter |
+| Event category | `/events?category=<event-category-slug>` | Database-backed event taxonomy via `/api/platform/events/categories`; category counts reflect public events | `frontend/src/publicNavigationUtils.js`; path built by `categoryLink` at `:1-27` | Event category translation keys; unknown names retain API text | Yes | Yes; filters the Events listing |
+| View All Categories | `/categories` | Static; the page loads the same event taxonomy from `/api/platform/events/categories` | `frontend/src/publicNavigationUtils.js` | `publicNavViewAllCategories` | Yes | No; lists event categories |
+
+Service categories remain separate: the Services menu and service-category
+listing use `/api/platform/categories`. Service-category detail pages use
+`/service-categories/<slug>`; the legacy `/categories/<slug>` detail URL remains
+available for existing links.
 
 ### About Us
 
 | Menu item label | Route and query parameters | Static or loaded from the database (and API endpoint) | File and line where it is defined | Translation key(s) | Route exists? | Target applies URL filter? |
 |---|---|---|---|---|---|---|
+| About Us overview | `/about` | Static | `frontend/src/publicNavigationUtils.js` | `nav.aboutUs` | Yes | No; renders the About overview |
 | Our Mission & Vision | `/about/mission-vision` | Static | `frontend/src/publicNavigationUtils.js` | `nav.about.missionVision` | Yes | No; renders only this view |
 | How EventHub Works | `/about/how-it-works` | Static | `frontend/src/publicNavigationUtils.js` | `nav.about.howItWorks` | Yes | No; renders only this view |
 | Why Choose EventHub | `/about/why-choose` | Static | `frontend/src/publicNavigationUtils.js` | `nav.about.whyChoose` | Yes | No; renders only this view |
@@ -65,10 +71,10 @@ implementation.
 | Success Stories | `/about/success-stories` | Static | `frontend/src/publicNavigationUtils.js` | `nav.about.successStories` | Yes | No; renders only this view |
 | FAQs | `/about/faqs` | Static | `frontend/src/publicNavigationUtils.js` | `nav.about.faqs` | Yes | No; renders only this view |
 
-The About Us top-level button opens the dropdown and stays active on all seven
-About routes. Each entry navigates directly to a dedicated view; `/about`
-redirects to `/about/mission-vision`. Every view includes the shared closing
-call to action.
+The About Us label navigates to the overview, while its adjacent menu control
+opens the existing submenu. The overview and each About child route render
+directly and remain refreshable; Mission and Vision remains available in the
+submenu. Every view includes the shared closing call to action.
 
 Events has at most eight links (three static plus five categories); Find Vendors
 and Services have at most seven each; Categories has seven; About Us has seven
@@ -84,9 +90,10 @@ open individual category pages.
 | `/events` and `status`/`category` query links | Events listing | Existing page reads the supported query values and applies them through `/api/platform/events`. |
 | `/vendors?category=...` | Vendor listing | Existing page reads the category and queries `/api/platform/vendors`. |
 | `/services?category=...` | Service listing | Existing page reads the category and queries `/api/platform/services`. |
-| `/categories` and `/categories/:slug` | Category list and detail pages | Both routes exist; category detail links use the API slug. |
-| `/about` and `/about/<view>` | `/about` replaces to `/about/mission-vision`; each child path renders only its own view | The shared About content is loaded from the existing `/about` API. |
-| `/help`, `/contact`, `/privacy`, `/terms` | Corresponding public pages | Routes exist. FAQ and Booking Guide still share the generic `/help` destination; they do not have distinct pages or anchors. |
+| `/categories` | Event category list | Uses `/api/platform/events/categories`; cards filter `/events?category=...`. |
+| `/service-categories` and `/service-categories/:slug` | Service category list and detail pages | Uses `/api/platform/categories`; service filters remain separate from event categories. |
+| `/about` and `/about/<view>` | `/about` renders the overview; each child path renders only its own view | The shared About content is loaded from the existing `/about` API. |
+| `/help`, `/contact`, `/privacy`, `/terms`, `/cookie-policy`, `/refund-policy` | Corresponding public pages | Routes exist. FAQ and Booking Guide still share the generic `/help` destination; they do not have distinct pages or anchors. |
 
 No final menu item links to a missing route, and the Events, Vendors, and
 Services filters used by the menus are applied by their target pages. The former

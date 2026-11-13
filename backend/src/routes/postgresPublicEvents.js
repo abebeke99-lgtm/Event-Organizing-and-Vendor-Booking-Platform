@@ -2,7 +2,6 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { normalizeDatabaseAdapter } from '../db.js';
 import { buildEventFilters, mapDatabaseEvent } from '../lib/eventCatalog.js';
-import { isValidCategoryName } from '../lib/categoryName.js';
 
 const publicStatuses = `e.status IN ('active', 'published', 'upcoming', 'open', 'booked', 'in_progress')
   OR (e.status = 'completed' AND e.published_at IS NOT NULL)`;
@@ -40,11 +39,31 @@ const eventSelect = `SELECT e.id, e.title, e.event_type, e.description, e.notes,
   t.starting_price, COALESCE(t.available_quantity, 0) AS available_quantity,
   COALESCE(t.free_available_quantity, 0) AS free_available_quantity
   ${eventFrom}`;
-const categoryNames = [
-  'wedding', 'birthday', 'graduation', 'conference', 'corporate events',
-  'concerts & music', 'festivals', 'religious events', 'cultural events',
-  'workshops & training', 'sports events', 'exhibitions',
+const eventCategoryDefinitions = [
+  { name: 'Wedding', slug: 'wedding', eventTypes: ['wedding'] },
+  { name: 'Birthday', slug: 'birthday', eventTypes: ['birthday'] },
+  { name: 'Graduation', slug: 'graduation', eventTypes: ['graduation'] },
+  { name: 'Conference', slug: 'conference', eventTypes: ['conference'] },
+  { name: 'Corporate Events', slug: 'corporate-events', eventTypes: ['corporate events'] },
+  { name: 'Concerts & Music', slug: 'concerts-music', eventTypes: ['concerts & music', 'music'] },
+  { name: 'Festivals', slug: 'festivals', eventTypes: ['festival', 'festivals'] },
+  { name: 'Religious Events', slug: 'religious-events', eventTypes: ['religious events'] },
+  { name: 'Cultural Events', slug: 'cultural-events', eventTypes: ['cultural events'] },
+  { name: 'Workshops & Training', slug: 'workshops-training', eventTypes: ['workshops & training'] },
+  { name: 'Sports Events', slug: 'sports-events', eventTypes: ['sports events'] },
+  { name: 'Exhibitions', slug: 'exhibitions', eventTypes: ['exhibitions'] },
 ];
+const eventCategoryValues = eventCategoryDefinitions.map((category, index) => {
+  const quote = (value) => `'${value.replace(/'/g, "''")}'`;
+  const aliases = category.eventTypes.map(quote).join(', ');
+  return `(${index + 1}, ${quote(category.name)}, ${quote(category.slug)}, ARRAY[${aliases}]::text[])`;
+}).join(',\n');
+
+function resolveEventCategory(value) {
+  const slug = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return eventCategoryDefinitions.find((category) => category.slug === slug
+    || category.eventTypes.some((eventType) => eventType.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') === slug));
+}
 
 const dateOnlySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((value) => {
   const date = new Date(`${value}T00:00:00Z`);
@@ -96,11 +115,10 @@ function buildListing(raw = {}) {
       OR u.full_name ILIKE ${marker} ESCAPE '!')`);
   }
   if (options.category) {
-    conditions.push(/^\d+$/.test(options.category) && Number.isSafeInteger(Number(options.category))
-      ? `EXISTS (SELECT 1 FROM service_categories sc
-          WHERE sc.id = ${bind(Number(options.category))} AND sc.is_active = TRUE
-            AND LOWER(TRIM(e.event_type)) = LOWER(TRIM(sc.name)))`
-      : `LOWER(e.event_type) = LOWER(${bind(options.category)})`);
+    const category = resolveEventCategory(options.category);
+    conditions.push(category
+      ? `LOWER(TRIM(e.event_type)) = ANY(${bind(category.eventTypes)}::text[])`
+      : `LOWER(TRIM(e.event_type)) = LOWER(TRIM(${bind(options.category)}))`);
   }
   if (options.filter === 'featured') conditions.push('e.is_featured = TRUE');
   if (options.location) {
@@ -201,13 +219,6 @@ export function createPostgresPublicEventsRouter({ database }) {
           ? ''
           : parsed.data.filter || ''),
       };
-      if (filters.category && !/^\d+$/.test(filters.category)) {
-        const categories = await database.query('SELECT id, name FROM service_categories WHERE is_active = TRUE');
-        const slug = filters.category.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-        const category = categories.rows.find((row) => row.name.toLowerCase() === filters.category.toLowerCase()
-          || row.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') === slug);
-        filters.category = category ? String(category.id) : filters.category;
-      }
       const listing = buildListing(filters);
       const countFrom = listing.requiresTicketData ? eventFrom : 'FROM events e JOIN users u ON u.id = e.organizer_id';
       const count = await database.query(`SELECT COUNT(*) AS total ${countFrom} ${listing.where}`, listing.params);
@@ -244,22 +255,20 @@ export function createPostgresPublicEventsRouter({ database }) {
   router.get('/events/categories', async (_req, res, next) => {
     try {
       const rows = await database.query(
-        `SELECT sc.id, sc.name, sc.description, sc.display_order, sc.image_mime, COUNT(e.id) AS total
-         FROM service_categories sc
-         LEFT JOIN events e ON LOWER(TRIM(e.event_type)) = LOWER(TRIM(sc.name))
+        `SELECT category.display_order, category.name, category.slug, COUNT(e.id) AS total
+         FROM (VALUES ${eventCategoryValues}) AS category(display_order, name, slug, event_types)
+         LEFT JOIN events e ON LOWER(TRIM(e.event_type)) = ANY(category.event_types)
            AND (${publicStatuses})
-         WHERE sc.is_active = TRUE AND LOWER(sc.name) = ANY($1::text[])
-         GROUP BY sc.id
-         ORDER BY ARRAY_POSITION($1::text[], LOWER(sc.name)), sc.id ASC`,
-        [categoryNames],
+         GROUP BY category.display_order, category.name, category.slug
+         ORDER BY category.display_order ASC`,
       );
       return res.json({
-        data: rows.rows.filter((row) => isValidCategoryName(row.name)).map((row) => ({
-          id: Number(row.id),
+        data: rows.rows.map((row) => ({
+          id: row.slug,
           name: row.name,
-          slug: row.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-          description: row.description || '',
-          image: row.image_mime ? `/api/platform/categories/${Number(row.id)}/image` : null,
+          slug: row.slug,
+          description: '',
+          image: null,
           total: Number(row.total || 0),
           displayOrder: Number(row.display_order),
         })),

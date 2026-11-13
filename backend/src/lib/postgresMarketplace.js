@@ -1,4 +1,4 @@
-import { isValidCategoryName } from './categoryName.js';
+import { isPublicCategoryName } from './categoryName.js';
 import { mapService, mapVendor, normalizeKey } from './marketplace.js';
 
 function parseJson(value) {
@@ -33,7 +33,12 @@ export async function loadPostgresPublicServices(database) {
        AND (s.category_id IS NULL OR sc.id IS NOT NULL)
      ORDER BY s.id ASC`,
   );
-  const services = result.rows.filter((row) => row.verification_status === 'verified').map(mapService);
+  const services = result.rows.filter((row) => row.verification_status === 'verified').map((row) => (
+    mapService({
+      ...row,
+      category: isPublicCategoryName(row.category) ? row.category : null,
+    })
+  ));
   if (!services.length) return services;
 
   const ids = services.map((service) => service.id);
@@ -141,7 +146,10 @@ export async function loadPostgresPublicVendors(database, services = null) {
     mediaByVendor.set(id, [...(mediaByVendor.get(id) || []), media]);
   }
   return result.rows.map((row) => mapVendor(
-    row,
+    {
+      ...row,
+      category: isPublicCategoryName(row.category) ? row.category : null,
+    },
     servicesByVendor.get(Number(row.id)) || [],
     mediaByVendor.get(Number(row.id)) || [],
   ));
@@ -154,7 +162,7 @@ export async function loadPostgresPublicMarketplace(database) {
     `SELECT id, name, service_menu_name, description, display_order, image_mime, is_active
      FROM service_categories WHERE is_active = TRUE ORDER BY display_order ASC, name ASC`,
   );
-  const categories = result.rows.filter((row) => isValidCategoryName(row.name)).map((row) => {
+  const categories = result.rows.filter((row) => isPublicCategoryName(row.name)).map((row) => {
     const key = normalizeKey(row.name);
     return {
       id: Number(row.id),

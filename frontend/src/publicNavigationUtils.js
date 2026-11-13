@@ -184,6 +184,7 @@ export function buildPublicNavigationMenu(categories = [], eventCategories = [],
       label: 'About Us',
       translationKey: 'nav.aboutUs',
       path: '/about',
+      labelLink: true,
       children: [
         { key: 'about-mission-vision', label: 'Our Mission & Vision', translationKey: 'nav.about.missionVision', path: '/about/mission-vision' },
         { key: 'about-how-it-works', label: 'How EventHub Works', translationKey: 'nav.about.howItWorks', path: '/about/how-it-works' },

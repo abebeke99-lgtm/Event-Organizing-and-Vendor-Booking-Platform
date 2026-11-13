@@ -13,17 +13,11 @@ services:
         value: production
       - key: WEB_ORIGIN
         value: https://infobekele.netlify.app
+      - key: DB_DIALECT
+        value: postgres
       - key: DATABASE_URL
         sync: false
-      - key: DB_HOST
-        sync: false
-      - key: DB_PORT
-        sync: false
-      - key: DB_NAME
-        sync: false
-      - key: DB_USER
-        sync: false
-      - key: DB_PASSWORD
+      - key: DIRECT_URL
         sync: false
       - key: DB_SSL
         value: "true"
@@ -43,6 +37,30 @@ services:
         value: none
       - key: FRONTEND_URL
         value: https://infobekele.netlify.app
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALLBACK_URL
+        sync: false
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: FACEBOOK_CALLBACK_URL
+        sync: false
+      - key: FACEBOOK_GRAPH_API_VERSION
+        sync: false
+      - key: APPLE_SERVICE_ID
+        sync: false
+      - key: APPLE_TEAM_ID
+        sync: false
+      - key: APPLE_KEY_ID
+        sync: false
+      - key: APPLE_PRIVATE_KEY
+        sync: false
+      - key: APPLE_CALLBACK_URL
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

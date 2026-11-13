@@ -32,6 +32,35 @@ test('navigation feature labels are translated in English and Amharic', () => {
   assert.equal(translateText('Help & Support', 'am'), 'እገዛ እና ድጋፍ');
 });
 
+test('social login labels and authentication feedback are localized', () => {
+  assert.deepEqual(
+    ['oauthContinueGoogle', 'oauthContinueFacebook', 'oauthContinueApple', 'oauthOrContinue',
+      'oauthAuthenticationFailed', 'oauthPleaseTryAgain', 'oauthCheckingAvailability',
+      'oauthGoogleNotConfigured', 'oauthFacebookNotConfigured', 'oauthAppleNotConfigured',
+      'oauthServiceUnreachable', 'oauthDiscoveryFailed', 'oauthProviderResponseInvalid', 'oauthRetry']
+      .map((key) => translate(key, 'en')),
+    ['Continue with Google', 'Continue with Facebook', 'Continue with Apple', 'OR CONTINUE WITH',
+      'Authentication failed.', 'Please try again.', 'Checking social login availability...',
+      'Google sign-in is not configured.', 'Facebook sign-in is not configured.', 'Apple sign-in is not configured.',
+      'Social login service is temporarily unreachable.', 'The server could not check social login availability.',
+      'The server returned an invalid social login status.', 'Retry'],
+  );
+  assert.deepEqual(
+    ['oauthContinueGoogle', 'oauthContinueFacebook', 'oauthContinueApple', 'oauthOrContinue',
+      'oauthAuthenticationFailed', 'oauthPleaseTryAgain', 'oauthCheckingAvailability',
+      'oauthGoogleNotConfigured', 'oauthFacebookNotConfigured', 'oauthAppleNotConfigured',
+      'oauthServiceUnreachable', 'oauthDiscoveryFailed', 'oauthProviderResponseInvalid', 'oauthRetry']
+      .map((key) => translate(key, 'am')),
+    ['በGoogle ይቀጥሉ', 'በFacebook ይቀጥሉ', 'በApple ይቀጥሉ', 'ወይም በ',
+      'የመግባት ሂደቱ አልተሳካም።', 'እባክዎ እንደገና ይሞክሩ።',
+      'የማህበራዊ መግቢያ አቅርቦትን በመፈተሽ ላይ...',
+      'የGoogle መግቢያ አልተዋቀረም።', 'የFacebook መግቢያ አልተዋቀረም።',
+      'የApple መግቢያ አልተዋቀረም።', 'የማህበራዊ መግቢያ አገልግሎት ለጊዜው አይደረስበትም።',
+      'አገልጋዩ የማህበራዊ መግቢያ አቅርቦትን መፈተሽ አልቻለም።',
+      'አገልጋዩ የተሳሳተ የማህበራዊ መግቢያ ሁኔታ መልሷል።', 'እንደገና ሞክር'],
+  );
+});
+
 test('AI chat labels are translated in English and Amharic', () => {
   assert.equal(translate('aiChatAssistant', 'en'), 'AI Assistant');
   assert.equal(translate('aiChatAssistant', 'am'), 'የAI ረዳት');
@@ -71,6 +100,24 @@ test('About page values are translated in English and Amharic', () => {
     ['trustTransparency', 'qualityService', 'customerSatisfaction'].map((key) => translate(key, 'am')),
     ['እምነት እና ግልጽነት', 'ጥራት ያለው አገልግሎት', 'የደንበኛ እርካታ'],
   );
+});
+
+test('cookie and refund policy content is localized in English and Amharic', () => {
+  const keys = [
+    'cookiePolicyLabel', 'cookiePolicyHeading', 'cookiePolicyIntro',
+    'cookiePolicySessionsTitle', 'cookiePolicySessionsCopy',
+    'cookiePolicyPreferencesTitle', 'cookiePolicyPreferencesCopy',
+    'cookiePolicyControlsTitle', 'cookiePolicyControlsCopy',
+    'refundPolicyLabel', 'refundPolicyHeading', 'refundPolicyIntro',
+    'refundPolicyEligibilityTitle', 'refundPolicyEligibilityCopy',
+    'refundPolicyRequestsTitle', 'refundPolicyRequestsCopy',
+    'refundPolicyProcessingTitle', 'refundPolicyProcessingCopy',
+  ];
+  for (const key of keys) {
+    assert.notEqual(translate(key, 'en'), key);
+    assert.notEqual(translate(key, 'am'), key);
+    assert.notEqual(translate(key, 'am'), translate(key, 'en'));
+  }
 });
 
 test('translates exact interface phrases and falls back for missing keys', () => {

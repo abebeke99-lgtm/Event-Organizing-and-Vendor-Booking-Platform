@@ -217,6 +217,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       overviewResult,
       roleUsersResponse,
       matrixResponse,
+      permissionsResponse,
       rolePermissionsResponse,
       organizerPermissionsResult,
     ] = await Promise.all([
@@ -224,6 +225,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       overviewPromise,
       request(`/roles/${testRoleId}/users`),
       request('/rbac/matrix'),
+      request('/permissions'),
       request(`/roles/${testRoleId}/permissions`),
       database.runtimeAdapter.query(
         'SELECT id, permission_key FROM permissions WHERE permission_key = ANY($1::text[]) ORDER BY permission_key LIMIT 1',
@@ -253,6 +255,13 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
 
     assert.equal(matrixResponse.status, 200);
     assert.ok((await matrixResponse.json()).data.roles.admin.includes('users.view'));
+
+    assert.equal(permissionsResponse.status, 200);
+    const availablePermissions = (await permissionsResponse.json()).data;
+    assert.ok(availablePermissions.length > 0);
+    assert.ok(availablePermissions.every((permission) => (
+      permission.permission_key && typeof permission.module === 'string' && typeof permission.action === 'string'
+    )));
 
     assert.equal(rolePermissionsResponse.status, 200);
     assert.deepEqual((await rolePermissionsResponse.json()).data.permission_keys, []);

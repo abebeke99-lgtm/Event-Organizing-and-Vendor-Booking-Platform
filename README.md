@@ -64,10 +64,9 @@ The booking logic is enforced in the backend with explicit transition checks so 
 
 ### Data layer
 
-- MySQL is the configured database, accessed through `mysql2`.
-- PostgreSQL can be selected explicitly with `DB_DIALECT=postgres` and a pooled Neon `DATABASE_URL`. Runtime PostgreSQL connections use a bounded pool and verify TLS certificates; set `DB_SSL=false` only for local, non-production PostgreSQL. `DIRECT_URL` is reserved for migration commands and is not used by the API. Non-production backend startup (`npm start` or `npm run dev`) uses the guarded local `.env.neon-test` configuration and explicitly selects PostgreSQL; production startup uses its configured dialect. MySQL remains the default for other contexts when `DB_DIALECT` is unset, and invalid dialect values are rejected.
-- Admin and platform authentication, public marketplace listings, and customer/vendor dashboard reads are backed by MySQL. Event creation now stores organizer-owned draft events transactionally with an audit record. Some dashboard controls and payment-provider workflows remain incomplete; payment records do not represent a real payment integration.
-- Configure either `DATABASE_URL` or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true`; certificate verification remains enabled, with an optional provider CA in `DB_SSL_CA` or `DB_SSL_CA_BASE64`.
+- The application runtime and migration commands use Neon PostgreSQL only. Set `DB_DIALECT=postgres` and a Neon pooled `DATABASE_URL`; set `DIRECT_URL` to the matching Neon direct endpoint for migrations. Both require TLS, and the backend verifies certificates. MySQL dialect selection and non-Neon PostgreSQL URLs are rejected.
+- Non-production backend startup (`npm start` or `npm run dev`) loads the isolated `backend/.env.neon-test` configuration when no explicit dialect is configured. Production startup requires its Neon PostgreSQL connection settings. Do not configure database URLs in frontend environment variables.
+- PostgreSQL route coverage varies by feature; do not infer implementation from the presence of legacy route files or proposed API names. EventHub dashboard metrics are sourced from database queries, and a payment record is not proof of a real payment-provider transaction.
 
 ## Isolated dashboard benchmark accounts
 
@@ -77,7 +76,7 @@ Run `npm run setup:dashboard-benchmark-accounts` from `backend` only after verif
 
 ## EventHub AI Assistant
 
-The floating EventHub AI chat is available on public pages to visitors and signed-in users. Visitor-widget history is temporary and stored in the browser's current tab session. Signed-in customers, organizers, and vendors can also open **AI Assistant** from the account menu for persistent MySQL conversations scoped to their account; administrator conversation history is not enabled. The persistent chat streams responses through Server-Sent Events, while the public widget uses a bounded JSON response.
+The floating EventHub AI chat is available on public pages to visitors and signed-in users. Visitor-widget history is temporary and stored in the browser's current tab session. Signed-in customers, organizers, and vendors can also open **AI Assistant** from the account menu for persistent Neon PostgreSQL conversations scoped to their account; administrator conversation history is not enabled. The persistent chat streams responses through Server-Sent Events, while the public widget uses a bounded JSON response.
 
 The assistant reads published public events, active services, verified vendors, and active service categories through the existing catalogue services. It only receives public listing data and role context: it cannot read private bookings, payment details, other users' accounts, or vendor-only records. Booking/payment status explanations come from the platform's existing workflow states; there is no separate FAQ database table. The assistant is read-only and cannot submit or change bookings, quotations, payments, refunds, or accounts. Both chat paths use server-side prompt-injection safeguards and disclose no provider credentials.
 
@@ -98,11 +97,11 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 ### Render backend
 
 - Blueprint: the existing GitHub repository's `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
-- Required Render variables: `NODE_ENV=production`, `WEB_ORIGIN` (exact HTTPS frontend origin), `DB_SSL=true`, `COOKIE_SECURE=true`, `COOKIE_SAME_SITE=none`, and either `DATABASE_URL` or all five of `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD`. Render supplies `PORT`; Express binds to `0.0.0.0`. Set secrets only in the Render Dashboard.
+- Required Render variables: `NODE_ENV=production`, `WEB_ORIGIN` (exact HTTPS frontend origin), `DB_DIALECT=postgres`, Neon pooled `DATABASE_URL`, `DB_SSL=true`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Set secrets only in the Render Dashboard.
 - Optional Render variables: `DB_SSL_CA` or `DB_SSL_CA_BASE64` only if a provider CA is needed; `FRONTEND_URL` for email links; `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_SECURE` for password-reset email; `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS` for AI Assistant; `PAYMENT_PROVIDER_ADAPTER` only when a real payment adapter is configured; `PLATFORM_STATUS` and `MAINTENANCE_MODE` for explicit platform status overrides. Do not set `SESSION_SECRET`; it is reserved and unused. Do not create fake administrator accounts or run database initialization, migration, or seed commands against production.
 - To enable AI, configure the secret `OPENAI_API_KEY` in Render's **Environment** settings, then save and redeploy. Verify provider access with `GET /api/ai/health` and configuration with `GET /api/ai/status`. TLS certificate verification remains enabled, with Node's system CA store or the optional provider CA.
 - Hero slide files are stored under `backend/uploads/hero-slides`. Configure persistent shared storage for this directory in production (especially across deploys or multiple API instances); the database stores only generated filenames and the API serves the image bytes.
-- `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and returns HTTP 200 with `db: true` when MySQL is available, or HTTP 503 with `db: false` and a safe `reason` code when it is unavailable. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
+- `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and returns HTTP 200 with `db: true` when Neon PostgreSQL is available, or HTTP 503 with `db: false` and a safe `reason` code when it is unavailable. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
 - Run `npm run db:check` only in an environment configured with the real DB credentials and CA. It performs read-only checks and no schema/data changes.
 - Confirm deploy version at `/api/version`. To rebuild without cached artifacts, use **Clear build cache & deploy** in Render.
 
@@ -115,7 +114,7 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
 - After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.
 
-Run `.\scripts\check-deploy.ps1 -RenderUrl "https://<confirmed-render-service>.onrender.com"` from PowerShell to check live endpoint status, MySQL readiness, credentialed CORS, and compare the Render commit against local `git rev-parse HEAD`. The Render URL is required so the script does not assume an unverified service hostname; optionally pass `-NetlifyUrl` if the frontend origin differs.
+Run `.\scripts\check-deploy.ps1 -RenderUrl "https://<confirmed-render-service>.onrender.com"` from PowerShell to check live endpoint status, Neon PostgreSQL readiness, credentialed CORS, and compare the Render commit against local `git rev-parse HEAD`. The Render URL is required so the script does not assume an unverified service hostname; optionally pass `-NetlifyUrl` if the frontend origin differs.
 
 | Symptom | Likely cause | Dashboard action |
 |---|---|---|
@@ -257,7 +256,7 @@ The platform includes the requested features for:
 
 1. Use Node.js 20 and install dependencies from the repository root with `npm install`.
 2. API-backed authentication is the development default (`VITE_DEMO_AUTH=false`). To run the self-contained frontend demo, set `VITE_DEMO_AUTH=true` in `frontend/.env.development` or the frontend process environment. Demo registration and four predefined role logins need no API or database; the login page lists their mock credentials. Demo profiles and sample application records are stored in browser localStorage, while passwords and tokens are never stored there. Demo mode is limited to Vite development and is for UI testing only, not authorization or real data access.
-3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173`. For API-backed authentication, keep `VITE_DEMO_AUTH=false`, configure `VITE_API_URL`, and start the backend with `backend/.env` configured for a provisioned MySQL database.
+3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173`. For API-backed authentication, keep `VITE_DEMO_AUTH=false`, configure `VITE_API_URL`, and start the backend with `backend/.env.neon-test` configured for the isolated Neon test database (or use production Neon secrets only in the production environment).
 4. For a real backend, apply migrations with `npm run migrate` after configuring the database. Never enable demo authentication in production.
 
 ### Open the isolated Neon PostgreSQL database in VS Code
@@ -271,7 +270,7 @@ To connect to the isolated Neon test database:
 3. Use the pooled URL from `DATABASE_URL` for browsing and queries. Keep `DIRECT_URL` for the migration tooling. Enter the URL directly in the connection form; if the extension instead asks for separate fields, copy the host, database, and username locally from that URL and enter the password only when prompted.
 4. Keep TLS certificate verification enabled. Do not put database credentials in source files, `.vscode/settings.json`, screenshots, or chat. Do not run schema-changing SQL against production.
 
-This connection is for the isolated Neon test database only. Connecting to it from VS Code does not switch the application from its current MySQL production default.
+This connection is for the isolated Neon test database only. The backend runtime requires Neon PostgreSQL; do not connect production tooling to the isolated test database.
 
 ### Language and localization
 
@@ -286,7 +285,7 @@ Password reset uses a six-digit email OTP, a five-minute expiry, up to five veri
 
 Use SMTP credentials and a verified sender address issued by your email provider. Validate the backend SMTP connection with `npm run smtp:check` from the repository root; the command never prints credential values. TLS certificate verification remains enabled. When SMTP is missing, every valid request receives the same generic service-unavailable response and the backend logs a configuration warning without looking up accounts. Delivery failures are logged without email addresses or OTP values, and the undelivered code is invalidated. Apply migrations with `npm run migrate --prefix backend`; this includes `011_password_reset_otps.sql`. Successful resets revoke existing admin and platform sessions and do not sign users in automatically.
 
-For a real local reset flow, provision and start MySQL, configure `backend/.env` with valid database and SMTP settings, then run:
+For a real local reset flow, configure the isolated Neon test database and SMTP settings in ignored local environment files, then run:
 
 ```powershell
 npm run migrate --prefix backend
@@ -387,7 +386,7 @@ No payment provider is configured by default. In that state, records remain read
 
 Apply `019_reports_analytics.sql` with `npm run migrate`. The administrator Reports page and `GET /api/admin/reports?report=...` provide filtered, paginated database reports for users, vendors, events, bookings, payments, refunds, revenue, service categories, reviews, complaints, vendor performance, and booking outcomes. Use `period=today|last7|last30|monthly|yearly|custom`; custom ranges require `startDate` and `endDate` in `YYYY-MM-DD` form and may span up to 366 calendar days. Optional filters include `q`, `status`, `currency`, `categoryId`, `vendorId`, and `customerId`. Results include summary data, chart data, applied filters, timezone, and a generation timestamp.
 
-Set `platform_currency` to the platform's three-letter ISO 4217 currency code and `report_timezone` to an IANA timezone in Administrator > System Settings. Date boundaries are calculated in that timezone, including daylight-saving transitions. Ensure MySQL timezone conversion is available; revenue reporting returns an explicit service error if the configured timezone cannot be resolved by MySQL. Financial reports exclude failed and cancelled payments, count provider-confirmed captured payments as gross payments, deduct succeeded refunds, and keep each currency separate rather than applying an undocumented exchange rate. CSV exports use the same report filters and sort order as the page, are available at `GET /api/admin/reports/export`, and are capped at 10,000 rows; narrow the filters for larger reports. Both report viewing and financial-report exports are permission-protected. Export actions are written to the administrator audit log. PDF export is not provided because the existing stack has no PDF reporting dependency.
+Set `platform_currency` to the platform's three-letter ISO 4217 currency code and `report_timezone` to an IANA timezone in Administrator > System Settings. Date boundaries are calculated in that timezone, including daylight-saving transitions. Revenue reporting returns an explicit service error if the configured timezone cannot be resolved by PostgreSQL. Financial reports exclude failed and cancelled payments, count provider-confirmed captured payments as gross payments, deduct succeeded refunds, and keep each currency separate rather than applying an undocumented exchange rate. CSV exports use the same report filters and sort order as the page, are available at `GET /api/admin/reports/export`, and are capped at 10,000 rows; narrow the filters for larger reports. Both report viewing and financial-report exports are permission-protected. Export actions are written to the administrator audit log. PDF export is not provided because the existing stack has no PDF reporting dependency.
 
 ### Administrator system settings
 
@@ -419,7 +418,7 @@ For a production deployment, use:
 
 - HTTPS in front of the app
 - environment-based secrets and configuration
-- production MySQL or a managed relational database
+- Neon PostgreSQL
 - a real payment processor and notification service
 - migration-based database deployment and audit retention policy
 
@@ -701,7 +700,7 @@ This codebase provides a working foundation for the Event Organizing and Vendor 
 
 - Frontend: Vercel or Netlify
 - Backend: Dockerized Node.js app on AWS ECS, Azure App Service, or Render
-- Database: managed MySQL compatible with the current schema
+- Database: Neon PostgreSQL
 - Cache: Redis on AWS ElastiCache
 - Object storage: S3 or Cloud Storage
 - CDN: CloudFront or Azure CDN
@@ -711,7 +710,7 @@ This codebase provides a working foundation for the Event Organizing and Vendor 
 
 - User requests route to a web app frontend.
 - Frontend communicates with backend API.
-- API reads/writes to MySQL.
+- API reads/writes to Neon PostgreSQL.
 - Payment flows go through secure gateway endpoints.
 - Notifications are sent asynchronously through a message queue.
 

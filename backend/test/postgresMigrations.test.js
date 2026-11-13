@@ -28,6 +28,26 @@ test('standard migration command selects PostgreSQL and fails closed without its
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ECONNREFUSED|MySQL/);
 });
 
+test('standard migration command rejects MySQL rather than loading its migration path', () => {
+  const scriptPath = fileURLToPath(new URL('../scripts/migrate.js', import.meta.url));
+  const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
+  const result = spawnSync(process.execPath, [scriptPath], {
+    cwd: backendDirectory,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DB_DIALECT: 'mysql',
+      DATABASE_URL: '',
+      DIRECT_URL: '',
+      NODE_ENV: 'test',
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /DB_DIALECT must be postgres/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /mysql2|MySQL migration/);
+});
+
 test('isolated Neon migration script refuses to run without explicit target and authorization', () => {
   const scriptPath = fileURLToPath(new URL('../scripts/migrate-neon-test.js', import.meta.url));
   const backendDirectory = fileURLToPath(new URL('../', import.meta.url));

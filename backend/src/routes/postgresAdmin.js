@@ -5,6 +5,7 @@ import { normalizeDatabaseAdapter } from '../db.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
+import { createPostgresAdminProfileRouter } from './postgresAdminProfile.js';
 import {
   ASSIGNABLE_PLATFORM_ROLES,
   ROLE_PERMISSION_MATRIX,
@@ -60,6 +61,7 @@ export function createPostgresAdminRouter({ database }) {
   const router = Router();
 
   router.use(requireAdmin);
+  router.use(createPostgresAdminProfileRouter({ database }));
 
   router.get('/dashboard/overview', requirePermission('dashboard.view'), async (req, res, next) => {
     const isAuthenticatedAdmin = Boolean(req.admin || (req.user && req.user.role === 'admin') || (req.user && req.user.is_admin));
@@ -302,6 +304,22 @@ export function createPostgresAdminRouter({ database }) {
       },
     })
   ));
+
+  router.get('/permissions', requirePermission('roles.manage'), async (_req, res, next) => {
+    try {
+      const permissions = await database.query(
+        'SELECT permission_key, description FROM permissions ORDER BY permission_key',
+      );
+      return res.json({
+        data: permissions.rows.map((permission) => ({
+          ...permission,
+          ...describePermission(permission.permission_key),
+        })),
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   router.get('/roles/:id/permissions', requirePermission('roles.permissions.manage'), async (req, res, next) => {
     const roleId = userIdSchema.safeParse(req.params.id);

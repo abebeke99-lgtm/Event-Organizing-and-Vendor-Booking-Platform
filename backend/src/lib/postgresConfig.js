@@ -42,7 +42,7 @@ export function getPostgresConfigurationErrors(environment = process.env, {
     }
 
     try {
-      const url = parsePostgresConnectionUrl(value, name, { requireNeon: expectedDatabase !== undefined });
+      const url = parsePostgresConnectionUrl(value, name, { requireNeon: true });
       let databaseName;
       try {
         databaseName = decodeURIComponent(url.pathname.slice(1));
@@ -133,7 +133,7 @@ export function createPostgresPoolConfig(environment = process.env, { purpose = 
   return {
     connectionString: connectionUrl.toString(),
     ...(sslEnabled ? { ssl: { rejectUnauthorized: true } } : {}),
-    max: purpose === 'migration' || isNeonPooledEndpoint ? 2 : 8,
+    max: purpose === 'migration' ? 2 : isNeonPooledEndpoint ? 4 : 8,
     connectionTimeoutMillis: purpose === 'runtime' ? 15000 : 10000,
     idleTimeoutMillis: purpose === 'runtime' ? 10000 : 30000,
     keepAlive: true,

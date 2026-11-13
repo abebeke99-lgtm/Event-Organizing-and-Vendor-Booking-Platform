@@ -1,5 +1,6 @@
-﻿import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import axios from 'axios';
+import { LockKeyhole, Mail } from 'lucide-react';
 import apiClient from './api/axios.js';
 import { Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, Building2, Cake, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, Church, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, GraduationCap, Heart, History, Image, Languages, LayoutDashboard, LifeBuoy, LogOut, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Music2, Palette, PanelLeftClose, PanelLeftOpen, PartyPopper, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, Trophy, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
@@ -44,6 +45,7 @@ import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { createDemoDataService } from './demoData.js';
+import { buildOAuthStartUrl, getConfiguredOAuthProviders, parseOAuthProviderStatuses } from './oauthProviders.js';
 const EventCountdown = React.lazy(() => import('./EventsExperience.jsx').then(({ EventCountdown }) => ({ default: EventCountdown })));
 const EventDetailsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ EventDetailsPage }) => ({ default: EventDetailsPage })));
 const MyEventBookingsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ MyEventBookingsPage }) => ({ default: MyEventBookingsPage })));
@@ -358,6 +360,216 @@ function resolveApiAssetUrl(path) {
   return new URL(path, baseUrl).toString();
 }
 
+function oauthStartUrl(provider, intent = 'login') {
+  return buildOAuthStartUrl(apiClient.defaults.baseURL, provider, intent);
+}
+
+const oauthProviderDetails = {
+  google: { nameKey: 'oauthGoogle', labelKey: 'oauthContinueGoogle', unavailableKey: 'oauthGoogleNotConfigured' },
+  facebook: { nameKey: 'oauthFacebook', labelKey: 'oauthContinueFacebook', unavailableKey: 'oauthFacebookNotConfigured' },
+  apple: { nameKey: 'oauthApple', labelKey: 'oauthContinueApple', unavailableKey: 'oauthAppleNotConfigured' },
+};
+
+function OAuthProviderIcon({ provider }) {
+  if (provider === 'google') {
+    return <svg className="oauth-provider-icon" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#4285F4" d="M43.6 24.5c0-1.4-.1-2.8-.4-4.1H24v7.8h11a9.4 9.4 0 0 1-4.1 6.2v5.1h6.6c3.9-3.6 6.1-8.8 6.1-15Z"/>
+      <path fill="#34A853" d="M24 44c5.5 0 10.1-1.8 13.5-4.9l-6.6-5.1c-1.8 1.2-4.1 2-6.9 2-5.3 0-9.8-3.6-11.4-8.4H5.8v5.2A20 20 0 0 0 24 44Z"/>
+      <path fill="#FBBC05" d="M12.6 27.6a12 12 0 0 1 0-7.2v-5.2H5.8a20 20 0 0 0 0 17.6l6.8-5.2Z"/>
+      <path fill="#EA4335" d="M24 12c3 0 5.6 1 7.7 3l5.8-5.8C34 5.8 29.5 4 24 4A20 20 0 0 0 5.8 15.2l6.8 5.2C14.2 15.6 18.7 12 24 12Z"/>
+    </svg>;
+  }
+  if (provider === 'facebook') {
+    return <svg className="oauth-provider-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path fill="#1877F2" d="M13.5 24v-8.7h2.9l.4-3.4h-3.3V9.7c0-1 .3-1.7 1.7-1.7H17V5c-.3 0-1.4-.1-2.7-.1-2.7 0-4.5 1.6-4.5 4.6v2.5H7v3.4h2.8V24h3.7Z"/>
+    </svg>;
+  }
+  return <svg className="oauth-provider-icon oauth-apple-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="currentColor" d="M16.37 12.22c.02 2.18 1.91 2.9 1.93 2.91-.02.05-.3 1.04-.99 2.06-.6.89-1.22 1.78-2.2 1.8-.96.02-1.27-.58-2.37-.58s-1.45.56-2.36.6c-.95.03-1.67-.97-2.27-1.86-1.24-1.8-2.19-5.08-.92-7.3.63-1.1 1.76-1.8 2.99-1.82.93-.02 1.8.63 2.37.63.57 0 1.63-.78 2.75-.67.47.02 1.8.19 2.65 1.43-.07.04-1.58.92-1.56 2.8ZM14.57 5.93c.5-.6.83-1.43.74-2.26-.72.03-1.59.48-2.11 1.08-.46.53-.87 1.37-.76 2.17.8.06 1.63-.4 2.13-.99Z"/>
+  </svg>;
+}
+
+function OAuthButtons({ intent = 'login' }) {
+  const language = useLanguage();
+  const [providerStatuses, setProviderStatuses] = useState({});
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [busyProvider, setBusyProvider] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoading(true);
+    setError('');
+    api('/platform/oauth/providers', { signal: controller.signal })
+      .then((response) => {
+        setProviderStatuses(parseOAuthProviderStatuses(response));
+        setError('');
+      })
+      .catch((issue) => {
+        if (issue.name !== 'AbortError') {
+          setProviderStatuses({});
+          const messageKey = issue.code === 'INVALID_OAUTH_PROVIDER_RESPONSE'
+            ? 'oauthProviderResponseInvalid'
+            : issue.status
+              ? 'oauthDiscoveryFailed'
+              : 'oauthServiceUnreachable';
+          setError(translate(messageKey, language));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [language, retryCount]);
+
+  function startSignIn(event, provider) {
+    if (busyProvider || loading || error || providerStatuses[provider] !== 'configured') {
+      event.preventDefault();
+      return;
+    }
+    setBusyProvider(provider);
+    setError('');
+  }
+
+  return <div className="oauth-options">
+    <div className="oauth-divider"><span>{translate('oauthOrContinue', language)}</span></div>
+    {loading && <p className="oauth-status" role="status">{translate('oauthCheckingAvailability', language)}</p>}
+    {error && <div className="oauth-error" role="alert">
+      <p>{error}</p>
+      <button className="oauth-retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>
+        {translate('oauthRetry', language)}
+      </button>
+    </div>}
+    {Object.keys(oauthProviderDetails).map((provider) => {
+      const details = oauthProviderDetails[provider];
+      const enabled = providerStatuses[provider] === 'configured';
+      const busy = busyProvider === provider;
+      return <a
+        className={`oauth-provider-button${!enabled || busyProvider || loading || error ? ' is-disabled' : ''}`}
+        href={enabled ? oauthStartUrl(provider, intent) : undefined}
+        key={provider}
+        aria-disabled={!enabled || Boolean(busyProvider) || loading || Boolean(error)}
+        aria-busy={busy}
+        aria-label={busy ? `${translate(details.labelKey, language)} — ${translate('oauthConnecting', language)}` : undefined}
+        tabIndex={!enabled || busyProvider || loading || error ? -1 : undefined}
+        onClick={(event) => startSignIn(event, provider)}
+      >
+        {busy
+          ? <><span className="oauth-loading-spinner" aria-hidden="true" />{translate('oauthConnecting', language)}</>
+          : <><OAuthProviderIcon provider={provider} />{translate(details.labelKey, language)}</>}
+      </a>;
+    })}
+    {!loading && !error && Object.keys(oauthProviderDetails).map((provider) => (
+      providerStatuses[provider] !== 'configured'
+        ? <p className="oauth-status" key={`${provider}-status`} role="status">
+            {translate(oauthProviderDetails[provider].unavailableKey, language)}
+          </p>
+        : null
+    ))}
+  </div>;
+}
+
+function oauthNoticeFromPath(path, language) {
+  const params = new URLSearchParams(String(path).split('?')[1] || '');
+  const status = params.get('oauth');
+  if (status === 'success') return translate('oauthSignInSuccess', language);
+  if (status === 'linked') return translate('oauthLinkSuccess', language);
+  if (status !== 'error') return '';
+  const messages = {
+    cancelled: 'oauthCancelled',
+    invalid_state: 'oauthTryAgain',
+    invalid_identity: 'oauthIdentityInvalid',
+    email_verification_required: 'oauthVerifiedEmailRequired',
+    account_conflict: 'oauthAccountConflict',
+    registration_disabled: 'oauthRegistrationDisabled',
+    provider_unavailable: 'oauthProviderUnavailable',
+    frontend_unavailable: 'oauthProviderUnavailable',
+    session_expired: 'oauthSessionExpired',
+  };
+  return translate(messages[params.get('reason')] || 'oauthTryAgain', language);
+}
+
+function AccountConnections({ user }) {
+  const language = useLanguage();
+  const [providers, setProviders] = useState([]);
+  const [identities, setIdentities] = useState([]);
+  const [busyProvider, setBusyProvider] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const notice = oauthNoticeFromPath(window.location.search, language);
+  const isFailure = new URLSearchParams(window.location.search).get('oauth') === 'error';
+
+  const loadConnections = useCallback(async (signal) => {
+    setLoading(true);
+    setError('');
+    try {
+      const [providerResponse, identityResponse] = await Promise.all([
+        api('/platform/oauth/providers', { signal }),
+        api('/platform/oauth/identities', { signal }),
+      ]);
+      setProviders(getConfiguredOAuthProviders(providerResponse));
+      setIdentities(Array.isArray(identityResponse?.identities) ? identityResponse.identities : []);
+    } catch (issue) {
+      if (issue.name !== 'AbortError') setError(translateText(issue.message, language));
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [language]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void loadConnections(controller.signal);
+    return () => controller.abort();
+  }, [loadConnections]);
+
+  async function unlink(provider) {
+    setBusyProvider(provider);
+    setError('');
+    try {
+      await api(`/platform/oauth/identities/${encodeURIComponent(provider)}`, { method: 'DELETE' });
+      setIdentities((current) => current.filter((identity) => identity.provider !== provider));
+    } catch (issue) {
+      setError(translateText(issue.message, language));
+    } finally {
+      setBusyProvider('');
+    }
+  }
+
+  return <main className="page-shell">
+    <section className="content-stack account-connections">
+      <header className="page-heading"><div>
+        <p className="eyebrow">{translate('oauthAccountSecurity', language)}</p>
+        <h1>{translate('oauthConnectedAccounts', language)}</h1>
+        <p className="muted">{translate('oauthConnectionsDescription', language)}</p>
+      </div></header>
+      {notice && <div className={`alert ${isFailure ? 'error' : 'success'}`} role={isFailure ? 'alert' : 'status'}>{notice}</div>}
+      {error && <div className="alert error" role="alert">{error}</div>}
+      {loading ? <p role="status">{translate('loading', language)}</p> : <div className="panel oauth-connection-list">
+        <p className="muted">{translate('oauthSignedInAs', language)} {user.email}</p>
+        {providers.map((provider) => {
+          const identity = identities.find((item) => item.provider === provider);
+          const detail = oauthProviderDetails[provider];
+          return <div className="oauth-connection-row" key={provider}>
+            <div><strong>{translate(detail.nameKey, language)}</strong><small>{identity
+              ? identity.provider_email || translate('oauthConnected', language)
+              : translate('oauthNotConnected', language)}</small></div>
+            {identity
+              ? <button className="button secondary" type="button" disabled={Boolean(busyProvider)}
+                  onClick={() => unlink(provider)}>{busyProvider === provider
+                  ? translate('oauthDisconnecting', language)
+                  : translate('oauthDisconnect', language)}</button>
+              : <a className="button secondary" href={oauthStartUrl(provider, 'link')}>
+                  {translate('oauthConnect', language)}
+                </a>}
+          </div>;
+        })}
+        {!providers.length && <p className="muted">{translate('oauthNoProviders', language)}</p>}
+        <p className="oauth-unlink-note">{translate('oauthKeepOneConnection', language)}</p>
+      </div>}
+    </section>
+  </main>;
+}
+
 function Modal({title,children,onClose,onSubmit,busy,submitLabel='Save',cancelLabel='Cancel',closeLabel='Close',danger=false}) {
   return <div className="overlay" onMouseDown={(event)=>event.target===event.currentTarget && !busy && onClose()}><form className="modal" onSubmit={onSubmit}><div className="modal-head"><h2>{title}</h2><button className="icon-button" type="button" onClick={onClose} aria-label={closeLabel}><X size={18}/></button></div><div className="modal-body">{children}</div><div className="modal-foot"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>{cancelLabel}</button><button className={`button ${danger?'danger':''}`} disabled={busy}>{busy?'Saving…':submitLabel}</button></div></form></div>;
 }
@@ -383,7 +595,7 @@ function getHeaderSearchSuggestion(type, item) {
       : item.title;
   if (!name || id === undefined || id === null) return null;
   const path = type === 'categories'
-    ? `/categories/${encodeURIComponent(item.slug || item.name)}`
+    ? `/service-categories/${encodeURIComponent(item.slug || item.name)}`
     : `/${type}/${encodeURIComponent(id)}`;
   return {
     id: `${type}-${id}`,
@@ -410,6 +622,9 @@ const ROUTE_LABELS = {
   '/forgot-password': 'Reset Password',
   '/privacy': 'Privacy Policy',
   '/terms': 'Terms and Conditions',
+  '/service-categories': 'Service Categories',
+  '/cookie-policy': 'Cookie Policy',
+  '/refund-policy': 'Refund Policy',
   '/help': 'Help Center',
 };
 
@@ -738,7 +953,7 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
       <LanguageSelector user={user}/><ThemeToggle/>
       {isAuthenticated ? <details className="public-account" ref={accountMenuRef}>
       <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
-      <div className="public-account-menu">{role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/ai-chat'); }}>{translate('aiChatAssistant', language)}</button>}<button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
+      <div className="public-account-menu">{role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/ai-chat'); }}>{translate('aiChatAssistant', language)}</button>}{role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/account/connections'); }}>{translate('oauthConnectedAccounts', language)}</button>}<button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
     </details> : <div className="public-auth-actions"><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></div>}</div>
   </div></header>{['error', 'rate-limited', 'waking'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
 }
@@ -1522,7 +1737,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
 
   const categoryCards = categories.map((category) => ({
     ...category,
-    path: `/categories/${encodeURIComponent(category.slug || category.name)}`,
+    path: `/service-categories/${encodeURIComponent(category.slug || category.name)}`,
   }));
 
   useEffect(() => {
@@ -3505,15 +3720,6 @@ function AboutPage({ onNavigate, currentPath }) {
     </div>
   </section>;
 
-  if (loading) {
-    return <main className="page-shell about-shell"><div className="content-stack about-page">
-      <div className="content-stack" role="status" aria-label={t('loadingAbout')}>
-        <div className="about-loading-skeleton"/><div className="about-loading-skeleton"/><div className="about-loading-skeleton"/>
-      </div>
-      {closingCallToAction}
-    </div></main>;
-  }
-
   const missionObjectives = ['aboutMissionObjective1', 'aboutMissionObjective2', 'aboutMissionObjective3', 'aboutMissionObjective4', 'aboutMissionObjective5', 'aboutMissionObjective6'];
   const visionPriorities = ['aboutVisionPriority1', 'aboutVisionPriority2', 'aboutVisionPriority3', 'aboutVisionPriority4', 'aboutVisionPriority5', 'aboutVisionPriority6'];
   const coreValues = [
@@ -3550,7 +3756,21 @@ function AboutPage({ onNavigate, currentPath }) {
   const displayValues = coreValues.map((value) => ({ ...value, title: t(value.title) }));
 
   return <main className="page-shell about-shell"><div className="content-stack about-page">
+    {loading && <div className="content-stack" role="status" aria-label={t('loadingAbout')}>
+      <div className="about-loading-skeleton"/><div className="about-loading-skeleton"/><div className="about-loading-skeleton"/>
+    </div>}
     {error && <div className="about-load-error" role="alert"><span>{error}</span><button type="button" className="button secondary small" onClick={() => setReloadKey((key) => key + 1)}>{t('retry')}</button></div>}
+
+    {pageKey === '' && <section className="about-content-section">
+      <div className="about-section-heading">
+        <p className="about-eyebrow">{t('aboutStoryEyebrow')}</p>
+        <h1>{configuredContent?.hero?.heading || t('aboutStoryTitle')}</h1>
+        <p>{configuredContent?.introduction || t('aboutStoryCopy')}</p>
+      </div>
+      <div className="about-feature-grid">{platformFeatures.slice(0, 4).map(({ title, description, icon: Icon }) => <article className="about-feature-card" key={title}>
+        <Icon size={20} aria-hidden="true"/><div><h2>{t(title)}</h2><p>{t(description)}</p></div>
+      </article>)}</div>
+    </section>}
 
     {pageKey === 'mission-vision' && <>
     <section className="about-purpose-section">
@@ -3611,7 +3831,7 @@ function AboutPage({ onNavigate, currentPath }) {
 
     {pageKey === 'team' && <section className="about-content-section">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutTeamEyebrow')}</p><h2>{t('aboutTeamTitle')}</h2><p>{t('aboutTeamIntro')}</p></div>
-      {team.length ? <div className="about-people-grid">{team.map((member) => <article className="about-person-card" key={member.id}>
+      {loading ? <div className="about-empty-state" role="status">{t('loadingAbout')}</div> : team.length ? <div className="about-people-grid">{team.map((member) => <article className="about-person-card" key={member.id}>
         {member.imageUrl && <img src={resolveApiAssetUrl(member.imageUrl)} alt="" loading="lazy"/>}
         <h3>{member.name}</h3><p>{member.role}</p>
       </article>)}</div> : <div className="about-empty-state" role={error ? 'alert' : 'status'}>{error ? t('aboutSectionUnavailable') : t('aboutTeamEmpty')}</div>}
@@ -3619,7 +3839,7 @@ function AboutPage({ onNavigate, currentPath }) {
 
     {pageKey === 'partners' && <section className="about-content-section">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutPartnersEyebrow')}</p><h2>{t('aboutPartnersTitle')}</h2><p>{t('aboutPartnersIntro')}</p></div>
-      {partners.length ? <div className="about-partner-grid">{partners.map((partner) => <article className="about-partner-card" key={partner.id}>
+      {loading ? <div className="about-empty-state" role="status">{t('loadingAbout')}</div> : partners.length ? <div className="about-partner-grid">{partners.map((partner) => <article className="about-partner-card" key={partner.id}>
         {partner.logoUrl && <img src={resolveApiAssetUrl(partner.logoUrl)} alt="" loading="lazy"/>}
         <div><h3>{partner.name}</h3>{partner.category && <p>{partner.category}</p>}{partner.city && <p>{partner.city}</p>}</div>
       </article>)}</div> : <div className="about-empty-state" role={error ? 'alert' : 'status'}>{error ? t('aboutSectionUnavailable') : t('aboutPartnersEmpty')}</div>}
@@ -3627,7 +3847,7 @@ function AboutPage({ onNavigate, currentPath }) {
 
     {pageKey === 'success-stories' && <section className="about-content-section">
       <div className="about-section-heading"><p className="about-eyebrow">{t('aboutStoriesEyebrow')}</p><h2>{t('aboutStoriesTitle')}</h2><p>{t('aboutStoriesIntro')}</p></div>
-      {error ? <div className="about-empty-state" role="alert">{t('aboutSectionUnavailable')}</div> : testimonials.length ? <div className="about-testimonial-grid">{testimonials.map((testimonial) => <article className="about-testimonial-card" key={testimonial.id}>
+      {error ? <div className="about-empty-state" role="alert">{t('aboutSectionUnavailable')}</div> : loading ? <div className="about-empty-state" role="status">{t('loadingAbout')}</div> : testimonials.length ? <div className="about-testimonial-grid">{testimonials.map((testimonial) => <article className="about-testimonial-card" key={testimonial.id}>
         <div className="about-testimonial-rating" aria-label={`${testimonial.rating} / 5`}>{Array.from({ length: testimonial.rating }, (_, index) => <Star size={16} fill="currentColor" key={index} aria-hidden="true"/>)}</div>
         <blockquote>{testimonial.quote}</blockquote>
         <p>{t('aboutTestimonialCustomer')}{testimonial.vendorName ? ` · ${testimonial.vendorName}` : ''}</p>
@@ -3841,10 +4061,17 @@ function ContactPage() {
 }
 
 function AuthHomeLink() {
-  return <a className="auth-home-link" href="/"><ArrowLeft size={16} aria-hidden="true" /><span>Back to Home</span></a>;
+  const language = useLanguage();
+  return <a className="auth-home-link" href="/"><ArrowLeft size={16} aria-hidden="true" /><span>{translate('backToHome', language)}</span></a>;
 }
 
-function LoginPage({ onLogin, showForgotPassword = true, administrator = false }) {
+function LoginPage({
+  onLogin,
+  showForgotPassword = true,
+  administrator = false,
+  oauthNotice = '',
+  showSocialLogin = !DEMO_AUTH_ENABLED,
+}) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
@@ -3853,9 +4080,19 @@ function LoginPage({ onLogin, showForgotPassword = true, administrator = false }
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const rememberMeLabel = translateText('Remember me', language);
+  const [fieldErrors, setFieldErrors] = useState({});
   async function submit(event) {
     event.preventDefault();
+    const nextFieldErrors = {};
+    if (!email.trim()) nextFieldErrors.email = t('registrationEmailRequired');
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) nextFieldErrors.email = t('validEmailRequired');
+    if (!password) nextFieldErrors.password = t('registrationPasswordRequired');
+    if (Object.keys(nextFieldErrors).length) {
+      setFieldErrors(nextFieldErrors);
+      setError('');
+      return;
+    }
+    setFieldErrors({});
     setBusy(true);
     setError('');
     try {
@@ -3867,36 +4104,43 @@ function LoginPage({ onLogin, showForgotPassword = true, administrator = false }
     }
   }
 
-  return <AuthLayout><section className="login-card">
-    <h1>{administrator ? t('administratorSignIn') : t('signIn')}</h1>
-    <p className="muted">{administrator ? t('useAdminAccount') : t('accessWorkspace')}</p>
+  return <AuthLayout languageSelector={<LanguageSelector/>}><section className="login-card">
+    <h1>{t('loginHeading')}</h1>
+    <p className="muted">{administrator ? t('useAdminAccount') : t('loginSubtitle')}</p>
+    {oauthNotice && <div className={`alert ${new URLSearchParams(window.location.search).get('oauth') === 'error' ? 'error' : 'success'}`} role={new URLSearchParams(window.location.search).get('oauth') === 'error' ? 'alert' : 'status'}>{oauthNotice}</div>}
     {error && <div className="alert error" role="alert">{error}</div>}
-    <form className="login-form" onSubmit={submit}>
-      <label className="auth-field">
+    <form className="login-form" noValidate onSubmit={submit}>
+      <label className="auth-field" htmlFor="login-email">
         <span>{t('emailAddress')}</span>
-        <input type="email" name="email" autoComplete="username" autoCapitalize="none" required value={email} onChange={(e) => setEmail(e.target.value)} />
+        <span className="auth-input-wrap">
+          <Mail className="auth-input-icon" size={18} aria-hidden="true" />
+          <input id="login-email" type="email" name="email" autoComplete="username" autoCapitalize="none" placeholder={t('loginEmailPlaceholder')} aria-invalid={Boolean(fieldErrors.email)} aria-describedby={fieldErrors.email ? 'login-email-error' : undefined} required value={email} onChange={(event) => { setEmail(event.target.value); setFieldErrors((current) => ({ ...current, email: '' })); }} />
+        </span>
+        {fieldErrors.email && <small className="field-error" id="login-email-error" role="alert">{fieldErrors.email}</small>}
       </label>
       <label className="auth-field" htmlFor="login-password">
         <span id="login-password-label">{t('password')}</span>
-        <div className="password-input-wrap">
-          <input id="login-password" aria-labelledby="login-password-label" name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-          <button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
+        <div className="password-input-wrap auth-input-wrap auth-password-wrap">
+          <LockKeyhole className="auth-input-icon" size={18} aria-hidden="true" />
+          <input id="login-password" aria-labelledby="login-password-label" aria-invalid={Boolean(fieldErrors.password)} aria-describedby={fieldErrors.password ? 'login-password-error' : undefined} name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder={t('passwordPlaceholder')} required value={password} onChange={(event) => { setPassword(event.target.value); setFieldErrors((current) => ({ ...current, password: '' })); }} />
+          <button className="password-visibility" type="button" aria-label={t(showPassword ? 'hidePassword' : 'showPassword')} aria-pressed={showPassword} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
         </div>
+        {fieldErrors.password && <small className="field-error" id="login-password-error" role="alert">{fieldErrors.password}</small>}
       </label>
-      {showForgotPassword && <div className="auth-forgot-row">
-        <button type="button" className="text-link auth-forgot-link" onClick={() => navigateBrowserPath('/forgot-password')}>{t('forgotPassword')}</button>
-      </div>}
       <div className="auth-form-options">
         <label className="remember-option">
           <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />
-          <span>{rememberMeLabel}</span>
+          <span>{t('rememberMe')}</span>
         </label>
+        {showForgotPassword && <button type="button" className="text-link auth-forgot-link" onClick={() => navigateBrowserPath('/forgot-password')}>{t('forgotPassword')}</button>}
       </div>
-      <button type="submit" className="button login-button" disabled={busy}>{busy ? t('signingIn') : t('signInSecurely')}</button>
+      <button type="submit" className="button login-button" disabled={busy}>{busy ? <><span className="login-loading-spinner" aria-hidden="true" />{t('signingIn')}</> : t('signIn')}</button>
     </form>
 
+    {!administrator && showSocialLogin && <OAuthButtons />}
     {!administrator && <div className="login-account-links">
-      <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccount')}</button>
+      <span>{t('noAccount')}</span>
+      <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createOne')}</button>
     </div>}
     <div className="auth-home-footer"><AuthHomeLink /></div>
   </section></AuthLayout>;
@@ -3943,7 +4187,7 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
       setBusy(false);
     }
   }
-  return <AuthLayout><section className="login-card registration-card">
+  return <AuthLayout languageSelector={<LanguageSelector/>}><section className="login-card registration-card">
     <h1>{t('createAccountHeading')}</h1>
     <p className="muted">{t('registerAsRole')}</p>
     {!registrationEnabled && <div className="alert warning" role="status">{t('publicRegistrationDisabled')}</div>}
@@ -4002,6 +4246,7 @@ function ForgotPasswordPage({ onSubmit }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -4010,9 +4255,19 @@ function ForgotPasswordPage({ onSubmit }) {
 
   async function submit(event) {
     event.preventDefault();
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail) {
+      setEmailError(t('registrationEmailRequired'));
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      setEmailError(t('validEmailRequired'));
+      return;
+    }
+    setEmailError('');
     setBusy(true); setError(''); setSuccess('');
     try {
-      await onSubmit(email.trim());
+      await onSubmit(normalizedEmail);
       setSuccess(t('resetOtpSent'));
       redirectTimer.current = window.setTimeout(() => navigateBrowserPath('/verify-reset-otp'), 1200);
     } catch (issue) {
@@ -4023,13 +4278,14 @@ function ForgotPasswordPage({ onSubmit }) {
   }
 
   return <main className="login-wrap"><section className="login-card reset-card">
+    <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
     <p className="eyebrow">{t('resetEyebrow')}</p>
     <h1>{t('forgotPasswordTitle')}</h1>
     <p className="muted">{t('resetEmailCopy')}</p>
     {error && <div className="alert error" role="alert">{error}</div>}
     {success && <div className="alert success" role="status">{success}</div>}
-    <form onSubmit={submit}>
-      <label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" placeholder="you@example.com" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
+    <form onSubmit={submit} noValidate>
+      <label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" placeholder={t('emailPlaceholder')} value={email} onChange={(event) => { setEmail(event.target.value); setEmailError(''); }} required aria-invalid={Boolean(emailError)} aria-describedby={emailError ? 'forgot-password-email-error' : undefined} />{emailError && <small id="forgot-password-email-error" className="field-error" role="alert">{emailError}</small>}</label>
       <button className="button login-button" type="submit" disabled={busy || Boolean(success)}>{busy ? t('sending') : t('sendResetLink')}</button>
     </form>
     <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); window.clearTimeout(redirectTimer.current); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>
@@ -4168,6 +4424,32 @@ function PrivacyPage() {
 function TermsPage() {
   const language = useLanguage();
   return <main className="page-shell"><div className="content-stack"><div className="section-header"><div><p className="eyebrow">{translate('termsLabel', language)}</p><h2>{translate('termsHeading', language)}</h2></div></div><div className="info-card wide"><p>{translate('termsCopy', language)}</p></div></div></main>;
+}
+
+function CookiePolicyPage() {
+  const language = useLanguage();
+  return <main className="page-shell"><div className="content-stack">
+    <div className="section-header"><div><p className="eyebrow">{translate('cookiePolicyLabel', language)}</p><h2>{translate('cookiePolicyHeading', language)}</h2></div></div>
+    <div className="info-card wide">
+      <p>{translate('cookiePolicyIntro', language)}</p>
+      <h3>{translate('cookiePolicySessionsTitle', language)}</h3><p>{translate('cookiePolicySessionsCopy', language)}</p>
+      <h3>{translate('cookiePolicyPreferencesTitle', language)}</h3><p>{translate('cookiePolicyPreferencesCopy', language)}</p>
+      <h3>{translate('cookiePolicyControlsTitle', language)}</h3><p>{translate('cookiePolicyControlsCopy', language)}</p>
+    </div>
+  </div></main>;
+}
+
+function RefundPolicyPage() {
+  const language = useLanguage();
+  return <main className="page-shell"><div className="content-stack">
+    <div className="section-header"><div><p className="eyebrow">{translate('refundPolicyLabel', language)}</p><h2>{translate('refundPolicyHeading', language)}</h2></div></div>
+    <div className="info-card wide">
+      <p>{translate('refundPolicyIntro', language)}</p>
+      <h3>{translate('refundPolicyEligibilityTitle', language)}</h3><p>{translate('refundPolicyEligibilityCopy', language)}</p>
+      <h3>{translate('refundPolicyRequestsTitle', language)}</h3><p>{translate('refundPolicyRequestsCopy', language)}</p>
+      <h3>{translate('refundPolicyProcessingTitle', language)}</h3><p>{translate('refundPolicyProcessingCopy', language)}</p>
+    </div>
+  </div></main>;
 }
 
 function HelpPage() {
@@ -6279,10 +6561,11 @@ export default function App(){
   }, [normalizePath]);
 
   useEffect(() => {
-    if (currentPath.split('?')[0] !== '/about') return;
-    const destination = '/about/mission-vision';
-    window.history.replaceState({}, '', destination);
-    setCurrentPath(destination);
+    const params = new URLSearchParams(currentPath.split('?')[1] || '');
+    if (params.get('oauth') === 'success') {
+      setPlatformSessionHint();
+      void authSessionLoader.load({ force: true });
+    }
   }, [currentPath]);
 
   useEffect(()=>{
@@ -6327,6 +6610,13 @@ export default function App(){
       setPortal('admin');
     }
   }, [authSessionState, currentPath]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(currentPath.split('?')[1] || '');
+    if (params.get('oauth') === 'success' && authSessionState.status === 'authenticated') {
+      navigatePublic(dashboardPathForRole(authSessionState.role));
+    }
+  }, [authSessionState, currentPath, navigatePublic]);
 
   useEffect(() => {
     function handleAuthInvalidated() {
@@ -6454,13 +6744,11 @@ export default function App(){
     '/services': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage onNavigate={navigatePublic} user={user} currentPath={currentPath} /></PublicPageLayout>,
     '/service-categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceCategoriesPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>,
     '/categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>,
-    '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword />,
+    '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword oauthNotice={oauthNoticeFromPath(currentPath, language)} />,
     '/register': <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} />,
     '/forgot-password': <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />,
     '/verify-reset-otp': <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />,
     '/reset-password': <ResetPasswordPage onSubmit={resetPassword} />,
-    '/privacy': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>,
-    '/terms': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><TermsPage /></PublicPageLayout>,
     '/help': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>,
   };
 
@@ -6483,6 +6771,14 @@ export default function App(){
         : <AccessDeniedPage onNavigate={navigatePublic} />;
     }
     return <LoginPage onLogin={loginAdministrator} administrator />;
+  }
+  if (routePath === '/account/connections') {
+    if (!user || user.role === 'admin') {
+      return <ProtectedRoute user={user} allowedRoles={['customer', 'organizer', 'vendor']} onNavigate={navigatePublic} />;
+    }
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}>
+      <AccountConnections user={user} />
+    </PublicPageLayout>;
   }
   if (routePath.startsWith('/admin') && (!user || String(user.role || '').toLowerCase() !== 'admin')) {
     return <ProtectedRoute user={user} allowedRoles={['admin']} onNavigate={navigatePublic} />;
@@ -6520,12 +6816,16 @@ export default function App(){
   if (routePath === '/services') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServicesPage user={user} onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if (serviceRoute) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceDetailPage serviceId={serviceRoute[1]} user={user} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/service-categories') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ServiceCategoriesPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
+  if (routePath.startsWith('/service-categories/')) {
+    const slug = routePath.replace(/^\/service-categories\//, '');
+    return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoryDetailPage slug={slug} onNavigate={navigatePublic} /></PublicPageLayout>;
+  }
   if (routePath === '/categories' || routePath.startsWith('/categories?')) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath.startsWith('/categories/')) {
     const slug = routePath.replace(/^\/categories\//, '');
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoryDetailPage slug={slug} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
-  if (routePath === '/about') return null;
+  if (routePath === '/about') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if ([
     '/about/mission-vision',
     '/about/how-it-works',
@@ -6536,6 +6836,10 @@ export default function App(){
     '/about/faqs',
   ].includes(routePath)) return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><AboutPage onNavigate={navigatePublic} currentPath={currentPath} /></PublicPageLayout>;
   if (routePath === '/contact') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><ContactPage /></PublicPageLayout>;
+  if (routePath === '/privacy') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>;
+  if (routePath === '/terms') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><TermsPage /></PublicPageLayout>;
+  if (routePath === '/cookie-policy') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CookiePolicyPage /></PublicPageLayout>;
+  if (routePath === '/refund-policy') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><RefundPolicyPage /></PublicPageLayout>;
   if (routePath === '/') return publicRoutes['/'];
   if (routePath === '/calendar') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><EventCalendarPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   if (routePath === '/venues') return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><PopularVenuesPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
@@ -6553,13 +6857,11 @@ export default function App(){
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><MyEventBookingsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
   if(!user){
-    if (routePath === '/login') return <><LoginPage onLogin={loginPublic} showForgotPassword /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/login') return <><LoginPage onLogin={loginPublic} showForgotPassword oauthNotice={oauthNoticeFromPath(currentPath, language)} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/register') return <><RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/forgot-password') return <><ForgotPasswordPage onSubmit={requestPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/verify-reset-otp') return <><VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/reset-password') return <><ResetPasswordPage onSubmit={resetPassword} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
-    if (currentPath === '/privacy') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><PrivacyPage /></PublicPageLayout>;
-    if (currentPath === '/terms') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><TermsPage /></PublicPageLayout>;
     if (currentPath === '/help') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>;
     if (['/events', '/events/upcoming'].includes(currentPath.split('?')[0])) return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={null} currentPath={currentPath} /></PublicPageLayout>;
     if (publicRoutes[routePath]) return publicRoutes[routePath];

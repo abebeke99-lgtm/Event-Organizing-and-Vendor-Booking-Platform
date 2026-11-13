@@ -101,7 +101,7 @@ test('PostgreSQL runtime pool retries connection acquisition, never replays fail
       DATABASE_URL: 'postgresql://test:test@ep-eventhub-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
     },
     poolFactory(config) {
-      assert.equal(config.max, 2);
+      assert.equal(config.max, 4);
       assert.equal(config.connectionTimeoutMillis, 15000);
       assert.equal(config.idleTimeoutMillis, 10000);
       assert.equal(config.keepAlive, true);

@@ -12,7 +12,7 @@ function suggestionFor(type, item) {
       : item.title;
   if (!name || id === undefined || id === null) return null;
   const path = type === 'categories'
-    ? `/categories/${encodeURIComponent(item.slug || item.name)}`
+    ? `/service-categories/${encodeURIComponent(item.slug || item.name)}`
     : `/${type}/${encodeURIComponent(id)}`;
   return {
     id: `${type}-${id}`,

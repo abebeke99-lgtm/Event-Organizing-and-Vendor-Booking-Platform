@@ -1,0 +1,11 @@
+ALTER TABLE service_categories
+  ADD COLUMN IF NOT EXISTS display_order INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS image BYTEA,
+  ADD COLUMN IF NOT EXISTS image_mime VARCHAR(80),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE vendor_profiles
+  ADD COLUMN IF NOT EXISTS is_featured BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_service_categories_admin_order
+  ON service_categories(display_order, id);

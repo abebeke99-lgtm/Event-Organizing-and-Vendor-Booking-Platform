@@ -35,7 +35,7 @@ test('PostgreSQL config uses separate Neon pooled and direct endpoints', () => {
   const migration = createPostgresPoolConfig(neonTestEnvironment, { purpose: 'migration' });
 
   assert.equal(runtime.connectionString, neonTestEnvironment.DATABASE_URL);
-  assert.equal(runtime.max, 2);
+  assert.equal(runtime.max, 4);
   assert.equal(runtime.connectionTimeoutMillis, 15000);
   assert.equal(runtime.idleTimeoutMillis, 10000);
   assert.equal(runtime.keepAlive, true);
@@ -80,46 +80,44 @@ test('PostgreSQL runtime requires only the pooled URL while migrations require t
   );
 });
 
-test('PostgreSQL runtime accepts managed providers with verified TLS', () => {
+test('PostgreSQL runtime rejects non-Neon providers and accepts Neon pooled and direct endpoints', () => {
   const environment = {
     NODE_ENV: 'production',
-    DATABASE_URL: 'postgresql://app-user:app-password@db.example.test:5432/event_app',
-    DIRECT_URL: 'postgresql://migration-user:migration-password@db.example.test:5432/event_app',
+    DATABASE_URL: 'postgresql://app-user:app-password@db.example.test:5432/event_app?sslmode=verify-full',
+    DIRECT_URL: 'postgresql://migration-user:migration-password@db.example.test:5432/event_app?sslmode=verify-full',
   };
-  assert.deepEqual(getPostgresConfigurationErrors(environment, { purpose: 'migration' }), []);
-  assert.deepEqual(createPostgresPoolConfig(environment), {
-    connectionString: environment.DATABASE_URL,
-    ssl: { rejectUnauthorized: true },
-    max: 8,
-    connectionTimeoutMillis: 15000,
-    idleTimeoutMillis: 10000,
-    keepAlive: true,
-    keepAliveInitialDelayMillis: 10000,
-    application_name: 'eventhub-api',
-  });
+  assert.ok(getPostgresConfigurationErrors(environment, { purpose: 'migration' })
+    .some((error) => error.includes('credentialed Neon PostgreSQL URL')));
+
+  const neonEnvironment = {
+    NODE_ENV: 'production',
+    ...neonUrls('event_app'),
+  };
+  assert.deepEqual(getPostgresConfigurationErrors(neonEnvironment, { purpose: 'migration' }), []);
+  assert.equal(createPostgresPoolConfig(neonEnvironment).max, 4);
+  assert.deepEqual(createPostgresPoolConfig(neonEnvironment).ssl, { rejectUnauthorized: true });
   assert.equal(
-    createPostgresPoolConfig(environment, { purpose: 'migration' }).connectionString,
-    environment.DIRECT_URL,
+    createPostgresPoolConfig(neonEnvironment, { purpose: 'migration' }).connectionString,
+    verifiedTlsUrl(neonEnvironment.DIRECT_URL),
   );
 });
 
-test('PostgreSQL TLS can be disabled only for explicit non-production local development', () => {
+test('Neon PostgreSQL requires TLS and cannot use local or non-Neon endpoints', () => {
   const environment = {
     NODE_ENV: 'development',
     DB_SSL: 'false',
     DATABASE_URL: 'postgresql://app-user:app-password@localhost:5432/event_app?sslmode=disable',
   };
-  assert.deepEqual(getPostgresConfigurationErrors(environment, { purpose: 'runtime' }), []);
-  assert.equal(Object.hasOwn(createPostgresPoolConfig(environment), 'ssl'), false);
+  assert.ok(getPostgresConfigurationErrors(environment, { purpose: 'runtime' })
+    .some((error) => error.includes('credentialed Neon PostgreSQL URL')));
 
-  assert.ok(getPostgresConfigurationErrors({
-    ...environment,
-    NODE_ENV: 'production',
-  }, { purpose: 'runtime' }).some((error) => error.includes('DB_SSL must be true in production')));
-  assert.ok(getPostgresConfigurationErrors({
-    NODE_ENV: 'production',
-    DATABASE_URL: 'postgresql://app-user:app-password@db.example.test:5432/event_app?sslmode=disable',
-  }, { purpose: 'runtime' }).some((error) => error.includes('must not use an sslmode')));
+  const neonWithSslDisabled = {
+    NODE_ENV: 'development',
+    DB_SSL: 'false',
+    DATABASE_URL: neonUrls().DATABASE_URL,
+  };
+  assert.ok(getPostgresConfigurationErrors(neonWithSslDisabled, { purpose: 'runtime' })
+    .some((error) => error.includes('sslmode conflicts with DB_SSL=false')));
 });
 
 test('PostgreSQL config rejects missing, malformed, non-TLS Neon, and role-swapped URLs', () => {
@@ -127,7 +125,7 @@ test('PostgreSQL config rejects missing, malformed, non-TLS Neon, and role-swapp
   assert.ok(getPostgresConfigurationErrors({
     ...neonTestEnvironment,
     DATABASE_URL: 'not a URL',
-  }).some((error) => error.startsWith('DATABASE_URL must be a valid PostgreSQL URL')));
+  }).some((error) => error.startsWith('DATABASE_URL must be a valid Neon PostgreSQL URL')));
   assert.ok(getPostgresConfigurationErrors({
     ...neonTestEnvironment,
     DATABASE_URL: 'postgresql://user:password@ep-eventhub-pooler.us-east-2.aws.neon.tech/app',

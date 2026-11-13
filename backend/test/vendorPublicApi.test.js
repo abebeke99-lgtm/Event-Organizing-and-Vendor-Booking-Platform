@@ -6,6 +6,68 @@ import { loadNeonTestEnvironment } from '../src/lib/neonTestEnvironment.js';
 import { createPostgresDatabase } from '../src/postgresDb.js';
 
 const integrationEnabled = process.env.RUN_NEON_INTEGRATION === 'true';
+const diagnosticsEnabled = process.env.NEON_MARKETPLACE_TRACE === 'true';
+
+function installMarketplaceDiagnostics(pool) {
+  if (!diagnosticsEnabled) return;
+
+  const originalConnect = pool.connect.bind(pool);
+  const instrumentedClients = new WeakSet();
+  let connectionSequence = 0;
+  let querySequence = 0;
+  const poolState = () => `${pool.totalCount}/${pool.idleCount}/${pool.waitingCount}`;
+
+  pool.connect = (...args) => {
+    if (args.some((argument) => typeof argument === 'function')) {
+      return originalConnect(...args);
+    }
+
+    const connectionId = ++connectionSequence;
+    const stateBefore = poolState();
+    const started = performance.now();
+    return originalConnect(...args).then((client) => {
+      console.info(
+        `[marketplace-pool] acquire#${connectionId} waitMs=${(performance.now() - started).toFixed(1)} `
+        + `pool(total/idle/waiting)=${stateBefore}->${poolState()}`,
+      );
+      if (!instrumentedClients.has(client)) {
+        instrumentedClients.add(client);
+        const originalQuery = client.query.bind(client);
+        client.query = (...queryArgs) => {
+          const queryId = ++querySequence;
+          const sql = typeof queryArgs[0] === 'string' ? queryArgs[0] : '';
+          const table = sql.match(/\b(?:FROM|JOIN|INTO|UPDATE)\s+([a-z_]+)/i)?.[1] || 'statement';
+          const queryStarted = performance.now();
+          const result = originalQuery(...queryArgs);
+          if (!result || typeof result.then !== 'function') return result;
+          return result.then(
+            (value) => {
+              console.info(
+                `[marketplace-db] query#${queryId} table=${table} `
+                + `execMs=${(performance.now() - queryStarted).toFixed(1)}`,
+              );
+              return value;
+            },
+            (error) => {
+              console.info(
+                `[marketplace-db] query#${queryId} table=${table} `
+                + `execMs=${(performance.now() - queryStarted).toFixed(1)} error=${error.code || error.name || 'Error'}`,
+              );
+              throw error;
+            },
+          );
+        };
+      }
+      return client;
+    }, (error) => {
+      console.info(
+        `[marketplace-pool] acquire#${connectionId} waitMs=${(performance.now() - started).toFixed(1)} `
+        + `pool(total/idle/waiting)=${stateBefore}->${poolState()} error=${error.code || error.name || 'Error'}`,
+      );
+      throw error;
+    });
+  };
+}
 
 test('PostgreSQL public marketplace preserves vendor, category, and service workflows', {
   skip: integrationEnabled ? false : 'Set RUN_NEON_INTEGRATION=true to use backend/.env.neon-test.',
@@ -37,11 +99,39 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
   let packageId;
   let mediaId;
   let serviceMediaId;
+  let requestSequence = 0;
 
   try {
     await once(server, 'listening');
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
-    const get = (path) => fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(15000) });
+    const get = async (path) => {
+      const requestId = ++requestSequence;
+      const started = performance.now();
+      const poolState = () => (
+        `${database.runtimePool.totalCount}/${database.runtimePool.idleCount}/${database.runtimePool.waitingCount}`
+      );
+      const before = poolState();
+      try {
+        const response = await fetch(`${baseUrl}${path}`, { signal: AbortSignal.timeout(15000) });
+        if (diagnosticsEnabled) {
+          console.info(
+            `[marketplace-http] request#${requestId} GET ${path.split('?')[0]} `
+            + `status=${response.status} durationMs=${(performance.now() - started).toFixed(1)} `
+            + `pool(total/idle/waiting)=${before}->${poolState()}`,
+          );
+        }
+        return response;
+      } catch (error) {
+        if (diagnosticsEnabled) {
+          console.info(
+            `[marketplace-http] request#${requestId} GET ${path.split('?')[0]} `
+            + `durationMs=${(performance.now() - started).toFixed(1)} `
+            + `pool(total/idle/waiting)=${before}->${poolState()} error=${error.name || 'Error'}`,
+          );
+        }
+        throw error;
+      }
+    };
     await database.inTransaction(async (transaction) => {
       const user = await transaction.query(
         `INSERT INTO users (full_name, email, password_hash, status)
@@ -128,6 +218,8 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
       );
       serviceMediaId = Number(serviceMedia.rows[0].id);
     });
+
+    installMarketplaceDiagnostics(database.runtimePool);
 
     await context.test('public vendor list and detail return correctly mapped optional data', async () => {
       const listResponse = await get(`/api/platform/vendors?search=${encodeURIComponent(suffix)}&page=1&limit=5`);

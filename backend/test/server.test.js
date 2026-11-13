@@ -130,14 +130,12 @@ test('database TLS accepts a base64-encoded custom CA', () => {
   assert.equal(config.ssl.ca, certificateAuthority.trim());
 });
 
-test('database TLS is omitted when SSL is disabled for local development', () => {
-  const config = createDatabaseConfig({
+test('database configuration rejects local PostgreSQL endpoints when Neon is required', () => {
+  assert.throws(() => createDatabaseConfig({
     ...databaseCredentials,
     DATABASE_URL: 'postgresql://test-user:test-password@127.0.0.1:5432/eventhub?sslmode=disable',
     DB_SSL: 'false',
-  });
-
-  assert.equal('ssl' in config, false);
+  }), /credentialed Neon PostgreSQL URL/);
 });
 
 test('database pool has a bounded connection timeout', () => {
@@ -267,7 +265,7 @@ test('PostgreSQL mode does not load the MySQL driver', () => {
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /MySQL driver import attempted/);
 });
 
-test('PostgreSQL startup exits without listening when its database is unavailable', () => {
+test('PostgreSQL startup exits without listening when its database URL is not Neon', () => {
   const backendDirectory = fileURLToPath(new URL('../', import.meta.url));
   const serverPath = fileURLToPath(new URL('../src/server.js', import.meta.url));
   const result = spawnSync(process.execPath, [serverPath], {
@@ -288,7 +286,7 @@ test('PostgreSQL startup exits without listening when its database is unavailabl
   });
 
   assert.equal(result.status, 1, result.stderr);
-  assert.match(result.stderr, /PostgreSQL connection failed \[DB_CONNECT_FAILED\]/);
+  assert.match(result.stderr, /DATABASE_URL must be a credentialed Neon PostgreSQL URL/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /Admin API listening|127\.0\.0\.1:3306|MySQL connected/);
 });
 

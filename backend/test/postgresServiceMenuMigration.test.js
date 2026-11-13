@@ -9,6 +9,7 @@ import { splitPostgresSqlStatements } from '../src/lib/postgresMigrate.js';
 import { createPostgresDatabase } from '../src/postgresDb.js';
 
 const migrationUrl = new URL('../postgres/migrations/011_service_navigation_categories.sql', import.meta.url);
+const additiveMigrationUrl = new URL('../postgres/migrations/013_seed_public_service_categories.sql', import.meta.url);
 const expectedCategories = [
   'Photography',
   'Videography',
@@ -35,6 +36,15 @@ test('service navigation migration defines the requested 15 categories without d
   assert.match(sql, /ON CONFLICT \(name\) DO NOTHING/);
   assert.match(sql, /service_menu_order = NULL/);
   assert.doesNotMatch(sql, /\bDELETE\s+FROM\b|\bTRUNCATE\b|\bDROP\s+TABLE\b/i);
+});
+
+test('public service category seed is additive and uses the approved service taxonomy', async () => {
+  const sql = await readFile(additiveMigrationUrl, 'utf8');
+  const seededNames = [...sql.matchAll(/\(\s*\d+\s*,\s*'([^']+)'/g)].map((match) => match[1]);
+
+  assert.deepEqual(seededNames, expectedCategories);
+  assert.match(sql, /ON CONFLICT \(name\) DO NOTHING/);
+  assert.doesNotMatch(sql, /\bDELETE\s+FROM\b|\bTRUNCATE\b|\bDROP\s+TABLE\b|service_menu_order\s*=\s*NULL/i);
 });
 
 test('Neon service navigation migration preserves existing category IDs and selects exactly 15 entries', {

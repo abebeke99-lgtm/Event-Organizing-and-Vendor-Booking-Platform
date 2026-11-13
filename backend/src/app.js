@@ -33,6 +33,7 @@ import { loadPostgresAiChatContext } from './lib/aiChatContext.js';
 import { getPostgresErrorCause, isTransientPostgresError } from './lib/postgresRetry.js';
 import { formatPostgresError } from './postgresDb.js';
 import { createPostgresAuthRouter } from './routes/postgresAuth.js';
+import { createPostgresOAuthRouter } from './routes/postgresOAuth.js';
 import { createPostgresPublicEventsRouter } from './routes/postgresPublicEvents.js';
 import { createPostgresMarketplaceRouter } from './routes/postgresMarketplace.js';
 import { createPostgresBookingRouters } from './routes/postgresBookings.js';
@@ -42,6 +43,8 @@ import { createPostgresCustomerAccountRouter } from './routes/postgresCustomerAc
 import { createPostgresOrganizerPlanningRouter } from './routes/postgresOrganizerPlanning.js';
 import { createPostgresAdminRouter } from './routes/postgresAdmin.js';
 import { createPostgresAdminEventsRouter } from './routes/postgresAdminEvents.js';
+import { createPostgresAdminBookingsRouter } from './routes/postgresAdminBookings.js';
+import { createPostgresAdminCatalogRouter } from './routes/postgresAdminCatalog.js';
 import { createPostgresAdminReportsRouter } from './routes/postgresAdminReports.js';
 import { createPostgresAdminReviewsComplaintsRouter } from './routes/postgresAdminReviewsComplaints.js';
 import { createPostgresAdminAuditLogRouter } from './routes/postgresAdminAuditLogs.js';
@@ -195,6 +198,8 @@ export function createApp({
     }));
     app.use('/api/admin', createPostgresAdminEventsRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminCatalogRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminBookingsRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminReportsRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminReviewsComplaintsRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminPaymentsRouter({ database: normalizedDatabase }));
@@ -215,6 +220,8 @@ export function createApp({
     app.use('/api/platform', requirePlatformAvailable, createPostgresPublicEventsRouter({ database: normalizedDatabase }));
     app.use('/api/platform', requirePlatformAvailable,
       createPostgresAuthRouter({ database: normalizedDatabase }));
+    app.use('/api/platform/oauth', requirePlatformAvailable,
+      createPostgresOAuthRouter({ database: normalizedDatabase }));
     app.use('/api/auth', requirePlatformAvailable,
       createPostgresAuthRouter({ database: normalizedDatabase, adminNamespace: true }));
   } else {

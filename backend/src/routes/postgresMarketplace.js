@@ -7,7 +7,7 @@ import { listPublicServices } from '../lib/serviceCatalog.js';
 import { mapDatabaseEvent } from '../lib/eventCatalog.js';
 import { categorySlug } from '../lib/marketplace.js';
 import { loadPostgresPublicMarketplace } from '../lib/postgresMarketplace.js';
-import { isValidCategoryName } from '../lib/categoryName.js';
+import { isPublicCategoryName } from '../lib/categoryName.js';
 
 const vendorFiltersSchema = z.object({
   search: z.string().trim().max(120).optional(),
@@ -112,7 +112,7 @@ export function createPostgresMarketplaceRouter({ database }) {
          ORDER BY ${serviceScope ? 'sc.service_menu_order ASC' : 'name ASC'}, sc.name ASC`,
         values,
       );
-      const categories = rows.rows.filter((row) => isValidCategoryName(row.name)).map((row) => {
+      const categories = rows.rows.filter((row) => isPublicCategoryName(row.name)).map((row) => {
         const id = Number(row.id);
         const image = row.image_mime ? `/api/platform/categories/${id}/image` : null;
         return {

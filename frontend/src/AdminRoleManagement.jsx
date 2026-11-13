@@ -248,7 +248,7 @@ export default function AdminRoleManagement() {
                         const checked = selectedPermissions.includes(permission.permission_key);
                         const permitted = Boolean(selectedRole.is_admin)
                           || (permission.assignable_roles.includes(String(selectedRole.name).toLowerCase()) && !permission.critical);
-                        return <tr key={permission.id} className={permission.critical ? 'critical' : ''}>
+                        return <tr key={permission.permission_key} className={permission.critical ? 'critical' : ''}>
                           <td><span className="rm-action">{formatPermissionAction(permission.action)}</span></td>
                           <td><code>{permission.permission_key}</code>{permission.critical && <span className="rm-critical-label">Protected</span>}</td>
                           <td>{permission.description || '—'}</td>

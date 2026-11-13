@@ -43,6 +43,10 @@ test('About group headings, category visuals, and category empty states are acce
 });
 
 test('About routes render one dedicated view and retain a translated closing action', () => {
+  assert.match(aboutPageSource, /pageKey === '' && <section className="about-content-section">/);
+  assert.match(aboutPageSource, /configuredContent\?\.introduction \|\| t\('aboutStoryCopy'\)/);
+  assert.match(aboutPageSource, /loading && <div className="content-stack" role="status"/);
+  assert.doesNotMatch(aboutPageSource, /if \(loading\) \{\s*return/);
   for (const page of ['mission-vision', 'how-it-works', 'why-choose', 'team', 'partners', 'success-stories', 'faqs']) {
     assert.ok(aboutPageSource.includes(`pageKey === '${page}'`), `missing dedicated About view: ${page}`);
     assert.ok(appSource.includes(`/about/${page}`), `missing About route: ${page}`);
@@ -51,7 +55,8 @@ test('About routes render one dedicated view and retain a translated closing act
   assert.match(aboutPageSource, /t\('aboutCtaTitle'\)/);
   assert.match(aboutPageSource, /window\.scrollTo\(0, 0\)/);
   assert.doesNotMatch(aboutPageSource, /about-hero|about-stats|about-section-nav|sections\.map/);
-  assert.match(appSource, /history\.replaceState\(\{\}, '', destination\)/);
+  assert.match(appSource, /if \(routePath === '\/about'\) return <PublicPageLayout[\s\S]*?<AboutPage/);
+  assert.doesNotMatch(appSource, /destination = '\/about\/mission-vision'/);
 });
 
 test('event listing exposes search, filters, sorting, and pagination through the public API', () => {

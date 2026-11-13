@@ -35,16 +35,23 @@ test('PostgreSQL public event routes use positional parameters and map empty res
     assert.deepEqual(await featured.json(), { data: [] });
     const categories = await fetch(`${baseUrl}/events/categories`);
     assert.deepEqual(await categories.json(), { data: [] });
+    const festivalListing = await fetch(`${baseUrl}/events?category=festivals`);
+    assert.equal(festivalListing.status, 200);
     const venues = await fetch(`${baseUrl}/events/popular-venues?limit=5`);
     assert.deepEqual(await venues.json(), { data: [] });
 
-    assert.ok(queries.length >= 5);
+    assert.ok(queries.length >= 7);
     for (const { sql } of queries) {
       assert.doesNotMatch(sql, /\?/);
     }
     assert.ok(queries.some(({ sql, values }) => sql.includes('ILIKE $1') && values.includes('%music%')));
     assert.ok(queries.some(({ sql }) => sql.includes("INTERVAL '15 minutes'")));
-    assert.ok(queries.some(({ sql }) => sql.includes('ARRAY_POSITION')));
+    assert.ok(queries.some(({ sql }) => sql.includes('FROM (VALUES') && !sql.includes('service_categories')));
+    const festivalQueries = queries.filter(({ sql, values }) => (
+      sql.includes('LOWER(TRIM(e.event_type)) = ANY($1::text[])')
+      && values.some((value) => Array.isArray(value) && value.includes('festival'))
+    ));
+    assert.equal(festivalQueries.length, 2);
   } finally {
     await new Promise((resolve, reject) => {
       server.close((error) => error ? reject(error) : resolve());
@@ -125,7 +132,8 @@ test('Neon PostgreSQL public event listings query and map real event records', {
 
     const categories = await fetch(`${baseUrl}/events/categories`, { signal: AbortSignal.timeout(20000) });
     assert.equal(categories.status, 200);
-    assert.ok(Array.isArray((await categories.json()).data));
+    const categoryRows = (await categories.json()).data;
+    assert.ok(categoryRows.some((category) => category.slug === 'wedding' && category.total >= 1));
 
     const venues = await fetch(`${baseUrl}/events/popular-venues?limit=5`, {
       signal: AbortSignal.timeout(20000),

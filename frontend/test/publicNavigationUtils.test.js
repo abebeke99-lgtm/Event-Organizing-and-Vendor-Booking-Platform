@@ -73,7 +73,7 @@ test('builds public navigation with database-backed categories and supported fea
   ]);
   for (const item of discoverItems) assert.equal(routeIsActive(item.path, item.path), true, item.label);
   const about = menu.find((item) => item.key === 'about');
-  assert.equal(about.labelLink, undefined);
+  assert.equal(about.labelLink, true);
   assert.equal(about.path, '/about');
   assert.deepEqual(about.children.map((item) => [item.label, item.path]), [
     ['Our Mission & Vision', '/about/mission-vision'],
@@ -486,6 +486,7 @@ test('opening About replaces the Events menu and its route descendants stay acti
   const events = updateOpenMenuPath([], '0:events');
   assert.deepEqual(updateOpenMenuPath(events, '0:about'), ['0:about']);
   const about = buildPublicNavigationMenu().find((item) => item.key === 'about');
+  assert.equal(routeIsActive(about.path, '/about'), true);
   const faqsActive = about.children.filter((item) => routeIsActive(item.path, '/about/faqs'));
   const missionActive = about.children.filter((item) => routeIsActive(item.path, '/about/mission-vision'));
   assert.deepEqual(faqsActive.map((item) => item.key), ['about-faqs']);

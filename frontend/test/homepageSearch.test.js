@@ -15,6 +15,8 @@ test('homepage hero search contains only its query field and submit control', ()
   assert.match(appSource, /<HomepageSearch api=\{api\} onNavigate=\{onNavigate\} \/>/);
   assert.doesNotMatch(appSource, /<HomepageSearch[^>]*(?:categories|locations)=/);
   assert.match(appSource, /onNavigate\(`\/search\?category=\$\{encodeURIComponent\(category\.name\)\}`\)/);
+  assert.match(componentSource, /`\/service-categories\/\$\{encodeURIComponent\(item\.slug \|\| item\.name\)\}`/);
+  assert.match(appSource, /`\/service-categories\/\$\{encodeURIComponent\(category\.slug \|\| category\.name\)\}`/);
 });
 
 test('homepage hero search submits only a non-empty text query', () => {

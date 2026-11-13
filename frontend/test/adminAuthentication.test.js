@@ -19,6 +19,10 @@ const registerSource = appSource.slice(
   appSource.indexOf('function RegisterPage('),
   appSource.indexOf('function ForgotPasswordPage('),
 );
+const forgotPasswordSource = appSource.slice(
+  appSource.indexOf('function ForgotPasswordPage('),
+  appSource.indexOf('function VerifyResetOtpPage('),
+);
 
 test('administrator login verifies the shared-auth session before returning an admin', async () => {
   const calls = [];
@@ -116,16 +120,25 @@ test('administrator routes preserve the dedicated login and protect the dashboar
   assert.equal(getAdministratorRouteRedirect('/login', null), null);
 });
 
-test('unified login has no language picker, quick logins, or developer credit', () => {
+test('unified login includes localization without quick logins or developer credit', () => {
   assert.match(loginSource, /type=\{showPassword \? 'text' : 'password'\}/);
   assert.match(loginSource, /aria-label=\{t\(showPassword \? 'hidePassword' : 'showPassword'\)\}/);
   assert.match(loginSource, /className="alert error" role="alert"/);
   assert.match(loginSource, /disabled=\{busy\}/);
-  assert.match(loginSource, /Remember me/);
+  assert.match(loginSource, /t\('rememberMe'\)/);
   assert.match(loginSource, /navigateBrowserPath\('\/forgot-password'\)/);
   assert.match(loginSource, /navigateBrowserPath\('\/register'\)/);
-  assert.match(loginSource, /<AuthLayout>/);
-  assert.doesNotMatch(loginSource, /Quick login|quick-login|eventflow\.test|LanguageSelector|AuthBrand|Developer credit|login-credit/);
+  assert.match(loginSource, /languageSelector=\{<LanguageSelector\/>\}/);
+  assert.match(loginSource, /t\('loginHeading'\)/);
+  assert.match(loginSource, /noValidate/);
+  assert.match(loginSource, /login-loading-spinner/);
+  assert.match(loginSource, /t\('noAccount'\)/);
+  assert.equal(translate('loginHeading', 'en'), 'Welcome back');
+  assert.equal(translate('loginSubtitle', 'en'), 'Sign in to manage your events, guests, and bookings.');
+  assert.equal(translate('loginEmailPlaceholder', 'am'), 'የኢሜይል አድራሻ ያስገቡ');
+  assert.equal(translate('rememberMe', 'am'), 'አስታውሰኝ');
+  assert.equal(translate('authFeatureGuests', 'am'), 'የእንግዳ ዝርዝሮች');
+  assert.doesNotMatch(loginSource, /Quick login|quick-login|eventflow\.test|AuthBrand|Developer credit|login-credit/);
   assert.match(appSource, /Back to Home/);
   assert.equal(translate('showPassword', 'en'), 'Show password');
   assert.equal(translate('hidePassword', 'en'), 'Hide password');
@@ -137,7 +150,7 @@ test('unified login has no language picker, quick logins, or developer credit', 
 });
 
 test('registration uses the shared layout and validates required fields, email, password length, and matching passwords', () => {
-  assert.match(registerSource, /<AuthLayout>/);
+  assert.match(registerSource, /languageSelector=\{<LanguageSelector\/>\}/);
   assert.match(registerSource, /noValidate/);
   assert.match(registerSource, /registrationEmailRequired/);
   assert.match(registerSource, /validEmailRequired/);
@@ -147,6 +160,14 @@ test('registration uses the shared layout and validates required fields, email, 
   assert.match(registerSource, /passwordMismatch/);
   assert.match(registerSource, /disabled=\{busy \|\| Boolean\(success\) \|\| !registrationEnabled\}/);
   assert.match(registerSource, /registration-login-link/);
+});
+
+test('forgot password keeps language selection and localized email validation', () => {
+  assert.match(forgotPasswordSource, /<LanguageSelector\/>/);
+  assert.match(forgotPasswordSource, /t\('registrationEmailRequired'\)/);
+  assert.match(forgotPasswordSource, /t\('validEmailRequired'\)/);
+  assert.match(forgotPasswordSource, /placeholder=\{t\('emailPlaceholder'\)\}/);
+  assert.notEqual(translate('emailPlaceholder', 'am'), translate('emailPlaceholder', 'en'));
 });
 
 test('admin profile retains secure email and password controls', () => {

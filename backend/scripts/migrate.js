@@ -1,6 +1,7 @@
 import '../src/lib/environment.js';
+import { getDatabaseDialect } from '../src/lib/startupConfig.js';
 
-const dialect = process.env.DB_DIALECT?.trim() || 'mysql';
+const dialect = getDatabaseDialect();
 
 if (dialect === 'postgres') {
   const [
@@ -27,18 +28,4 @@ if (dialect === 'postgres') {
   } finally {
     if (database) await database.close();
   }
-} else if (dialect === 'mysql') {
-  const [{ pool }, { runMigrations }] = await Promise.all([
-    import('../src/db.js'),
-    import('../src/lib/migrate.js'),
-  ]);
-
-  try {
-    await runMigrations(pool);
-  } finally {
-    await pool.end();
-  }
-} else {
-  console.error('DB_DIALECT must be set to mysql or postgres.');
-  process.exitCode = 1;
 }
