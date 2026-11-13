@@ -287,20 +287,21 @@ test('shows every vendor category and service-scoped database category independe
   }));
   categories.push({ id: 9, name: 'Unused', slug: 'unused', vendorCount: 0, serviceCount: 0 });
   const serviceNames = [
-    'Catering Services',
-    'Photography & Videography',
-    'Decoration & Florists',
-    'Wedding Planning',
-    'Venue & Event Spaces',
-    'Music & Entertainment',
-    'Sound & Lighting',
+    'Photography',
+    'Videography',
+    'Catering',
+    'Decoration',
+    'Wedding Venues',
+    'Event Halls',
+    'Entertainment',
+    'DJs and Music',
     'Transportation',
-    'Makeup & Beauty',
-    'Rental Equipment',
-    'Cakes & Bakery',
-    'Printing & Invitations',
+    'Makeup and Beauty',
+    'Florists',
+    'Event Planning',
+    'Equipment Rental',
+    'Lighting and Sound',
     'Security Services',
-    'Other Services',
   ];
   const serviceCategories = serviceNames.map((name, index) => ({
     id: 30 + index,
@@ -314,7 +315,7 @@ test('shows every vendor category and service-scoped database category independe
   const services = menu.find((item) => item.key === 'services').children;
   assert.equal(vendors.length, 6);
   assert.equal(vendors[5].children.length, 9);
-  assert.equal(services.length, 16);
+  assert.equal(services.length, 17);
   assert.ok(vendors[5].children.some((item) => item.label === 'Category 8' && item.count === 0));
   assert.ok(vendors[5].children.some((item) => item.label === 'Unused' && item.count === 0));
   assert.equal(services.some((item) => item.label === 'Category 1' || item.label === 'Unused'), false);

@@ -80,24 +80,12 @@ async function loadDashboardOverviewQueries(database, dateRange, dialect) {
   const paymentsFilter = createdFilter('p');
   const complaintsFilter = createdFilter('c');
   const reviewsFilter = createdFilter('r');
-  let pendingQuery = Promise.resolve();
-  let queryFailure = null;
   const queryRows = async (sql, values) => {
     if (dialect !== 'postgres') {
       const result = await database.query(sql, values);
       return result[0];
     }
-    const result = pendingQuery.then(async () => {
-      if (queryFailure) throw queryFailure;
-      try {
-        return await database.query(sql, values);
-      } catch (error) {
-        queryFailure = error;
-        throw error;
-      }
-    });
-    pendingQuery = result.then(() => undefined, () => undefined);
-    return (await result).rows;
+    return (await database.query(sql, values)).rows;
   };
   const aggregate = (condition) => dialect === 'postgres'
     ? `(COUNT(*) FILTER (WHERE ${condition}))::int`
@@ -113,144 +101,126 @@ async function loadDashboardOverviewQueries(database, dateRange, dialect) {
   const paymentPeriod = period('p.created_at');
 
   if (dialect === 'postgres') {
-    const [summaryRows, recentBookings, recentVendorRequests, recentComplaints, recentReviews, trendRows, recentActivities] = await Promise.all([
-      queryRows(
-        `WITH user_summary AS (
-           SELECT COUNT(*)::int AS total_users FROM users u${usersFilter.sql}
-         ),
-         role_summary AS (
-           SELECT
-             COUNT(DISTINCT CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN u.id END)::int AS total_administrators,
-             COUNT(DISTINCT CASE WHEN LOWER(r.name) = 'customer' THEN u.id END)::int AS total_customers,
-             COUNT(DISTINCT CASE WHEN LOWER(r.name) = 'organizer' THEN u.id END)::int AS total_organizers,
-             COUNT(DISTINCT CASE WHEN LOWER(r.name) = 'vendor' THEN u.id END)::int AS total_vendors
-           FROM users u
-           LEFT JOIN user_roles ur ON ur.user_id = u.id
-           LEFT JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE${usersFilter.sql}
-         ),
-         vendor_summary AS (
-           SELECT COUNT(*)::int AS total_vendors,
-                  COUNT(*) FILTER (WHERE vp.verification_status = 'verified')::int AS verified_vendors,
-                  COUNT(*) FILTER (WHERE vp.verification_status = 'pending')::int AS pending_vendors
-           FROM vendor_profiles vp${vendorsFilter.sql}
-         ),
-         event_summary AS (
-           SELECT COUNT(*)::int AS total_events,
-                  COUNT(*) FILTER (WHERE e.status IN ('active', 'published', 'upcoming', 'open'))::int AS published_events,
-                  COUNT(*) FILTER (WHERE e.start_date >= CURRENT_DATE
-                    AND e.status IN ('active', 'published', 'upcoming', 'open'))::int AS upcoming_events
+    const [row] = await queryRows(
+      `WITH user_summary AS (
+         SELECT COUNT(*)::int AS total_users FROM users u${usersFilter.sql}
+       ),
+       role_summary AS (
+         SELECT
+           COUNT(DISTINCT CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN u.id END)::int AS total_administrators,
+           COUNT(DISTINCT CASE WHEN LOWER(r.name) = 'customer' THEN u.id END)::int AS total_customers,
+           COUNT(DISTINCT CASE WHEN LOWER(r.name) = 'organizer' THEN u.id END)::int AS total_organizers,
+           COUNT(DISTINCT CASE WHEN LOWER(r.name) = 'vendor' THEN u.id END)::int AS total_vendors
+         FROM users u
+         LEFT JOIN user_roles ur ON ur.user_id = u.id
+         LEFT JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE${usersFilter.sql}
+       ),
+       vendor_summary AS (
+         SELECT COUNT(*)::int AS total_vendors,
+                COUNT(*) FILTER (WHERE vp.verification_status = 'verified')::int AS verified_vendors,
+                COUNT(*) FILTER (WHERE vp.verification_status = 'pending')::int AS pending_vendors
+         FROM vendor_profiles vp${vendorsFilter.sql}
+       ),
+       event_summary AS (
+         SELECT COUNT(*)::int AS total_events,
+                COUNT(*) FILTER (WHERE e.status IN ('active', 'published', 'upcoming', 'open'))::int AS published_events,
+                COUNT(*) FILTER (WHERE e.start_date >= CURRENT_DATE
+                  AND e.status IN ('active', 'published', 'upcoming', 'open'))::int AS upcoming_events
+         FROM events e${eventsFilter.sql}
+       ),
+       booking_summary AS (
+         SELECT COUNT(*)::int AS total_bookings,
+                COUNT(*) FILTER (WHERE b.status IN ('requested', 'quoted', 'under_review'))::int AS pending_bookings,
+                COUNT(*) FILTER (WHERE b.status = 'accepted')::int AS confirmed_bookings,
+                COUNT(*) FILTER (WHERE b.status = 'completed')::int AS completed_bookings,
+                COUNT(*) FILTER (WHERE b.status = 'cancelled')::int AS cancelled_bookings
+         FROM bookings b${bookingsFilter.sql}
+       ),
+       payment_summary AS (
+         SELECT COUNT(*)::int AS total_payments,
+                COUNT(*) FILTER (WHERE p.status = 'paid')::int AS successful_payments,
+                COUNT(*) FILTER (WHERE p.status IN ('pending', 'authorized'))::int AS pending_payments,
+                COUNT(*) FILTER (WHERE p.status = 'refund_pending')::int AS refund_requests
+         FROM payments p${paymentsFilter.sql}
+       ),
+       complaint_summary AS (
+         SELECT COUNT(*)::int AS total_complaints,
+                COUNT(*) FILTER (WHERE c.status IN ('open', 'under_review'))::int AS open_complaints
+         FROM complaints c${complaintsFilter.sql}
+       ),
+       review_summary AS (
+         SELECT COUNT(*)::int AS total_reviews FROM reviews r${reviewsFilter.sql}
+       ),
+       revenue_by_currency AS (
+         SELECT COALESCE(jsonb_agg(
+           jsonb_build_object('currency', revenue.currency, 'total', revenue.total::text)
+           ORDER BY revenue.currency
+         ), '[]'::jsonb) AS data
+         FROM (
+           SELECT p.currency, SUM(p.amount) AS total
+           FROM payments p${paymentsFilter.sql} AND p.status = 'paid'
+           GROUP BY p.currency
+         ) revenue
+       ),
+       event_categories AS (
+         SELECT COALESCE(jsonb_agg(
+           jsonb_build_object('category', category, 'total', total)
+           ORDER BY total DESC, category ASC
+         ), '[]'::jsonb) AS data
+         FROM (
+           SELECT COALESCE(NULLIF(TRIM(e.event_type), ''), 'Uncategorized') AS category,
+                  COUNT(*)::int AS total
            FROM events e${eventsFilter.sql}
-         ),
-         booking_summary AS (
-           SELECT COUNT(*)::int AS total_bookings,
-                  COUNT(*) FILTER (WHERE b.status IN ('requested', 'quoted', 'under_review'))::int AS pending_bookings,
-                  COUNT(*) FILTER (WHERE b.status = 'accepted')::int AS confirmed_bookings,
-                  COUNT(*) FILTER (WHERE b.status = 'completed')::int AS completed_bookings,
-                  COUNT(*) FILTER (WHERE b.status = 'cancelled')::int AS cancelled_bookings
+           GROUP BY COALESCE(NULLIF(TRIM(e.event_type), ''), 'Uncategorized')
+         ) categories
+       ),
+       booking_statuses AS (
+         SELECT COALESCE(jsonb_agg(
+           jsonb_build_object('status', status, 'total', total)
+           ORDER BY total DESC, status ASC
+         ), '[]'::jsonb) AS data
+         FROM (
+           SELECT b.status, COUNT(*)::int AS total
            FROM bookings b${bookingsFilter.sql}
-         ),
-         payment_summary AS (
-           SELECT COUNT(*)::int AS total_payments,
-                  COUNT(*) FILTER (WHERE p.status = 'paid')::int AS successful_payments,
-                  COUNT(*) FILTER (WHERE p.status IN ('pending', 'authorized'))::int AS pending_payments,
-                  COUNT(*) FILTER (WHERE p.status = 'refund_pending')::int AS refund_requests
-           FROM payments p${paymentsFilter.sql}
-         ),
-         complaint_summary AS (
-           SELECT COUNT(*)::int AS total_complaints,
-                  COUNT(*) FILTER (WHERE c.status IN ('open', 'under_review'))::int AS open_complaints
-           FROM complaints c${complaintsFilter.sql}
-         ),
-         review_summary AS (
-           SELECT COUNT(*)::int AS total_reviews FROM reviews r${reviewsFilter.sql}
-         )
-         SELECT user_summary.total_users,
-                role_summary.total_administrators, role_summary.total_customers,
-                role_summary.total_organizers, role_summary.total_vendors,
-                vendor_summary.total_vendors, vendor_summary.verified_vendors, vendor_summary.pending_vendors,
-                event_summary.total_events, event_summary.published_events, event_summary.upcoming_events,
-                booking_summary.total_bookings, booking_summary.pending_bookings, booking_summary.confirmed_bookings,
-                booking_summary.completed_bookings, booking_summary.cancelled_bookings,
-                payment_summary.total_payments, payment_summary.successful_payments,
-                payment_summary.pending_payments, payment_summary.refund_requests,
-                complaint_summary.total_complaints, complaint_summary.open_complaints,
-                review_summary.total_reviews,
-                (SELECT COALESCE(jsonb_agg(
-                   jsonb_build_object('currency', revenue.currency, 'total', revenue.total::text)
-                   ORDER BY revenue.currency
-                 ), '[]'::jsonb)
-                 FROM (
-                   SELECT p.currency, SUM(p.amount) AS total
-                   FROM payments p${paymentsFilter.sql} AND p.status = 'paid'
-                   GROUP BY p.currency
-                 ) revenue) AS revenue_by_currency,
-                (SELECT COALESCE(jsonb_agg(
-                   jsonb_build_object('category', category, 'total', total)
-                   ORDER BY total DESC, category ASC
-                 ), '[]'::jsonb)
-                 FROM (
-                   SELECT COALESCE(NULLIF(TRIM(e.event_type), ''), 'Uncategorized') AS category,
-                          COUNT(*)::int AS total
-                   FROM events e${eventsFilter.sql}
-                   GROUP BY COALESCE(NULLIF(TRIM(e.event_type), ''), 'Uncategorized')
-                 ) categories) AS event_categories,
-                (SELECT COALESCE(jsonb_agg(
-                   jsonb_build_object('status', status, 'total', total)
-                   ORDER BY total DESC, status ASC
-                 ), '[]'::jsonb)
-                 FROM (
-                   SELECT b.status, COUNT(*)::int AS total
-                   FROM bookings b${bookingsFilter.sql}
-                   GROUP BY b.status
-                 ) statuses) AS booking_statuses
-         FROM user_summary
-         CROSS JOIN role_summary
-         CROSS JOIN vendor_summary
-         CROSS JOIN event_summary
-         CROSS JOIN booking_summary
-         CROSS JOIN payment_summary
-         CROSS JOIN complaint_summary
-         CROSS JOIN review_summary`,
-        usersFilter.values,
-      ),
-      queryRows(
-        `SELECT b.id, b.status, b.quoted_amount, b.currency, b.created_at,
+           GROUP BY b.status
+         ) statuses
+       ),
+       recent_bookings AS (
+         SELECT b.id::text AS id, b.status, b.quoted_amount::text AS quoted_amount,
+                b.currency, b.created_at,
                 e.title AS event_title, u.full_name AS organizer_name,
                 vp.business_name AS vendor_name
          FROM bookings b
          JOIN events e ON e.id = b.event_id
          JOIN users u ON u.id = e.organizer_id
          JOIN vendor_profiles vp ON vp.id = b.vendor_id${bookingsFilter.sql}
-         ORDER BY b.created_at DESC, b.id DESC LIMIT 8`,
-        bookingsFilter.values,
-      ),
-      queryRows(
-        `SELECT vp.id, vp.business_name, vp.created_at, u.full_name AS applicant_name, u.email
+         ORDER BY b.created_at DESC, b.id DESC LIMIT 8
+       ),
+       recent_vendor_requests AS (
+         SELECT vp.id::text AS id, vp.business_name, vp.created_at,
+                u.full_name AS applicant_name, u.email
          FROM vendor_profiles vp
          JOIN users u ON u.id = vp.user_id${vendorsFilter.sql} AND vp.verification_status = 'pending'
-         ORDER BY vp.created_at DESC, vp.id DESC LIMIT 6`,
-        vendorsFilter.values,
-      ),
-      queryRows(
-        `SELECT c.id, c.subject, c.status, c.created_at, u.full_name AS customer_name
+         ORDER BY vp.created_at DESC, vp.id DESC LIMIT 6
+       ),
+       recent_complaints AS (
+         SELECT c.id::text AS id, c.subject, c.status, c.created_at, u.full_name AS customer_name
          FROM complaints c
          JOIN users u ON u.id = c.user_id${complaintsFilter.sql}
-         ORDER BY c.created_at DESC, c.id DESC LIMIT 6`,
-        complaintsFilter.values,
-      ),
-      queryRows(
-        `SELECT r.id, r.rating, r.comment, r.status, r.created_at,
+         ORDER BY c.created_at DESC, c.id DESC LIMIT 6
+       ),
+       recent_reviews AS (
+         SELECT r.id::text AS id, r.rating, r.comment, r.status, r.created_at,
                 u.full_name AS customer_name, vp.business_name AS vendor_name
          FROM reviews r
          JOIN bookings b ON b.id = r.booking_id
          JOIN events e ON e.id = b.event_id
          JOIN users u ON u.id = e.organizer_id
          JOIN vendor_profiles vp ON vp.id = b.vendor_id${reviewsFilter.sql}
-         ORDER BY r.created_at DESC, r.id DESC LIMIT 6`,
-        reviewsFilter.values,
-      ),
-      queryRows(
-        `SELECT
+         ORDER BY r.created_at DESC, r.id DESC LIMIT 6
+       ),
+       trend_summary AS (
+         SELECT
            (SELECT COALESCE(jsonb_agg(
               jsonb_build_object('period', period, 'total', total) ORDER BY period
             ), '[]'::jsonb)
@@ -269,67 +239,104 @@ async function loadDashboardOverviewQueries(database, dateRange, dialect) {
                      COUNT(*)::int AS transactions, SUM(p.amount) AS total
               FROM payments p${paymentsFilter.sql} AND p.status = 'paid'
               GROUP BY ${paymentPeriod}, p.currency
-            ) payment_trends) AS payment_trend`,
-        bookingsFilter.values,
-      ),
-      queryRows(
-        `SELECT a.id, a.action, a.entity_type, a.entity_id, a.created_at,
+            ) payment_trends) AS payment_trend
+       ),
+       recent_activities AS (
+         SELECT a.id::text AS id, a.action, a.entity_type, a.entity_id, a.created_at,
                 u.full_name AS actor_name
          FROM audit_logs a
          JOIN users u ON u.id = a.actor_id${createdFilter('a').sql}
-         ORDER BY a.created_at DESC, a.id DESC LIMIT 8`,
-        createdFilter('a').values,
-      ),
-    ]);
+         ORDER BY a.created_at DESC, a.id DESC LIMIT 8
+       )
+       SELECT user_summary.total_users,
+              role_summary.total_administrators, role_summary.total_customers,
+              role_summary.total_organizers, role_summary.total_vendors,
+              vendor_summary.total_vendors, vendor_summary.verified_vendors, vendor_summary.pending_vendors,
+              event_summary.total_events, event_summary.published_events, event_summary.upcoming_events,
+              booking_summary.total_bookings, booking_summary.pending_bookings, booking_summary.confirmed_bookings,
+              booking_summary.completed_bookings, booking_summary.cancelled_bookings,
+              payment_summary.total_payments, payment_summary.successful_payments,
+              payment_summary.pending_payments, payment_summary.refund_requests,
+              complaint_summary.total_complaints, complaint_summary.open_complaints,
+              review_summary.total_reviews, revenue_by_currency.data AS revenue_by_currency,
+              event_categories.data AS event_categories, booking_statuses.data AS booking_statuses,
+              trend_summary.booking_trend, trend_summary.payment_trend,
+              COALESCE((SELECT jsonb_agg(to_jsonb(recent_bookings)
+                ORDER BY recent_bookings.created_at DESC, recent_bookings.id DESC)
+                FROM recent_bookings), '[]'::jsonb) AS recent_bookings,
+              COALESCE((SELECT jsonb_agg(to_jsonb(recent_vendor_requests)
+                ORDER BY recent_vendor_requests.created_at DESC, recent_vendor_requests.id DESC)
+                FROM recent_vendor_requests), '[]'::jsonb) AS recent_vendor_requests,
+              COALESCE((SELECT jsonb_agg(to_jsonb(recent_complaints)
+                ORDER BY recent_complaints.created_at DESC, recent_complaints.id DESC)
+                FROM recent_complaints), '[]'::jsonb) AS recent_complaints,
+              COALESCE((SELECT jsonb_agg(to_jsonb(recent_reviews)
+                ORDER BY recent_reviews.created_at DESC, recent_reviews.id DESC)
+                FROM recent_reviews), '[]'::jsonb) AS recent_reviews,
+              COALESCE((SELECT jsonb_agg(to_jsonb(recent_activities)
+                ORDER BY recent_activities.created_at DESC, recent_activities.id DESC)
+                FROM recent_activities), '[]'::jsonb) AS recent_activities
+       FROM user_summary
+       CROSS JOIN role_summary
+       CROSS JOIN vendor_summary
+       CROSS JOIN event_summary
+       CROSS JOIN booking_summary
+       CROSS JOIN payment_summary
+       CROSS JOIN complaint_summary
+       CROSS JOIN review_summary
+       CROSS JOIN revenue_by_currency
+       CROSS JOIN event_categories
+       CROSS JOIN booking_statuses
+       CROSS JOIN trend_summary`,
+      usersFilter.values,
+    );
 
-    const summary = summaryRows[0];
-    const trends = trendRows[0];
-    if (!summary || !trends) throw new Error('PostgreSQL dashboard summary query returned no result.');
+    if (!row) throw new Error('PostgreSQL dashboard summary query returned no result.');
     return {
-      users: { total_users: summary.total_users },
+      users: { total_users: row.total_users },
       userRoles: {
-        total_administrators: summary.total_administrators,
-        total_customers: summary.total_customers,
-        total_organizers: summary.total_organizers,
-        total_vendors: summary.total_vendors,
+        total_administrators: row.total_administrators,
+        total_customers: row.total_customers,
+        total_organizers: row.total_organizers,
+        total_vendors: row.total_vendors,
       },
       vendors: {
-        total_vendors: summary.total_vendors,
-        verified_vendors: summary.verified_vendors,
-        pending_vendors: summary.pending_vendors,
+        total_vendors: row.total_vendors,
+        verified_vendors: row.verified_vendors,
+        pending_vendors: row.pending_vendors,
       },
       events: {
-        total_events: summary.total_events,
-        published_events: summary.published_events,
-        upcoming_events: summary.upcoming_events,
+        total_events: row.total_events,
+        published_events: row.published_events,
+        upcoming_events: row.upcoming_events,
       },
       bookings: {
-        total_bookings: summary.total_bookings,
-        pending_bookings: summary.pending_bookings,
-        confirmed_bookings: summary.confirmed_bookings,
-        completed_bookings: summary.completed_bookings,
-        cancelled_bookings: summary.cancelled_bookings,
+        total_bookings: row.total_bookings,
+        pending_bookings: row.pending_bookings,
+        confirmed_bookings: row.confirmed_bookings,
+        completed_bookings: row.completed_bookings,
+        cancelled_bookings: row.cancelled_bookings,
       },
       payments: {
-        total_payments: summary.total_payments,
-        successful_payments: summary.successful_payments,
-        pending_payments: summary.pending_payments,
-        refund_requests: summary.refund_requests,
+        total_payments: row.total_payments,
+        successful_payments: row.successful_payments,
+        pending_payments: row.pending_payments,
+        refund_requests: row.refund_requests,
       },
-      revenueByCurrency: summary.revenue_by_currency,
+      revenueByCurrency: row.revenue_by_currency,
       complaints: {
-        total_complaints: summary.total_complaints,
-        open_complaints: summary.open_complaints,
+        total_complaints: row.total_complaints,
+        open_complaints: row.open_complaints,
       },
-      reviews: { total_reviews: summary.total_reviews },
-      recentBookings,
-      recentVendorRequests,
-      recentComplaints,
-      recentReviews,
-      bookingTrend: buildDashboardTrends(trends.booking_trend, trends.payment_trend),
-      eventCategories: summary.event_categories,
-      bookingStatuses: summary.booking_statuses,
-      recentActivities,
+      reviews: { total_reviews: row.total_reviews },
+      recentBookings: row.recent_bookings,
+      recentVendorRequests: row.recent_vendor_requests,
+      recentComplaints: row.recent_complaints,
+      recentReviews: row.recent_reviews,
+      bookingTrend: buildDashboardTrends(row.booking_trend, row.payment_trend),
+      eventCategories: row.event_categories,
+      bookingStatuses: row.booking_statuses,
+      recentActivities: row.recent_activities,
       filters: dateRange,
     };
   }

@@ -492,6 +492,36 @@ test('only explicitly configured local Vite origins are allowed in development',
   }
 });
 
+test('both local frontend origins are allowed without extra development CORS configuration', async () => {
+  const previousOrigin = process.env.WEB_ORIGIN;
+  const previousEnvironment = process.env.NODE_ENV;
+  delete process.env.WEB_ORIGIN;
+  process.env.NODE_ENV = 'development';
+  const corsApp = createApp({ database: { async query() {} } });
+  if (previousOrigin === undefined) delete process.env.WEB_ORIGIN;
+  else process.env.WEB_ORIGIN = previousOrigin;
+  if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousEnvironment;
+  const corsServer = corsApp.listen(0, '127.0.0.1');
+  await once(corsServer, 'listening');
+
+  try {
+    for (const origin of ['http://127.0.0.1:5173', 'http://localhost:5173']) {
+      const response = await fetch(`http://127.0.0.1:${corsServer.address().port}/`, {
+        headers: { Origin: origin },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('access-control-allow-origin'), origin);
+      assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+    }
+  } finally {
+    await new Promise((resolve, reject) => {
+      corsServer.close((error) => error ? reject(error) : resolve());
+      corsServer.closeAllConnections();
+    });
+  }
+});
+
 test('production CORS does not allow local development origins', async () => {
   const previousOrigin = process.env.WEB_ORIGIN;
   const previousEnvironment = process.env.NODE_ENV;

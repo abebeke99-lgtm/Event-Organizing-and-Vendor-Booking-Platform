@@ -59,6 +59,7 @@ import ErrorBoundary from './ErrorBoundary.jsx';
 import { formatCustomerMoney } from './customerMoney.js';
 import { getCustomerDashboardEndpoints } from './customerDashboardData.js';
 import { getVendorDashboardEndpoints } from './vendorDashboardData.js';
+import { requestDashboardData } from './dashboardRequests.js';
 const AdminUserManagement = React.lazy(() => import('./AdminUserManagement.jsx'));
 const AdminRoleManagement = React.lazy(() => import('./AdminRoleManagement.jsx'));
 const AdminVendorVerification = React.lazy(() => import('./AdminVendorVerification.jsx'));
@@ -4226,6 +4227,7 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [secondaryError, setSecondaryError] = useState('');
   const [documentBusy, setDocumentBusy] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -4279,9 +4281,32 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
       try {
         setLoading(true);
         setError('');
+        setSecondaryError('');
         const endpoints = getVendorDashboardEndpoints(slug);
+        const owner = user.id == null ? null : `vendor:${user.id}`;
+        if (slug === 'overview') {
+          const overviewResponse = await requestDashboardData(api, owner, '/vendor/overview', controller.signal);
+          if (controller.signal.aborted) return;
+          setData((current) => ({ ...current, overview: overviewResponse.data }));
+          setLoading(false);
+
+          const secondaryEndpoints = endpoints.filter((endpoint) => endpoint !== 'overview');
+          const secondaryResults = await Promise.allSettled(secondaryEndpoints.map((endpoint) => (
+            requestDashboardData(api, owner, `/vendor/${endpoint}`, controller.signal)
+          )));
+          if (controller.signal.aborted) return;
+          const next = {};
+          const failures = [];
+          secondaryResults.forEach((result, index) => {
+            if (result.status === 'fulfilled') next[secondaryEndpoints[index]] = result.value.data;
+            else failures.push(result.reason?.message || 'A dashboard section could not be loaded.');
+          });
+          setData((current) => ({ ...current, ...next }));
+          if (failures.length) setSecondaryError(failures.join(' '));
+          return;
+        }
         const results = await Promise.all(endpoints.map((endpoint) => (
-          api(`/vendor/${endpoint}`, { signal: controller.signal })
+          requestDashboardData(api, owner, `/vendor/${endpoint}`, controller.signal)
         )));
         if (controller.signal.aborted) return;
         const next = {};
@@ -4295,12 +4320,12 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
     }
     load();
     return () => controller.abort();
-  }, [refreshKey, slug]);
+  }, [refreshKey, slug, user.id]);
 
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <section className="dashboard-error" role="alert"><div className="alert error">{error}</div><button className="button" type="button" onClick={() => setRefreshKey((current) => current + 1)}>Retry dashboard</button></section>;
-    if (slug !== 'verification') return <VendorWorkspace view={slug} data={data} api={api} user={user} onNavigate={setSlug} onUserChange={onUserChange} onRefresh={() => setRefreshKey((current) => current + 1)} />;
+    if (slug !== 'verification') return <>{secondaryError && <div className="alert error" role="alert">{secondaryError} <button className="text-action" type="button" onClick={() => setRefreshKey((current) => current + 1)}>Retry dashboard</button></div>}<VendorWorkspace view={slug} data={data} api={api} user={user} onNavigate={setSlug} onUserChange={onUserChange} onRefresh={() => setRefreshKey((current) => current + 1)} /></>;
 
     switch (slug) {
       case 'overview':
@@ -4367,6 +4392,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [data, setData] = useState({});
   const [error, setError] = useState('');
+  const [secondaryError, setSecondaryError] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
   const [eventFormOpen, setEventFormOpen] = useState(false);
@@ -4427,9 +4453,37 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
       try {
         setLoading(true);
         setError('');
+        setSecondaryError('');
         const endpoints = getCustomerDashboardEndpoints(slug);
+        const owner = user.id == null ? null : `customer:${user.id}`;
+        if (slug === 'overview') {
+          const overviewResponse = await requestDashboardData(api, owner, '/customer/overview', controller.signal);
+          if (controller.signal.aborted) return;
+          setData({ overview: overviewResponse.data });
+          setLoading(false);
+
+          const secondaryEndpoints = endpoints.filter((endpoint) => endpoint !== 'overview');
+          const secondaryResults = await Promise.allSettled(secondaryEndpoints.map((endpoint) => (
+            requestDashboardData(api, owner, `/customer/${endpoint}`, controller.signal)
+          )));
+          if (controller.signal.aborted) return;
+          const next = {};
+          const objectEndpoints = new Set(['profile']);
+          const failures = [];
+          secondaryResults.forEach((result, index) => {
+            const endpoint = secondaryEndpoints[index];
+            if (result.status === 'fulfilled') {
+              next[endpoint] = result.value?.data ?? (objectEndpoints.has(endpoint) ? {} : []);
+            } else {
+              failures.push(result.reason?.message || 'A dashboard section could not be loaded.');
+            }
+          });
+          setData((current) => ({ ...current, ...next }));
+          if (failures.length) setSecondaryError(failures.join(' '));
+          return;
+        }
         const results = await Promise.all(endpoints.map((endpoint) => (
-          api(`/customer/${endpoint}`, { signal: controller.signal })
+          requestDashboardData(api, owner, `/customer/${endpoint}`, controller.signal)
         )));
         if (controller.signal.aborted) return;
         const next = {};
@@ -4446,12 +4500,12 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
     }
     load();
     return () => controller.abort();
-  }, [refreshKey, slug]);
+  }, [refreshKey, slug, user.id]);
 
   const renderSection = () => {
     if (loading) return <div className="loading"><span className="spinner"/>{t('loading')}</div>;
     if (error) return <div className="alert error" role="alert">{error}<button className="text-action" type="button" onClick={() => setRefreshKey((current) => current + 1)}>Retry dashboard</button></div>;
-    return <ErrorBoundary key={slug}>
+    return <>{secondaryError && <div className="alert error" role="alert">{secondaryError} <button className="text-action" type="button" onClick={() => setRefreshKey((current) => current + 1)}>Retry dashboard</button></div>}<ErrorBoundary key={slug}>
       <CustomerWorkspace
         view={slug}
         data={data}
@@ -4462,7 +4516,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
         onUserChange={onUserChange}
         onRefresh={() => setRefreshKey((current) => current + 1)}
       />
-    </ErrorBoundary>;
+    </ErrorBoundary></>;
 
     switch (slug) {
       case 'overview':
@@ -4520,35 +4574,61 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
   const [vendors, setVendors] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [error, setError] = useState('');
+  const [detailsError, setDetailsError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
+    if (dashboardView !== 'overview') {
+      setLoading(false);
+      setError('');
+      setDetailsLoading(false);
+      return () => controller.abort();
+    }
+
     async function load() {
       try {
         setLoading(true);
         setError('');
-        const [overviewResponse, eventsResponse, vendorsResponse, bookingsResponse] = await Promise.all([
-          api('/platform/organizer/overview', { signal: controller.signal }),
-          api('/platform/events/mine', { signal: controller.signal }),
-          api('/platform/vendors?page=1&limit=4&sort=recommended', { signal: controller.signal }),
-          api('/platform/bookings', { signal: controller.signal })
-        ]);
+        setDetailsError('');
+        setDetailsLoading(true);
+        setEvents([]);
+        setVendors([]);
+        setBookings([]);
+        const owner = user.id == null ? null : `organizer:${user.id}`;
+        const overviewResponse = await requestDashboardData(api, owner, '/platform/organizer/overview', controller.signal);
         if (controller.signal.aborted) return;
         setOverview(overviewResponse.data);
-        setEvents(eventsResponse.data || []);
-        setVendors(vendorsResponse.data || []);
-        setBookings(bookingsResponse.data || []);
+        setLoading(false);
+
+        const secondaryResults = await Promise.allSettled([
+          requestDashboardData(api, owner, '/platform/events/mine', controller.signal),
+          requestDashboardData(api, owner, '/platform/vendors?page=1&limit=4&sort=recommended', controller.signal),
+          requestDashboardData(api, owner, '/platform/bookings', controller.signal),
+        ]);
+        if (controller.signal.aborted) return;
+        const failures = [];
+        if (secondaryResults[0].status === 'fulfilled') setEvents(secondaryResults[0].value.data || []);
+        else failures.push(secondaryResults[0].reason?.message || 'Events could not be loaded.');
+        if (secondaryResults[1].status === 'fulfilled') setVendors(secondaryResults[1].value.data || []);
+        else failures.push(secondaryResults[1].reason?.message || 'Recommended vendors could not be loaded.');
+        if (secondaryResults[2].status === 'fulfilled') setBookings(secondaryResults[2].value.data || []);
+        else failures.push(secondaryResults[2].reason?.message || 'Bookings could not be loaded.');
+        if (failures.length) setDetailsError(failures.join(' '));
       } catch (issue) {
         if (!controller.signal.aborted) setError(issue.message);
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setDetailsLoading(false);
+        }
       }
     }
     load();
     return () => controller.abort();
-  }, [retryCount]);
+  }, [retryCount, dashboardView, user.id]);
 
   function toggleSidebar() {
     if (window.matchMedia('(max-width: 760px)').matches) setSidebarOpen((current) => !current);
@@ -4565,8 +4645,17 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
     return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={translate('organizerDashboard', language).toUpperCase()} groups={[{ id: 'organizer', label: 'nav.dashboard.groupWorkspace', items: organizerMenu }]} activePage={dashboardView} onNavigate={setDashboardView} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isOrganizer onNavigate={setDashboardView} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{content}</div></main></div>;
   }
 
-  if (error) return renderDashboard(<section className="dashboard-error" role="alert"><div className="alert error">{translateText(error, language)}</div><button className="button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Retry dashboard</button></section>);
-  if (loading || !overview) return renderDashboard(<div className="loading"><span className="spinner"/>{t('loading')}</div>);
+  if (dashboardView === 'overview' && error) return renderDashboard(<section className="dashboard-error" role="alert"><div className="alert error">{translateText(error, language)}</div><button className="button" type="button" onClick={() => setRetryCount((count) => count + 1)}>Retry dashboard</button></section>);
+  if (dashboardView === 'overview' && (loading || !overview)) return renderDashboard(<div className="loading"><span className="spinner"/>{t('loading')}</div>);
+
+  const profileContent = dashboardView === 'settings' ? <DashboardSettings user={user}/> : null;
+  const eventManagerContent = dashboardView === 'events' ? <OrganizerEventsManager api={api} /> : null;
+  const workspaceContent = dashboardView !== 'overview' && dashboardView !== 'events' && dashboardView !== 'settings'
+    ? <OrganizerWorkspace view={dashboardView} api={api} user={user} onNavigate={setDashboardView}/>
+    : null;
+  if (dashboardView !== 'overview') {
+    return renderDashboard(profileContent || eventManagerContent || workspaceContent);
+  }
 
   const derivedSummary = summarizeOrganizerDashboard(events, bookings);
   const summary = {
@@ -4578,29 +4667,25 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
   const upcomingEvents = derivedSummary.upcomingEvents.slice(0, 3);
   const activeBookings = bookings.filter((booking) => ['pending', 'confirmed', 'accepted', 'under_review'].includes(String(booking.status).toLowerCase()));
 
-  const profileContent = dashboardView === 'settings' ? <DashboardSettings user={user}/> : null;
-  const eventManagerContent = dashboardView === 'events' ? <OrganizerEventsManager api={api} /> : null;
-  const workspaceContent = dashboardView !== 'overview' && dashboardView !== 'events' && dashboardView !== 'settings'
-    ? <OrganizerWorkspace view={dashboardView} api={api} user={user} onNavigate={setDashboardView}/>
-    : null;
   return renderDashboard(profileContent || eventManagerContent || workspaceContent || <section className="organizer-shell"><div className="welcome"><div><p className="eyebrow">{t('organizerDashboard')}</p><h2>{t('customerWelcome')}, {user.name || user.full_name || 'Organizer'}</h2><p className="muted">{t('secureOrganizerAccess')}</p></div></div>
+    {detailsError && <div className="alert error" role="alert">{translateText(detailsError, language)} <button className="text-action" type="button" onClick={() => setRetryCount((count) => count + 1)}>Retry dashboard</button></div>}
     <div className="metric-grid">
       <article className="metric-card"><p>{t('activeEvents')}</p><strong>{summary.totalEvents}</strong><span>{summary.upcomingCount} {t('upcoming')} · {summary.ongoingCount} ongoing</span></article>
-      <article className="metric-card"><p>{t('vendorMatches')}</p><strong>{vendors.length}</strong><span>{t('verifiedRanked')}</span></article>
+      <article className="metric-card"><p>{t('vendorMatches')}</p><strong>{detailsLoading ? '—' : vendors.length}</strong><span>{detailsLoading ? t('loading') : t('verifiedRanked')}</span></article>
       <article className="metric-card"><p>{t('budgetAllocated')}</p><strong>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(summary.totalBudget)}</strong><span>{t('currentPlans')}</span></article>
-      <article className="metric-card"><p>{t('bookingsInMotion')}</p><strong>{activeBookings.length}</strong><span>{bookings.length} {t('totalTracked')}</span></article>
+      <article className="metric-card"><p>{t('bookingsInMotion')}</p><strong>{detailsLoading ? '—' : activeBookings.length}</strong><span>{detailsLoading ? t('loading') : `${bookings.length} ${t('totalTracked')}`}</span></article>
     </div>
     <div className="two-column-layout">
       <article className="panel">
         <div className="panel-header"><h3>{t('eventPipeline')}</h3><button className="button secondary small" onClick={() => setDashboardView('events')}>{t('createEvent')}</button></div>
         <div className="list-stack">
-          {upcomingEvents.length ? upcomingEvents.map((event) => <div key={event.id} className="list-card"><div><strong>{event.title}</strong><small>{event.type} • {formatEventDate(event.startDate || event.date, language)}</small></div><span className="pill active">{t('eventPlanned')}</span></div>) : <div className="empty panel"><strong>{t('noUpcomingEvents')}</strong><span>{t('draftEventPrompt')}</span></div>}
+          {upcomingEvents.length ? upcomingEvents.map((event) => <div key={event.id} className="list-card"><div><strong>{event.title}</strong><small>{event.type} • {formatEventDate(event.startDate || event.date, language)}</small></div><span className="pill active">{t('eventPlanned')}</span></div>) : detailsLoading ? <div className="empty panel" role="status">{t('loading')}</div> : <div className="empty panel"><strong>{t('noUpcomingEvents')}</strong><span>{t('draftEventPrompt')}</span></div>}
         </div>
       </article>
       <article className="panel">
         <div className="panel-header"><h3>{t('recommendedVendors')}</h3><button className="button secondary small" type="button" onClick={() => setDashboardView('vendors')}>{t('browseAll')}</button></div>
         <div className="list-stack">
-          {vendors.slice(0, 4).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.category} • {vendor.city}</small></div><span className="pill success">{vendor.rating?.toFixed ? `${vendor.rating.toFixed(1)}★` : 'Top rated'}</span></div>)}
+          {detailsLoading && !vendors.length ? <div className="empty panel" role="status">{t('loading')}</div> : vendors.slice(0, 4).map((vendor) => <div key={vendor.id} className="list-card"><div><strong>{vendor.name}</strong><small>{vendor.category} • {vendor.city}</small></div><span className="pill success">{vendor.rating?.toFixed ? `${vendor.rating.toFixed(1)}★` : 'Top rated'}</span></div>)}
         </div>
       </article>
     </div>
@@ -4608,7 +4693,7 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
       <article className="panel">
         <div className="panel-header"><h3>{t('bookingTracker')}</h3></div>
         <div className="list-stack">
-          {bookings.map((booking) => <div key={booking.id} className="list-card compact"><div><strong>{booking.serviceTitle || booking.title}</strong><small>{booking.status}</small></div><span>{booking.quotedAmount ? new Intl.NumberFormat('en-ET', { style:'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount) : '—'}</span></div>)}
+          {detailsLoading && !bookings.length ? <div className="empty panel" role="status">{t('loading')}</div> : bookings.map((booking) => <div key={booking.id} className="list-card compact"><div><strong>{booking.serviceTitle || booking.title}</strong><small>{booking.status}</small></div><span>{booking.quotedAmount ? new Intl.NumberFormat('en-ET', { style:'currency', currency: booking.currency || 'ETB', maximumFractionDigits: 0 }).format(booking.quotedAmount) : '—'}</span></div>)}
         </div>
       </article>
       <article className="panel">
@@ -4624,7 +4709,8 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
   </section>);
 }
 
-function Overview({ onNavigate }) {
+function Overview({ onNavigate, user }) {
+  const sessionSnapshot = useAuthSessionSnapshot();
   const language = useLanguage();
   const t = (key) => translate(key, language);
   const [preset,setPreset]=useState('30d');
@@ -4634,17 +4720,19 @@ function Overview({ onNavigate }) {
   const [error,setError]=useState('');
   const [loading,setLoading]=useState(true);
   const [retryCount,setRetryCount]=useState(0);
+  const ownerId = user?.id ?? sessionSnapshot.user?.id;
   useEffect(() => {
     const controller = new AbortController();
     const params = new URLSearchParams(appliedRange);
     setLoading(true);
     setError('');
-    api(`/admin/dashboard/overview?${params}`, { signal: controller.signal })
+    const owner = ownerId == null ? null : `admin:${ownerId}`;
+    requestDashboardData(api, owner, `/admin/dashboard/overview?${params}`, controller.signal)
       .then((response) => setData(response.data))
       .catch((issue) => { if (issue.name !== 'AbortError') setError(issue.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [appliedRange,retryCount]);
+  }, [appliedRange,retryCount,ownerId]);
 
   const applyPreset = (nextPreset) => {
     setPreset(nextPreset);
@@ -6257,7 +6345,16 @@ export default function App(){
   }, [portal, user?.id, user?.preferred_language, user?.role, user?.roles]);
 
   async function loginPublic(email,password){
-    const platformUser = await authenticatePlatformUser(api, email, password);
+    let platformUser;
+    try {
+      platformUser = await authenticatePlatformUser(api, email, password);
+    } catch (issue) {
+      if (issue?.code === 'ADMIN_LOGIN_REQUIRED') {
+        navigatePublic('/admin/login');
+        return;
+      }
+      throw issue;
+    }
     const role = platformUser.role;
     authSessionLoader.setAuthenticated(platformUser, role);
     setUser(platformUser);setPortal(role);setGlobalError('');setShowLogin(false);

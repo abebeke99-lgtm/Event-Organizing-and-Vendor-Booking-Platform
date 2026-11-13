@@ -428,7 +428,10 @@ export function createPostgresMarketplaceRouter({ database }) {
   router.get('/categories/:slug', async (req, res, next) => {
     try {
       const marketplace = await loadPostgresPublicMarketplace(database);
-      const category = marketplace.categories.find((entry) => entry.slug === String(req.params.slug).toLowerCase());
+      const requestedSlug = String(req.params.slug).toLowerCase();
+      const category = marketplace.categories.find((entry) => (
+        entry.slug === requestedSlug || categorySlug(entry.serviceMenuName) === requestedSlug
+      ));
       if (!category) return res.status(404).json({ error: 'Category not found.' });
       const events = await database.query(
         `SELECT e.id, e.title, e.event_type, e.description, e.notes, e.city, e.venue,

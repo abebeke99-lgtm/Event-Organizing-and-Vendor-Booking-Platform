@@ -82,7 +82,8 @@ test('platform sign-in revokes a unified login session when the account is an ad
         ? { user: { id: 12, email: 'admin@example.test', role: 'admin' } }
         : { user: null };
     }, 'admin@example.test', 'synthetic-password'),
-    /Administrator accounts must sign in at \/admin\/login/,
+    (error) => error.code === 'ADMIN_LOGIN_REQUIRED'
+      && error.message === 'Administrator accounts must sign in at /admin/login.',
   );
   assert.deepEqual(paths, ['/platform/login', '/auth/logout']);
 });
@@ -131,6 +132,7 @@ test('unified login has no language picker, quick logins, or developer credit', 
   assert.doesNotMatch(appSource, /function AdminLogin|function Login\(/);
   assert.match(appSource, /routePath === '\/admin\/login'/);
   assert.match(appSource, /onLogin=\{loginAdministrator\} administrator/);
+  assert.match(appSource, /issue\?\.code === 'ADMIN_LOGIN_REQUIRED'[\s\S]*navigatePublic\('\/admin\/login'\)/);
   assert.doesNotMatch(appSource, /function (?:Customer|Organizer|Vendor)Login/);
 });
 

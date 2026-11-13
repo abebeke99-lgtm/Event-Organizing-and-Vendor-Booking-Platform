@@ -101,6 +101,7 @@ function attachAdministrator(req, administrator) {
 }
 
 export async function requireAdmin(req, res, next) {
+  if (req.admin?.id) return next();
   try {
     const administrator = await findAdministrator(req);
     if (!administrator) {

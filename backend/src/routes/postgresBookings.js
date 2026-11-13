@@ -571,27 +571,51 @@ function createPostgresCustomerRouter({ database }) {
 
   router.get('/overview', requirePlatformUser, asyncHandler(async (req, res) => {
     const result = await database.query(
-      `SELECT
-         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1)::int AS total_bookings,
-         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1 AND b.status IN ('requested', 'under_review', 'quoted'))::int AS pending_bookings,
-         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress'))::int AS confirmed_bookings,
-         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1 AND b.status = 'completed')::int AS completed_bookings,
-         (SELECT COUNT(*) FROM events e
-          WHERE e.organizer_id = $1 AND e.start_date >= NOW() AND e.status <> 'cancelled')::int AS upcoming_events,
-         (SELECT COUNT(*) FROM quotations q LEFT JOIN events e ON e.id = q.event_id
-          WHERE (q.customer_id = $1 OR e.organizer_id = $1)
-            AND q.status IN ('draft', 'sent', 'revision_requested'))::int AS pending_quotations,
-         (SELECT COUNT(*) FROM messages m
-          WHERE m.recipient_id = $1 AND m.read_at IS NULL)::int AS unread_messages,
-         (SELECT COUNT(*) FROM notifications n
-          WHERE n.user_id = $1 AND n.status <> 'read')::int AS unread_notifications,
-         (SELECT COALESCE(SUM(p.amount) FILTER (WHERE p.status IN ('pending', 'authorized')), 0)
-          FROM payments p JOIN bookings b ON b.id = p.booking_id
-          JOIN events e ON e.id = b.event_id WHERE e.organizer_id = $1) AS outstanding_payments`,
+      `WITH booking_summary AS (
+         SELECT COUNT(*)::int AS total_bookings,
+                COUNT(*) FILTER (WHERE b.status IN ('requested', 'under_review', 'quoted'))::int AS pending_bookings,
+                COUNT(*) FILTER (WHERE b.status IN ('accepted', 'confirmed', 'in_progress'))::int AS confirmed_bookings,
+                COUNT(*) FILTER (WHERE b.status = 'completed')::int AS completed_bookings
+         FROM bookings b
+         JOIN events e ON e.id = b.event_id
+         WHERE e.organizer_id = $1
+       ),
+       event_summary AS (
+         SELECT COUNT(*)::int AS upcoming_events
+         FROM events e
+         WHERE e.organizer_id = $1 AND e.start_date >= NOW() AND e.status <> 'cancelled'
+       ),
+       quotation_summary AS (
+         SELECT COUNT(*)::int AS pending_quotations
+         FROM quotations q
+         LEFT JOIN events e ON e.id = q.event_id
+         WHERE (q.customer_id = $1 OR e.organizer_id = $1)
+           AND q.status IN ('draft', 'sent', 'revision_requested')
+       ),
+       message_summary AS (
+         SELECT COUNT(*)::int AS unread_messages
+         FROM messages m WHERE m.recipient_id = $1 AND m.read_at IS NULL
+       ),
+       notification_summary AS (
+         SELECT COUNT(*)::int AS unread_notifications
+         FROM notifications n WHERE n.user_id = $1 AND n.status <> 'read'
+       ),
+       payment_summary AS (
+         SELECT COALESCE(SUM(p.amount) FILTER (WHERE p.status IN ('pending', 'authorized')), 0)
+                  AS outstanding_payments
+         FROM payments p
+         JOIN bookings b ON b.id = p.booking_id
+         JOIN events e ON e.id = b.event_id
+         WHERE e.organizer_id = $1
+       )
+       SELECT booking_summary.*, event_summary.*, quotation_summary.*,
+              message_summary.*, notification_summary.*, payment_summary.*
+       FROM booking_summary
+       CROSS JOIN event_summary
+       CROSS JOIN quotation_summary
+       CROSS JOIN message_summary
+       CROSS JOIN notification_summary
+       CROSS JOIN payment_summary`,
       [req.platformUser.id],
     );
     const row = result.rows[0];

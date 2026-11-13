@@ -125,35 +125,50 @@ export function createPostgresOrganizerPlanningRouter({ database }) {
       return res.status(403).json({ error: 'Organizer access is required.' });
     }
     const result = await database.query(
-      `SELECT
-         (SELECT COUNT(*)::int FROM events e WHERE e.organizer_id = $1) AS total_events,
-         (SELECT COUNT(*)::int FROM events e
-          WHERE e.organizer_id = $1 AND e.start_date >= NOW()
-            AND e.status NOT IN ('cancelled', 'completed')) AS upcoming_events,
-         (SELECT COUNT(*)::int FROM events e
-          WHERE e.organizer_id = $1
-            AND (e.status = 'in_progress' OR (e.start_date <= NOW() AND e.end_date >= NOW()))
-            AND e.status NOT IN ('cancelled', 'completed')) AS ongoing_events,
-         (SELECT COALESCE(SUM(e.budget), 0) FROM events e
-          WHERE e.organizer_id = $1) AS allocated_budget,
-         (SELECT COUNT(*)::int FROM bookings b
-          JOIN events e ON e.id = b.event_id WHERE e.organizer_id = $1) AS total_bookings,
-         (SELECT COUNT(*)::int FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1 AND b.status IN ('requested', 'under_review', 'quoted')) AS pending_bookings,
-         (SELECT COUNT(*)::int FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress')) AS confirmed_bookings,
-         (SELECT COUNT(*)::int FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1 AND b.status = 'completed') AS completed_bookings,
-         (SELECT COALESCE(SUM(x.planned_amount), 0) FROM event_expenses x
-          JOIN events e ON e.id = x.event_id WHERE e.organizer_id = $1) AS planned_expenses,
-         (SELECT COALESCE(SUM(x.actual_amount), 0) FROM event_expenses x
-          JOIN events e ON e.id = x.event_id WHERE e.organizer_id = $1) AS actual_expenses,
-         (SELECT COUNT(*)::int FROM messages m
-          JOIN bookings b ON b.id = m.booking_id
-          JOIN events e ON e.id = b.event_id
-          WHERE e.organizer_id = $1 AND m.recipient_id = $1 AND m.read_at IS NULL) AS unread_messages,
-         (SELECT COUNT(*)::int FROM notifications n
-          WHERE n.user_id = $1 AND n.status <> 'read') AS unread_notifications`,
+      `WITH event_summary AS (
+         SELECT COUNT(*)::int AS total_events,
+                COUNT(*) FILTER (WHERE e.start_date >= NOW()
+                  AND e.status NOT IN ('cancelled', 'completed'))::int AS upcoming_events,
+                COUNT(*) FILTER (WHERE (e.status = 'in_progress'
+                  OR (e.start_date <= NOW() AND e.end_date >= NOW()))
+                  AND e.status NOT IN ('cancelled', 'completed'))::int AS ongoing_events,
+                COALESCE(SUM(e.budget), 0) AS allocated_budget
+         FROM events e WHERE e.organizer_id = $1
+       ),
+       booking_summary AS (
+         SELECT COUNT(*)::int AS total_bookings,
+                COUNT(*) FILTER (WHERE b.status IN ('requested', 'under_review', 'quoted'))::int AS pending_bookings,
+                COUNT(*) FILTER (WHERE b.status IN ('accepted', 'confirmed', 'in_progress'))::int AS confirmed_bookings,
+                COUNT(*) FILTER (WHERE b.status = 'completed')::int AS completed_bookings
+         FROM bookings b
+         JOIN events e ON e.id = b.event_id
+         WHERE e.organizer_id = $1
+       ),
+       expense_summary AS (
+         SELECT COALESCE(SUM(x.planned_amount), 0) AS planned_expenses,
+                COALESCE(SUM(x.actual_amount), 0) AS actual_expenses
+         FROM event_expenses x
+         JOIN events e ON e.id = x.event_id
+         WHERE e.organizer_id = $1
+       ),
+       message_summary AS (
+         SELECT COUNT(*)::int AS unread_messages
+         FROM messages m
+         JOIN bookings b ON b.id = m.booking_id
+         JOIN events e ON e.id = b.event_id
+         WHERE e.organizer_id = $1 AND m.recipient_id = $1 AND m.read_at IS NULL
+       ),
+       notification_summary AS (
+         SELECT COUNT(*)::int AS unread_notifications
+         FROM notifications n WHERE n.user_id = $1 AND n.status <> 'read'
+       )
+       SELECT event_summary.*, booking_summary.*, expense_summary.*,
+              message_summary.*, notification_summary.*
+       FROM event_summary
+       CROSS JOIN booking_summary
+       CROSS JOIN expense_summary
+       CROSS JOIN message_summary
+       CROSS JOIN notification_summary`,
       [req.platformUser.id],
     );
     const row = result.rows[0];

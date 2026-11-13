@@ -15,6 +15,11 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
 }, async (context) => {
   const environment = await loadNeonTestEnvironment();
   const database = createPostgresDatabase(environment);
+  let phaseStartedAt = Date.now();
+  const profilePhase = (name) => {
+    console.info(`NEON_ADMIN_TEST_PHASE ${name}=${Date.now() - phaseStartedAt}ms`);
+    phaseStartedAt = Date.now();
+  };
   const suffix = randomUUID();
   const adminEmail = `pg-admin-${suffix}@example.invalid`;
   const adminRoleName = `integration-admin-${suffix}`;
@@ -48,6 +53,11 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
   const foreignRetryKey = `admin-notification-retry-foreign-${suffix}`;
   const inAppAnnouncementKey = `announcement-inapp-${suffix}`;
   const emailAnnouncementKey = `announcement-email-${suffix}`;
+  const countActiveAdminRecipients = async () => database.runtimeAdapter.query(
+    `SELECT COUNT(DISTINCT u.id)::integer AS count
+     FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
+     WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE`,
+  );
 
   try {
     const roleRows = await database.runtimeAdapter.query(
@@ -91,6 +101,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       );
       testRoleId = testRole.rows[0].id;
     });
+    profilePhase('fixture setup');
 
     const app = createApp({
       database: database.runtimeAdapter,
@@ -168,36 +179,62 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       for (const value of Object.values(section)) assert.equal(Number.isInteger(value), true);
     }
 
-    for (const report of [
+    const reports = [
       'users', 'vendors', 'events', 'bookings', 'payments', 'refunds',
       'revenue', 'categories', 'reviews', 'complaints', 'vendor-performance', 'booking-outcomes',
-    ]) {
-      const reportResponse = await request(`/reports?report=${report}&period=last30`);
+    ];
+    const reportResponsesPromise = Promise.all(reports.map((report) => request(
+      `/reports?report=${report}&period=last30`,
+    )));
+    const reportResponses = await reportResponsesPromise;
+    await Promise.all(reportResponses.map(async (reportResponse, index) => {
+      const report = reports[index];
       assert.equal(reportResponse.status, 200, report);
       const reportBody = await reportResponse.json();
       assert.equal(reportBody.appliedFilters.report, report);
       assert.ok(Array.isArray(reportBody.data));
       assert.ok(Array.isArray(reportBody.summary));
       assert.ok(Array.isArray(reportBody.chartData));
-    }
-
+    }));
     const reportExportResponse = await request('/reports/export?report=users&period=last30');
     assert.equal(reportExportResponse.status, 200);
     assert.match(reportExportResponse.headers.get('content-type'), /text\/csv/);
+    profilePhase('settings and reports');
 
-    for (const path of [
+    const listPaths = [
       '/reviews', '/reviews/vendors', '/reviews/services',
       '/complaints', '/complaints/assignees',
-    ]) {
-      const response = await request(path);
-      assert.equal(response.status, 200, path);
-    }
-
+    ];
     const endDate = new Date().toISOString().slice(0, 10);
     const startDate = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const dashboardStartedAt = Date.now();
-    const overviewResponse = await request(`/dashboard/overview?startDate=${startDate}&endDate=${endDate}`);
-    const dashboardDurationMs = Date.now() - dashboardStartedAt;
+    const overviewPromise = (async () => {
+      const startedAt = Date.now();
+      const response = await request(`/dashboard/overview?startDate=${startDate}&endDate=${endDate}`);
+      return { response, durationMs: Date.now() - startedAt };
+    })();
+    const [
+      listResponses,
+      overviewResult,
+      roleUsersResponse,
+      matrixResponse,
+      rolePermissionsResponse,
+      organizerPermissionsResult,
+    ] = await Promise.all([
+      Promise.all(listPaths.map((path) => request(path))),
+      overviewPromise,
+      request(`/roles/${testRoleId}/users`),
+      request('/rbac/matrix'),
+      request(`/roles/${testRoleId}/permissions`),
+      database.runtimeAdapter.query(
+        'SELECT id, permission_key FROM permissions WHERE permission_key = ANY($1::text[]) ORDER BY permission_key LIMIT 1',
+        [getRolePermissionPolicy('organizer')],
+      ),
+    ]);
+    for (const [index, response] of listResponses.entries()) {
+      assert.equal(response.status, 200, listPaths[index]);
+    }
+    const overviewResponse = overviewResult.response;
+    const dashboardDurationMs = overviewResult.durationMs;
     console.info(`NEON_DASHBOARD_RESPONSE_MS role=admin overview=${dashboardDurationMs}`);
     assert.ok(dashboardDurationMs < 15000, 'admin dashboard must load before the 15-second client timeout');
     assert.equal(overviewResponse.status, 200);
@@ -211,15 +248,12 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     ]) assert.ok(Object.hasOwn(overview, key), `Missing dashboard field ${key}`);
     assert.ok(Array.isArray(overview.bookingTrend));
 
-    const roleUsersResponse = await request(`/roles/${testRoleId}/users`);
     assert.equal(roleUsersResponse.status, 200);
     assert.equal((await roleUsersResponse.json()).pagination.total, 0);
 
-    const matrixResponse = await request('/rbac/matrix');
     assert.equal(matrixResponse.status, 200);
     assert.ok((await matrixResponse.json()).data.roles.admin.includes('users.view'));
 
-    const rolePermissionsResponse = await request(`/roles/${testRoleId}/permissions`);
     assert.equal(rolePermissionsResponse.status, 200);
     assert.deepEqual((await rolePermissionsResponse.json()).data.permission_keys, []);
     const forbiddenPermission = await request(`/roles/${testRoleId}/permissions`, {
@@ -227,22 +261,20 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       body: { permission_keys: ['admin:*'] },
     });
     assert.equal(forbiddenPermission.status, 403);
-    const permissionUpdate = await request(`/roles/${testRoleId}/permissions`, {
-      method: 'PATCH',
-      body: { permission_keys: [] },
-    });
-    assert.equal(permissionUpdate.status, 200, `Empty permission update failed: ${await permissionUpdate.text()}`);
-    const organizerPermissions = await database.runtimeAdapter.query(
-      'SELECT id, permission_key FROM permissions WHERE permission_key = ANY($1::text[]) ORDER BY permission_key LIMIT 1',
-      [getRolePermissionPolicy('organizer')],
-    );
-    assert.ok(organizerPermissions.rows[0], 'Expected an allowed organizer permission in the Neon test database.');
-    const permittedPermission = organizerPermissions.rows[0];
-    const nonEmptyPermissionUpdate = await request(`/roles/${organizerRoleId}/permissions`, {
-      method: 'PATCH',
-      body: { permission_keys: [permittedPermission.permission_key] },
-    });
+    assert.ok(organizerPermissionsResult.rows[0], 'Expected an allowed organizer permission in the Neon test database.');
+    const permittedPermission = organizerPermissionsResult.rows[0];
+    const [nonEmptyPermissionUpdate, permissionUpdate] = await Promise.all([
+      request(`/roles/${organizerRoleId}/permissions`, {
+        method: 'PATCH',
+        body: { permission_keys: [permittedPermission.permission_key] },
+      }),
+      request(`/roles/${testRoleId}/permissions`, {
+        method: 'PATCH',
+        body: { permission_keys: [] },
+      }),
+    ]);
     assert.equal(nonEmptyPermissionUpdate.status, 200, await nonEmptyPermissionUpdate.text());
+    assert.equal(permissionUpdate.status, 200, `Empty permission update failed: ${await permissionUpdate.text()}`);
     const persistedPermissionUpdate = await database.runtimeAdapter.query(
       `SELECT p.permission_key FROM role_permissions rp
        JOIN permissions p ON p.id = rp.permission_id
@@ -250,6 +282,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       [organizerRoleId],
     );
     assert.deepEqual(persistedPermissionUpdate.rows.map((row) => row.permission_key), [permittedPermission.permission_key]);
+    profilePhase('dashboard and role permissions');
 
     const organizerRole = roles.get('organizer');
     const createdResponse = await request('/users', {
@@ -322,6 +355,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       }
       return fixtures;
     });
+    profilePhase('user setup and notification fixtures');
     const [ownedReadId, ownedBulkId, foreignNotificationId, foreignRetryId] = seededNotifications;
 
     await context.test('GET /notifications/options enforces admin and reports available channels', async () => {
@@ -396,11 +430,6 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       assert.match((await amharicValidation.json()).error, /ትክክለኛ/);
     });
 
-    const activeAdminRecipients = await database.runtimeAdapter.query(
-      `SELECT COUNT(DISTINCT u.id)::integer AS count
-       FROM users u JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id
-       WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE`,
-    );
     const emailAnnouncement = {
       title: `Email announcement ${suffix}`,
       message: `Email announcement body ${suffix}`,
@@ -437,6 +466,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         channel: 'in_app',
         idempotencyKey: inAppAnnouncementKey,
       };
+      const activeAdminRecipients = await countActiveAdminRecipients();
       const created = await request('/notifications/announcements', { method: 'POST', body: inAppAnnouncement });
       assert.equal(created.status, 201);
       const result = (await created.json()).data;
@@ -511,6 +541,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         channel: 'in_app',
         idempotencyKey: `announcement-concurrent-${suffix}`,
       };
+      const concurrentAdminRecipients = await countActiveAdminRecipients();
       const concurrentResponses = await Promise.all([
         request('/notifications/announcements', { method: 'POST', body: concurrentAnnouncement }),
         request('/notifications/announcements', { method: 'POST', body: concurrentAnnouncement }),
@@ -519,7 +550,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       assert.deepEqual(concurrentResponses.map((response) => response.status).sort(), [200, 201]);
       assert.equal(
         concurrentBodies.reduce((total, body) => total + body.data.created, 0),
-        activeAdminRecipients.rows[0].count,
+        concurrentAdminRecipients.rows[0].count,
       );
       const concurrentStored = await database.runtimeAdapter.query(
         `SELECT n.user_id, COUNT(*)::integer AS copies, COUNT(h.id)::integer AS history_count
@@ -528,7 +559,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
          GROUP BY n.user_id`,
         [`announcement:${concurrentAnnouncement.idempotencyKey}:%`],
       );
-      assert.equal(concurrentStored.rowCount, activeAdminRecipients.rows[0].count);
+      assert.equal(concurrentStored.rowCount, concurrentAdminRecipients.rows[0].count);
       assert.ok(concurrentStored.rows.every((row) => row.copies === 1 && row.history_count === 1));
 
       const unavailableEmail = await request('/notifications/announcements', { method: 'POST', body: emailAnnouncement });
@@ -544,16 +575,17 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         deliveryCalls += 1;
         throw Object.assign(new Error('safe test failure'), { code: 'TEST_SMTP_FAILURE' });
       };
+      const emailAdminRecipients = await countActiveAdminRecipients();
       const failed = await request('/notifications/announcements', { method: 'POST', body: emailAnnouncement });
       assert.equal(failed.status, 201);
       const failedResult = (await failed.json()).data;
-      assert.equal(failedResult.created, activeAdminRecipients.rows[0].count);
+      assert.equal(failedResult.created, emailAdminRecipients.rows[0].count);
       assert.ok(failedResult.deliveries.every((delivery) => delivery.deliveryStatus === 'failed'));
-      assert.equal(deliveryCalls, activeAdminRecipients.rows[0].count);
+      assert.equal(deliveryCalls, emailAdminRecipients.rows[0].count);
       const duplicateEmail = await request('/notifications/announcements', { method: 'POST', body: emailAnnouncement });
       assert.equal(duplicateEmail.status, 200);
       assert.equal((await duplicateEmail.json()).data.created, 0);
-      assert.equal(deliveryCalls, activeAdminRecipients.rows[0].count);
+      assert.equal(deliveryCalls, emailAdminRecipients.rows[0].count);
     });
 
     await context.test('POST /notifications/:id/retry handles failure, success, duplicate, and recipient scope', async () => {
@@ -607,42 +639,49 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       assert.equal(failedRetryCalls, 1);
       assert.equal((await request(`/notifications/${foreignRetryId}/retry`, { method: 'POST' })).status, 404);
     });
+    profilePhase('notification subtests');
 
-    const nonAdminAccess = await request('/users', { token: userToken });
+    const [nonAdminAccess, nonAdminReportAccess, nonAdminDashboardAccess, listed] = await Promise.all([
+      request('/users', { token: userToken }),
+      request('/reports/summary', { token: userToken }),
+      request(
+        `/dashboard/overview?startDate=${startDate}&endDate=${endDate}`,
+        { token: userToken },
+      ),
+      request(`/users?q=${encodeURIComponent(`pg-user-${suffix}`)}&pageSize=5`),
+    ]);
     assert.equal(nonAdminAccess.status, 403);
-    const nonAdminReportAccess = await request('/reports/summary', { token: userToken });
     assert.equal(nonAdminReportAccess.status, 403);
-    const nonAdminDashboardAccess = await request(
-      `/dashboard/overview?startDate=${startDate}&endDate=${endDate}`,
-      { token: userToken },
-    );
     assert.equal(nonAdminDashboardAccess.status, 403);
 
-    const listed = await request(`/users?q=${encodeURIComponent(`pg-user-${suffix}`)}&pageSize=5`);
     assert.equal(listed.status, 200);
     const listBody = await listed.json();
     assert.equal(listBody.pagination.total, 1);
     assert.equal(String(listBody.data[0].id), String(userId));
     assert.equal(listBody.data[0].roles, 'Organizer');
 
-    const updated = await request(`/users/${userId}`, {
-      method: 'PATCH',
-      body: { full_name: 'Updated PostgreSQL User' },
-    });
+    const [updated, invalidRole] = await Promise.all([
+      request(`/users/${userId}`, {
+        method: 'PATCH',
+        body: { full_name: 'Updated PostgreSQL User' },
+      }),
+      request(`/users/${userId}/role`, {
+        method: 'PATCH',
+        body: { role_id: -1 },
+      }),
+    ]);
     assert.equal(updated.status, 200);
-    const duplicateEmail = await request(`/users/${userId}`, {
-      method: 'PATCH',
-      body: { email: adminEmail },
-    });
+    assert.equal(invalidRole.status, 400);
+    const [duplicateEmail, detail] = await Promise.all([
+      request(`/users/${userId}`, {
+        method: 'PATCH',
+        body: { email: adminEmail },
+      }),
+      request(`/users/${userId}`),
+    ]);
     assert.equal(duplicateEmail.status, 409);
-    const detail = await request(`/users/${userId}`);
     assert.equal((await detail.json()).data.full_name, 'Updated PostgreSQL User');
 
-    const invalidRole = await request(`/users/${userId}/role`, {
-      method: 'PATCH',
-      body: { role_id: -1 },
-    });
-    assert.equal(invalidRole.status, 400);
     const roleChange = await request(`/users/${userId}/role`, {
       method: 'PATCH',
       body: { role_id: roles.get('vendor').id },
@@ -674,18 +713,20 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     assert.equal(persisted.rows[0].status, 'suspended');
     assert.ok(persisted.rows[0].audit_count >= 3);
 
-    const vendorProfile = await database.runtimeAdapter.query(
-      `INSERT INTO vendor_profiles (user_id, business_name, verification_status)
-       VALUES ($1, $2, 'verified') RETURNING id`,
-      [userId, `Integration vendor ${suffix}`],
-    );
+    const [vendorProfile, event] = await Promise.all([
+      database.runtimeAdapter.query(
+        `INSERT INTO vendor_profiles (user_id, business_name, verification_status)
+         VALUES ($1, $2, 'verified') RETURNING id`,
+        [userId, `Integration vendor ${suffix}`],
+      ),
+      database.runtimeAdapter.query(
+        `INSERT INTO events (organizer_id, title, event_type, start_date, status)
+         VALUES ($1, $2, 'Integration', CURRENT_TIMESTAMP + INTERVAL '1 day', 'active')
+         RETURNING id`,
+        [adminId, `Integration event ${suffix}`],
+      ),
+    ]);
     vendorProfileId = vendorProfile.rows[0].id;
-    const event = await database.runtimeAdapter.query(
-      `INSERT INTO events (organizer_id, title, event_type, start_date, status)
-       VALUES ($1, $2, 'Integration', CURRENT_TIMESTAMP + INTERVAL '1 day', 'active')
-       RETURNING id`,
-      [adminId, `Integration event ${suffix}`],
-    );
     eventId = event.rows[0].id;
     const booking = await database.runtimeAdapter.query(
       `INSERT INTO bookings (event_id, vendor_id, service_description, quoted_amount, status)
@@ -707,32 +748,35 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     );
     complaintId = complaint.rows[0].id;
 
-    const reviewDetailsResponse = await request(`/reviews/${reviewId}`);
+    const [reviewDetailsResponse, complaintDetailsResponse] = await Promise.all([
+      request(`/reviews/${reviewId}`),
+      request(`/complaints/${complaintId}`),
+    ]);
     assert.equal(reviewDetailsResponse.status, 200);
     assert.equal((await reviewDetailsResponse.json()).data.comment, 'Integration review');
-    const moderateResponse = await request(`/reviews/${reviewId}/moderation`, {
-      method: 'PATCH',
-      body: { status: 'hidden', reason: 'Integration moderation test' },
-    });
+    assert.equal(complaintDetailsResponse.status, 200);
+    const complaintDetails = await complaintDetailsResponse.json();
+    assert.equal(complaintDetails.data.details, 'Integration complaint details');
+    const [moderateResponse, complaintUpdate] = await Promise.all([
+      request(`/reviews/${reviewId}/moderation`, {
+        method: 'PATCH',
+        body: { status: 'hidden', reason: 'Integration moderation test' },
+      }),
+      request(`/complaints/${complaintId}`, {
+        method: 'PATCH',
+        body: {
+          status: 'under_review',
+          reason: 'Integration assignment test',
+          assignedTo: adminId,
+        },
+      }),
+    ]);
     assert.equal(moderateResponse.status, 200);
     const reviewHistory = await database.runtimeAdapter.query(
       'SELECT action FROM review_history WHERE review_id = $1',
       [reviewId],
     );
     assert.equal(reviewHistory.rows[0].action, 'hidden');
-
-    const complaintDetailsResponse = await request(`/complaints/${complaintId}`);
-    assert.equal(complaintDetailsResponse.status, 200);
-    const complaintDetails = await complaintDetailsResponse.json();
-    assert.equal(complaintDetails.data.details, 'Integration complaint details');
-    const complaintUpdate = await request(`/complaints/${complaintId}`, {
-      method: 'PATCH',
-      body: {
-        status: 'under_review',
-        reason: 'Integration assignment test',
-        assignedTo: adminId,
-      },
-    });
     assert.equal(complaintUpdate.status, 200);
     assert.equal(String((await complaintUpdate.json()).data.assigned_to), String(adminId));
     const attachmentResponse = await fetch(`${baseUrl}/complaints/${complaintId}/attachments?filename=evidence.pdf`, {
@@ -808,100 +852,122 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         [secondAdminRoleId],
       )).rows[0].is_active, true);
     }
+    profilePhase('remaining admin workflows');
   } finally {
-    if (server?.listening) {
-      server.close();
-      await once(server, 'close');
-    }
-    if (adminId) {
-      await database.inTransaction(async (client) => {
-        if (organizerRoleId && organizerPermissionIds) {
-          await client.query('DELETE FROM role_permissions WHERE role_id = $1', [organizerRoleId]);
-          for (const permissionId of organizerPermissionIds) {
-            await client.query(
-              'INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)',
-              [organizerRoleId, permissionId],
-            );
+    profilePhase('begin cleanup');
+    try {
+      if (server?.listening) {
+        server.closeAllConnections();
+        server.close();
+        await once(server, 'close');
+      }
+    } finally {
+      try {
+        await database.inTransaction(async (client) => {
+          const fixtureUserIds = [adminId, secondAdminId, rosterChangeAdminId, userId].filter(Boolean);
+          const fixtureRoleIds = [
+            adminRoleId, secondAdminRoleId, rosterChangeAdminRoleId, testRoleId,
+          ].filter(Boolean);
+          if (organizerRoleId && organizerPermissionIds) {
+            await client.query('SELECT id FROM roles WHERE id = $1 FOR UPDATE', [organizerRoleId]);
+            await client.query('DELETE FROM role_permissions WHERE role_id = $1', [organizerRoleId]);
+            for (const permissionId of organizerPermissionIds) {
+              await client.query(
+                `INSERT INTO role_permissions (role_id, permission_id) VALUES ($1, $2)
+                 ON CONFLICT (role_id, permission_id) DO NOTHING`,
+                [organizerRoleId, permissionId],
+              );
+            }
           }
-        }
-        if (originalDescription !== undefined) {
-          if (originalDescription) {
-            await client.query(
-              `INSERT INTO system_settings (setting_key, setting_value, updated_by)
-               VALUES ('platform_description', $1, $2)
-               ON CONFLICT (setting_key) DO UPDATE
-               SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by`,
-              [originalDescription.setting_value, originalDescription.updated_by],
-            );
-          } else {
-            await client.query(
-              `DELETE FROM system_settings WHERE setting_key = 'platform_description'`,
-            );
+          if (originalDescription !== undefined) {
+            if (originalDescription) {
+              const updatedBy = originalDescription.updated_by;
+              const updatedByWillRemain = updatedBy !== null
+                && !fixtureUserIds.some((id) => String(id) === String(updatedBy))
+                && (await client.query('SELECT 1 FROM users WHERE id = $1', [updatedBy])).rowCount > 0;
+              await client.query(
+                `INSERT INTO system_settings (setting_key, setting_value, updated_by)
+                 VALUES ('platform_description', $1, $2)
+                 ON CONFLICT (setting_key) DO UPDATE
+                 SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by`,
+                [originalDescription.setting_value, updatedByWillRemain ? updatedBy : null],
+              );
+            } else {
+              await client.query(
+                `DELETE FROM system_settings WHERE setting_key = 'platform_description'`,
+              );
+            }
           }
-        }
-        const notificationRows = await client.query(
-          `SELECT id FROM notifications
-           WHERE idempotency_key = ANY($1::varchar[]) OR idempotency_key LIKE ANY($2::varchar[])`,
-          [
-            [ownedReadKey, ownedBulkKey, foreignNotificationKey, foreignRetryKey],
-            [`announcement:${inAppAnnouncementKey}:%`, `announcement:${emailAnnouncementKey}:%`],
-          ],
-        );
-        const notificationIds = notificationRows.rows.map((row) => row.id);
-        if (notificationIds.length) {
-          await client.query(
-            'DELETE FROM notification_history WHERE notification_id = ANY($1::bigint[])',
-            [notificationIds],
-          );
-          await client.query('DELETE FROM notifications WHERE id = ANY($1::bigint[])', [notificationIds]);
-        }
-        const fixtureUserIds = [adminId, secondAdminId, rosterChangeAdminId, userId].filter(Boolean);
-        await client.query('DELETE FROM audit_logs WHERE actor_id = ANY($1::bigint[])', [fixtureUserIds]);
-        if (secondAdminId) {
-          await client.query('DELETE FROM admin_sessions WHERE user_id = $1', [secondAdminId]);
-          await client.query('DELETE FROM user_roles WHERE user_id = $1', [secondAdminId]);
-          await client.query('DELETE FROM users WHERE id = $1', [secondAdminId]);
-        }
-        if (rosterChangeAdminId) {
-          await client.query('DELETE FROM user_roles WHERE user_id = $1', [rosterChangeAdminId]);
-          await client.query('DELETE FROM users WHERE id = $1', [rosterChangeAdminId]);
-        }
-        if (complaintId) {
-          const notifications = await client.query(
+          const notificationRows = await client.query(
             `SELECT id FROM notifications
-             WHERE related_entity_type = 'complaint' AND related_entity_id = $1`,
-            [String(complaintId)],
+             WHERE user_id = ANY($1::bigint[])
+                OR idempotency_key = ANY($2::varchar[])
+                OR idempotency_key LIKE ANY($3::varchar[])
+                OR (related_entity_type = 'complaint' AND related_entity_id = $4)`,
+            [
+              fixtureUserIds,
+              [ownedReadKey, ownedBulkKey, foreignNotificationKey, foreignRetryKey],
+              [`announcement:${inAppAnnouncementKey}:%`, `announcement:${emailAnnouncementKey}:%`],
+              complaintId ? String(complaintId) : '',
+            ],
           );
-          const notificationIds = notifications.rows.map((row) => row.id);
+          const notificationIds = notificationRows.rows.map((row) => row.id);
+          if (fixtureUserIds.length) {
+            await client.query(
+              'DELETE FROM notification_history WHERE actor_id = ANY($1::bigint[])',
+              [fixtureUserIds],
+            );
+          }
           if (notificationIds.length) {
-            await client.query('DELETE FROM notification_history WHERE notification_id = ANY($1::bigint[])', [notificationIds]);
+            await client.query(
+              'DELETE FROM notification_history WHERE notification_id = ANY($1::bigint[])',
+              [notificationIds],
+            );
             await client.query('DELETE FROM notifications WHERE id = ANY($1::bigint[])', [notificationIds]);
           }
-          await client.query('DELETE FROM complaint_attachments WHERE complaint_id = $1', [complaintId]);
-          await client.query('DELETE FROM complaint_history WHERE complaint_id = $1', [complaintId]);
-          await client.query('DELETE FROM complaints WHERE id = $1', [complaintId]);
-        }
-        if (reviewId) {
-          await client.query('DELETE FROM review_history WHERE review_id = $1', [reviewId]);
-          await client.query('DELETE FROM reviews WHERE id = $1', [reviewId]);
-        }
-        if (bookingId) {
-          await client.query('DELETE FROM booking_history WHERE booking_id = $1', [bookingId]);
-          await client.query('DELETE FROM bookings WHERE id = $1', [bookingId]);
-        }
-        if (eventId) await client.query('DELETE FROM events WHERE id = $1', [eventId]);
-        await client.query('DELETE FROM vendor_profiles WHERE user_id = $1', [userId || -1]);
-        if (userId && testRoleId) {
-          await client.query('DELETE FROM user_roles WHERE user_id = $1 AND role_id = $2', [userId, testRoleId]);
-        }
-        if (userId) await client.query('DELETE FROM users WHERE id = $1', [userId]);
-        await client.query('DELETE FROM users WHERE id = $1', [adminId]);
-        if (testRoleId) await client.query('DELETE FROM roles WHERE id = $1', [testRoleId]);
-        if (secondAdminRoleId) await client.query('DELETE FROM roles WHERE id = $1', [secondAdminRoleId]);
-        if (rosterChangeAdminRoleId) await client.query('DELETE FROM roles WHERE id = $1', [rosterChangeAdminRoleId]);
-        if (adminRoleId) await client.query('DELETE FROM roles WHERE id = $1', [adminRoleId]);
-      });
+          if (complaintId) {
+            await client.query('DELETE FROM complaint_attachments WHERE complaint_id = $1', [complaintId]);
+            await client.query('DELETE FROM complaint_history WHERE complaint_id = $1', [complaintId]);
+            await client.query('DELETE FROM complaints WHERE id = $1', [complaintId]);
+          }
+          if (reviewId) {
+            await client.query('DELETE FROM review_history WHERE review_id = $1', [reviewId]);
+            await client.query('DELETE FROM reviews WHERE id = $1', [reviewId]);
+          }
+          if (bookingId) {
+            await client.query('DELETE FROM booking_history WHERE booking_id = $1', [bookingId]);
+            await client.query('DELETE FROM bookings WHERE id = $1', [bookingId]);
+          }
+          if (eventId) await client.query('DELETE FROM events WHERE id = $1', [eventId]);
+          await client.query('DELETE FROM vendor_profiles WHERE user_id = $1', [userId || -1]);
+          if (fixtureUserIds.length) {
+            await client.query('DELETE FROM admin_sessions WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);
+            await client.query('DELETE FROM user_sessions WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);
+          }
+          if (fixtureUserIds.length) {
+            await client.query('DELETE FROM audit_logs WHERE actor_id = ANY($1::bigint[])', [fixtureUserIds]);
+          }
+          if (fixtureRoleIds.length) {
+            await client.query(
+              `DELETE FROM audit_logs
+               WHERE entity_type = 'role' AND entity_id = ANY($1::varchar[])`,
+              [fixtureRoleIds.map(String)],
+            );
+            await client.query('DELETE FROM role_permissions WHERE role_id = ANY($1::bigint[])', [fixtureRoleIds]);
+            await client.query('DELETE FROM user_roles WHERE role_id = ANY($1::bigint[])', [fixtureRoleIds]);
+          }
+          if (fixtureUserIds.length) {
+            await client.query('DELETE FROM user_roles WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);
+            await client.query('DELETE FROM users WHERE id = ANY($1::bigint[])', [fixtureUserIds]);
+          }
+          if (fixtureRoleIds.length) {
+            await client.query('DELETE FROM roles WHERE id = ANY($1::bigint[])', [fixtureRoleIds]);
+          }
+        });
+      } finally {
+        await database.close();
+        profilePhase('cleanup and pool close');
+      }
     }
-    await database.close();
   }
 });

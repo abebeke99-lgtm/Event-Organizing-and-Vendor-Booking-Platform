@@ -69,6 +69,12 @@ The booking logic is enforced in the backend with explicit transition checks so 
 - Admin and platform authentication, public marketplace listings, and customer/vendor dashboard reads are backed by MySQL. Event creation now stores organizer-owned draft events transactionally with an audit record. Some dashboard controls and payment-provider workflows remain incomplete; payment records do not represent a real payment integration.
 - Configure either `DATABASE_URL` or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` for MySQL. Production requires `DB_SSL=true`; certificate verification remains enabled, with an optional provider CA in `DB_SSL_CA` or `DB_SSL_CA_BASE64`.
 
+## Isolated dashboard benchmark accounts
+
+The backend can provision one non-production account for each dashboard against the guarded Neon test database. Set `EVENTHUB_BENCHMARK_{ADMIN,ORGANIZER,VENDOR,CUSTOMER}_{EMAIL,NAME,PASSWORD}` in the local backend process environment. Use distinct, non-routable `.test` email addresses and a unique 16-character password for each role containing uppercase, lowercase, and numeric characters. Keep passwords in a local secret manager or other untracked secure environment; do not put them in tracked files, command history, logs, or chat.
+
+Run `npm run setup:dashboard-benchmark-accounts` from `backend` only after verifying `backend/.env.neon-test` points to the isolated `eventhub` test database. The script refuses to alter any existing account, provisions Admin through the existing bootstrap helper, creates Organizer and Vendor through the authenticated Admin API, and registers Customer through the platform registration API. It does not modify pool configuration or production data. If provisioning stops partway through, do not delete records automatically; use fresh unique `.test` emails after reviewing the isolated test database.
+
 ## EventHub AI Assistant
 
 The floating EventHub AI chat is available on public pages to visitors and signed-in users. Visitor-widget history is temporary and stored in the browser's current tab session. Signed-in customers, organizers, and vendors can also open **AI Assistant** from the account menu for persistent MySQL conversations scoped to their account; administrator conversation history is not enabled. The persistent chat streams responses through Server-Sent Events, while the public widget uses a bounded JSON response.

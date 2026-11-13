@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { test } from 'node:test';
+import bcrypt from 'bcryptjs';
 import { createApp } from '../src/app.js';
 import { hashToken } from '../src/lib/security.js';
 import { loadNeonTestEnvironment } from '../src/lib/neonTestEnvironment.js';
@@ -107,10 +108,11 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     });
     assert.ok(adminRole);
 
+    const adminPasswordHash = await bcrypt.hash(password, 4);
     const admin = await database.runtimeAdapter.query(
       `INSERT INTO users (full_name, email, password_hash, status)
        VALUES ($1, $2, $3, 'active') RETURNING id`,
-      ['Neon Registration Notification Admin', adminEmail, 'integration-only-not-a-login-hash'],
+      ['Neon Registration Notification Admin', adminEmail, adminPasswordHash],
     );
     await database.runtimeAdapter.query(
       'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)',
@@ -170,6 +172,42 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     const availability = await fetch(`${baseUrl}/api/platform/availability`);
     assert.equal(availability.status, 200);
     assert.equal(typeof (await availability.json()).data.maintenanceMode, 'boolean');
+
+    const adminLogin = await fetch(`${baseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: adminEmail, password }),
+    });
+    assert.equal(adminLogin.status, 200);
+    const adminCookie = cookiePair(adminLogin, 'platform_session');
+    const adminSessionResponse = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: { Cookie: adminCookie },
+    });
+    const adminSession = (await adminSessionResponse.json()).user;
+    assert.equal(adminSessionResponse.status, 200);
+    assert.equal(String(adminSession.id), String(admin.rows[0].id));
+    assert.equal(adminSession.role, 'admin');
+    assert.equal(adminSession.status, 'active');
+    assert.ok(adminSession.roles.some((role) => role.toLowerCase() === 'admin'));
+
+    const endDate = new Date().toISOString().slice(0, 10);
+    const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const dashboardQuery = new URLSearchParams({ startDate, endDate });
+    const adminDashboard = await fetch(`${baseUrl}/api/admin/dashboard/overview?${dashboardQuery}`, {
+      headers: { Cookie: adminCookie },
+    });
+    assert.equal(adminDashboard.status, 200);
+    assert.ok((await adminDashboard.json()).data);
+
+    const adminLoginLogout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: { Cookie: adminCookie },
+    });
+    assert.equal(adminLoginLogout.status, 204);
+    const revokedAdminSession = await fetch(`${baseUrl}/api/auth/me`, {
+      headers: { Cookie: adminCookie },
+    });
+    assert.equal(revokedAdminSession.status, 401);
 
     const invalidRole = await fetch(`${baseUrl}/api/platform/register`, {
       method: 'POST',
@@ -237,6 +275,11 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
       headers: { Cookie: platformCookie },
     });
     assert.equal((await currentUser.json()).data.user.id, userId);
+
+    const customerAdminDashboard = await fetch(`${baseUrl}/api/admin/dashboard/overview`, {
+      headers: { Cookie: platformCookie },
+    });
+    assert.equal(customerAdminDashboard.status, 403);
 
     const redirect = await fetch(`${baseUrl}/api/platform/redirect`, {
       headers: { Cookie: platformCookie },

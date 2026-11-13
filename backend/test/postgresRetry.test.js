@@ -65,6 +65,29 @@ test('PostgreSQL connection acquisition uses one bounded retry and recognizes co
   assert.equal(isPostgresConnectionError({ code: '40001' }), false);
 });
 
+test('wrapped Neon connection-acquisition timeouts receive the bounded retry', async () => {
+  const delays = [];
+  let calls = 0;
+  const client = { id: 'reconnected' };
+  const error = Object.assign(
+    new Error('Connection terminated due to connection timeout'),
+    { cause: new Error('Connection terminated unexpectedly') },
+  );
+  const result = await connectWithRetry(async () => {
+    calls += 1;
+    if (calls === 1) throw error;
+    return client;
+  }, {
+    sleep: async (milliseconds) => delays.push(milliseconds),
+  });
+
+  assert.equal(result, client);
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [250]);
+  assert.equal(isTransientPostgresError(error), true);
+  assert.equal(isPostgresConnectionError(error), true);
+});
+
 test('PostgreSQL runtime pool retries connection acquisition, never replays failed queries, and logs only safe error codes', async () => {
   const events = {};
   const statements = [];

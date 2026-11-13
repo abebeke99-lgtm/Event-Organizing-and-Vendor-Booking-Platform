@@ -107,10 +107,10 @@ test('admin overview applies the selected date range to every metric and chart q
   assert.match(queries[17].sql, /FROM audit_logs a/);
 });
 
-test('PostgreSQL admin overview uses positional parameters, PostgreSQL aggregates, and one transaction', async () => {
+test('PostgreSQL admin overview combines dashboard data in one parameterized transaction query', async () => {
   const { loadAdminDashboardOverview } = await import('../src/lib/dashboardFilters.js');
-  const responses = [
-    [{
+  const response = {
+    rows: [{
       total_users: 7,
       total_administrators: 1,
       total_customers: 2,
@@ -136,30 +136,22 @@ test('PostgreSQL admin overview uses positional parameters, PostgreSQL aggregate
       revenue_by_currency: [{ currency: 'ETB', total: '1500.00' }],
       event_categories: [{ category: 'Wedding', total: 2 }],
       booking_statuses: [{ status: 'accepted', total: 3 }],
-    }],
-    [{ id: 21, organizer_name: 'Organizer', vendor_name: 'Vendor', event_title: 'Conference' }],
-    [{ id: 9, applicant_name: 'Applicant' }],
-    [{ id: 8, subject: 'Support request' }],
-    [{ id: 7, rating: 5, vendor_name: 'Vendor' }],
-    [{
+      recent_bookings: [{ id: '21', organizer_name: 'Organizer', vendor_name: 'Vendor', event_title: 'Conference' }],
+      recent_vendor_requests: [{ id: '9', applicant_name: 'Applicant' }],
+      recent_complaints: [{ id: '8', subject: 'Support request' }],
+      recent_reviews: [{ id: '7', rating: 5, vendor_name: 'Vendor' }],
       booking_trend: [{ period: '2026-10-01', total: 3 }],
       payment_trend: [{ period: '2026-10-01', currency: 'ETB', transactions: 2, total: '500.00' }],
+      recent_activities: [{ id: '1', action: 'auth.login', entity_type: 'session', actor_name: 'Admin' }],
     }],
-    [{ id: 1, action: 'auth.login', entity_type: 'session', actor_name: 'Admin' }],
-  ];
+  };
   const queries = [];
   let transactionCount = 0;
-  let concurrentQueries = 0;
-  let maximumConcurrentQueries = 0;
   const database = {
     dialect: 'postgres',
     async query(sql, values) {
-      concurrentQueries += 1;
-      maximumConcurrentQueries = Math.max(maximumConcurrentQueries, concurrentQueries);
-      await new Promise((resolve) => setImmediate(resolve));
       queries.push({ sql, values });
-      concurrentQueries -= 1;
-      return { rows: responses[queries.length - 1] };
+      return response;
     },
     async inTransaction(work) {
       transactionCount += 1;
@@ -171,8 +163,7 @@ test('PostgreSQL admin overview uses positional parameters, PostgreSQL aggregate
   const result = await loadAdminDashboardOverview(database, dateRange);
 
   assert.equal(transactionCount, 1);
-  assert.equal(maximumConcurrentQueries, 1);
-  assert.equal(queries.length, 7);
+  assert.equal(queries.length, 1);
   for (const { sql, values } of queries) {
     assert.deepEqual(values, ['2026-10-01', '2026-10-07']);
     assert.match(sql, /\$1::date/);
@@ -181,8 +172,8 @@ test('PostgreSQL admin overview uses positional parameters, PostgreSQL aggregate
   }
   assert.match(queries[0].sql, /COUNT\(\*\) FILTER \(WHERE vp\.verification_status = 'verified'\)/);
   assert.match(queries[0].sql, /LEFT JOIN user_roles ur/);
-  assert.match(queries[5].sql, /TO_CHAR\(b\.created_at, 'YYYY-MM-DD'\)/);
-  assert.match(queries[6].sql, /FROM audit_logs a/);
+  assert.match(queries[0].sql, /TO_CHAR\(b\.created_at, 'YYYY-MM-DD'\)/);
+  assert.match(queries[0].sql, /FROM audit_logs a/);
   assert.deepEqual(result.bookingTrend, [{
     period: '2026-10-01',
     bookings: 3,

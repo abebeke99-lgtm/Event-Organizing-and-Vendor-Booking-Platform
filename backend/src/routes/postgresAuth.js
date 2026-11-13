@@ -354,7 +354,17 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
         `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status,
                 CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator')
                   THEN 'admin' ELSE LOWER(r.name) END AS role,
-                r.is_admin, vp.id AS vendor_profile_id, vp.business_name, sc.name AS category_name
+                r.is_admin, vp.id AS vendor_profile_id, vp.business_name, sc.name AS category_name,
+                (SELECT STRING_AGG(role_names.name, ', ' ORDER BY role_names.name)
+                 FROM (
+                   SELECT DISTINCT CASE
+                     WHEN role.is_admin = TRUE OR LOWER(role.name) IN ('admin', 'administrator') THEN 'Admin'
+                     ELSE role.name
+                   END AS name
+                   FROM user_roles user_role
+                   JOIN roles role ON role.id = user_role.role_id AND role.is_active = TRUE
+                   WHERE user_role.user_id = u.id
+                 ) role_names) AS roles
          FROM ${adminSession ? 'admin_sessions' : 'user_sessions'} s
          JOIN users u ON u.id = s.user_id
          JOIN user_roles ur ON ur.user_id = u.id
@@ -388,6 +398,8 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
                 email: user.email,
                 phone: user.phone,
                 role: 'admin',
+                status: user.status,
+                roles: (user.roles || '').split(',').map((role) => role.trim()).filter(Boolean),
               }
             : null,
         });

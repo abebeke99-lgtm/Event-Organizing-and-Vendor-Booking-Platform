@@ -53,7 +53,10 @@ export async function authenticatePlatformUser(request, email, password) {
   if (!user || !PLATFORM_ROLES.has(String(user.role || '').toLowerCase())) {
     if (user && String(user.role || '').toLowerCase() === 'admin') {
       await request('/auth/logout', { method: 'POST' });
-      throw new Error('Administrator accounts must sign in at /admin/login.');
+      throw Object.assign(
+        new Error('Administrator accounts must sign in at /admin/login.'),
+        { code: 'ADMIN_LOGIN_REQUIRED' },
+      );
     }
     throw new Error('The server did not confirm a valid account and role.');
   }

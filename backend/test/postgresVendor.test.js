@@ -137,13 +137,19 @@ test('PostgreSQL vendor dashboard exposes every frontend data endpoint and profi
     ];
 
     let overviewData;
+    let overviewSessionLookups;
     for (const path of paths) {
+      const statementStart = database.statements.length;
       const response = await fetch(`${baseUrl}${path}`, { headers: { Cookie: cookie } });
       assert.equal(response.status, 200, `${path} should be routed`);
       const body = await response.json();
       assert.ok(body && typeof body === 'object', `${path} should return its JSON payload`);
       assert.ok(Object.hasOwn(body, 'data'), `${path} should preserve the frontend response envelope`);
-      if (path === '/api/vendor/overview') overviewData = body.data;
+      if (path === '/api/vendor/overview') {
+        overviewData = body.data;
+        overviewSessionLookups = database.statements.slice(statementStart)
+          .filter(({ sql }) => sql.includes('FROM user_sessions s')).length;
+      }
     }
     const overviewQuery = database.statements.filter(({ sql }) => sql.includes('AS total_services'));
     assert.equal(overviewQuery.length, 1, 'vendor overview should use one aggregate query');
@@ -152,6 +158,7 @@ test('PostgreSQL vendor dashboard exposes every frontend data endpoint and profi
     assert.equal(overviewData.totalEarnings, 1250.5);
     assert.equal(overviewData.averageRating, 4.75);
     assert.equal(overviewData.unreadNotifications, 4);
+    assert.equal(overviewSessionLookups, 1, 'vendor overview should authenticate the session only once');
 
     const photo = await fetch(`${baseUrl}/api/platform/profile/photo`, { headers: { Cookie: cookie } });
     assert.equal(photo.status, 204);

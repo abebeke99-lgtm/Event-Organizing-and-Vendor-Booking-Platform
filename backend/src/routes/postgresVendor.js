@@ -208,36 +208,66 @@ export function createPostgresVendorRouter({ database }) {
     const vendorId = req.vendor.id;
     const userId = req.platformUser.id;
     const result = await database.query(
-      `SELECT
-         (SELECT COUNT(*) FROM services WHERE vendor_id = $1) AS total_services,
-         (SELECT COUNT(*) FROM services WHERE vendor_id = $1 AND status = 'active') AS active_services,
-         (SELECT COUNT(*) FROM services WHERE vendor_id = $1 AND status <> 'active') AS inactive_services,
-         (SELECT COUNT(*) FROM bookings b
-          WHERE b.vendor_id = $1 AND b.status IN ('requested', 'under_review', 'quoted')) AS pending_bookings,
-         (SELECT COUNT(*) FROM bookings b
-          WHERE b.vendor_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress')) AS confirmed_bookings,
-         (SELECT COUNT(*) FROM bookings WHERE vendor_id = $1 AND status = 'completed') AS completed_bookings,
-         (SELECT COUNT(*) FROM bookings WHERE vendor_id = $1) AS total_bookings,
-         (SELECT COUNT(DISTINCT e.organizer_id)
-          FROM bookings b JOIN events e ON e.id = b.event_id WHERE b.vendor_id = $1) AS total_customers,
-         (SELECT COUNT(*) FROM bookings b JOIN events e ON e.id = b.event_id
-          WHERE b.vendor_id = $1 AND b.status IN ('accepted', 'confirmed', 'in_progress')
-            AND e.start_date >= NOW()) AS upcoming_bookings,
-         (SELECT COUNT(*) FROM vendor_availability
-          WHERE vendor_id = $1 AND status = 'available' AND available_date >= CURRENT_DATE) AS upcoming_dates,
-         (SELECT COUNT(*) FROM quotations
-          WHERE vendor_id = $1 AND status IN ('draft', 'sent', 'revision_requested')) AS pending_quotations,
-         COALESCE((SELECT SUM(p.amount) FROM payments p
-          JOIN bookings b ON b.id = p.booking_id
-          WHERE b.vendor_id = $1 AND p.status = 'paid'), 0) AS total_earnings,
-         COALESCE((SELECT SUM(p.amount) FROM payments p
-          JOIN bookings b ON b.id = p.booking_id
-          WHERE b.vendor_id = $1 AND p.status IN ('pending', 'authorized')), 0) AS pending_payouts,
-         COALESCE((SELECT ROUND(AVG(r.rating)::numeric, 2)
-          FROM reviews r JOIN bookings b ON b.id = r.booking_id
-          WHERE b.vendor_id = $1 AND r.status = 'published'), 0) AS average_rating,
-         (SELECT COUNT(*) FROM messages WHERE recipient_id = $2 AND read_at IS NULL) AS unread_messages,
-         (SELECT COUNT(*) FROM notifications WHERE user_id = $2 AND status <> 'read') AS unread_notifications`,
+      `WITH service_summary AS (
+         SELECT COUNT(*)::int AS total_services,
+                COUNT(*) FILTER (WHERE status = 'active')::int AS active_services,
+                COUNT(*) FILTER (WHERE status <> 'active')::int AS inactive_services
+         FROM services WHERE vendor_id = $1
+       ),
+       booking_summary AS (
+         SELECT COUNT(*)::int AS total_bookings,
+                COUNT(*) FILTER (WHERE b.status IN ('requested', 'under_review', 'quoted'))::int AS pending_bookings,
+                COUNT(*) FILTER (WHERE b.status IN ('accepted', 'confirmed', 'in_progress'))::int AS confirmed_bookings,
+                COUNT(*) FILTER (WHERE b.status = 'completed')::int AS completed_bookings,
+                COUNT(DISTINCT e.organizer_id)::int AS total_customers,
+                COUNT(*) FILTER (WHERE b.status IN ('accepted', 'confirmed', 'in_progress')
+                  AND e.start_date >= NOW())::int AS upcoming_bookings
+         FROM bookings b
+         LEFT JOIN events e ON e.id = b.event_id
+         WHERE b.vendor_id = $1
+       ),
+       availability_summary AS (
+         SELECT COUNT(*)::int AS upcoming_dates
+         FROM vendor_availability
+         WHERE vendor_id = $1 AND status = 'available' AND available_date >= CURRENT_DATE
+       ),
+       quotation_summary AS (
+         SELECT COUNT(*)::int AS pending_quotations
+         FROM quotations
+         WHERE vendor_id = $1 AND status IN ('draft', 'sent', 'revision_requested')
+       ),
+       payment_summary AS (
+         SELECT COALESCE(SUM(p.amount) FILTER (WHERE p.status = 'paid'), 0) AS total_earnings,
+                COALESCE(SUM(p.amount) FILTER (WHERE p.status IN ('pending', 'authorized')), 0) AS pending_payouts
+         FROM payments p
+         JOIN bookings b ON b.id = p.booking_id
+         WHERE b.vendor_id = $1
+       ),
+       rating_summary AS (
+         SELECT COALESCE(ROUND(AVG(r.rating)::numeric, 2), 0) AS average_rating
+         FROM reviews r
+         JOIN bookings b ON b.id = r.booking_id
+         WHERE b.vendor_id = $1 AND r.status = 'published'
+       ),
+       message_summary AS (
+         SELECT COUNT(*)::int AS unread_messages
+         FROM messages WHERE recipient_id = $2 AND read_at IS NULL
+       ),
+       notification_summary AS (
+         SELECT COUNT(*)::int AS unread_notifications
+         FROM notifications WHERE user_id = $2 AND status <> 'read'
+       )
+       SELECT service_summary.*, booking_summary.*, availability_summary.*,
+              quotation_summary.*, payment_summary.*, rating_summary.*,
+              message_summary.*, notification_summary.*
+       FROM service_summary
+       CROSS JOIN booking_summary
+       CROSS JOIN availability_summary
+       CROSS JOIN quotation_summary
+       CROSS JOIN payment_summary
+       CROSS JOIN rating_summary
+       CROSS JOIN message_summary
+       CROSS JOIN notification_summary`,
       [vendorId, userId],
     );
     const summary = result.rows[0];

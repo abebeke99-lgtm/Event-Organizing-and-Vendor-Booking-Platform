@@ -14,6 +14,7 @@ const BROKEN_CONNECTION_CODES = new Set([
   '57P02',
 ]);
 const TRANSIENT_CONNECTION_MESSAGES = [
+  /connection terminated due to connection timeout/i,
   /connection terminated unexpectedly/i,
   /timeout expired/i,
   /server closed the connection unexpectedly/i,

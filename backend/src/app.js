@@ -99,7 +99,10 @@ export function createApp({
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
-  const allowedOrigins = new Set(configuredOrigins);
+  const localDevelopmentOrigins = process.env.NODE_ENV === 'production'
+    ? []
+    : ['http://127.0.0.1:5173', 'http://localhost:5173'];
+  const allowedOrigins = new Set([...configuredOrigins, ...localDevelopmentOrigins]);
   const isAllowedOrigin = (requestOrigin) => !requestOrigin || allowedOrigins.has(requestOrigin);
   app.locals.systemSettings = {
     platform_status: process.env.PLATFORM_STATUS || 'open',
@@ -186,6 +189,10 @@ export function createApp({
     }));
     app.use('/api', createPostgresHomepageRouter({ database: normalizedDatabase }));
     app.use('/api/admin', requireAdmin);
+    app.use('/api/admin/profile/photo', createPostgresProfilePhotoRouter({
+      database: normalizedDatabase,
+      administrator: true,
+    }));
     app.use('/api/admin', createPostgresAdminEventsRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminReportsRouter({ database: normalizedDatabase }));

@@ -79,6 +79,7 @@ function clearPlatformCookie(res) {
 }
 
 export async function requirePlatformUser(req, res, next) {
+  if (req.platformUser?.id) return next();
   if (!req.cookies?.platform_session) return res.status(401).json({ message: 'Unauthorized' });
 
   try {
