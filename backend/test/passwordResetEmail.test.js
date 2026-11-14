@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPasswordResetOtpEmail,
+  buildPasswordChangedEmail,
   createSmtpTransport,
   getPasswordResetEmailConfig,
   getSmtpDiagnostic,
@@ -18,18 +19,43 @@ const smtpEnvironment = {
   SMTP_FROM: 'EventHub <no-reply@example.test>',
 };
 
-test('password reset OTP email includes the code, five-minute expiry, and escaped name', () => {
+test('password reset OTP email includes the code, configured expiry, and escaped name', () => {
   const message = buildPasswordResetOtpEmail({
     email: 'ada@example.test',
     name: '<Ada & Co>',
     otp: '123456',
-  }, smtpEnvironment);
+  }, { ...smtpEnvironment, FRONTEND_URL: 'https://eventhub.example' });
 
   assert.equal(message.to, 'ada@example.test');
   assert.equal(message.subject, 'EventHub Password Reset Verification Code');
   assert.match(message.text, /123456/);
-  assert.match(message.text, /expires in 5 minutes/);
+  assert.match(message.text, /expires in 10 minutes/);
   assert.match(message.html, /&lt;Ada &amp; Co&gt;/);
+  assert.match(message.html, /src="https:\/\/eventhub\.example\/assets\/logo\.svg"/);
+  assert.match(message.html, /alt="EH logo"/);
+  assert.match(message.html, /© \d{4} EventHub/);
+});
+
+test('password reset email supports Amharic and password-change notifications', () => {
+  const reset = buildPasswordResetOtpEmail({
+    email: 'ሀ@example.test',
+    name: 'ሀና',
+    otp: '654321',
+    language: 'am',
+    expiryMinutes: 10,
+  }, smtpEnvironment);
+  const changed = buildPasswordChangedEmail({
+    email: 'ada@example.test',
+    name: '<Ada>',
+    language: 'en',
+  }, smtpEnvironment);
+
+  assert.match(reset.subject, /EventHub/);
+  assert.match(reset.text, /654321/);
+  assert.match(reset.text, /10/);
+  assert.match(reset.text, /ይህን ጥያቄ ካላቀረቡ/);
+  assert.match(changed.subject, /password was changed/i);
+  assert.match(changed.html, /&lt;Ada&gt;/);
 });
 
 test('password reset email configuration accepts SMTP without a frontend URL', () => {

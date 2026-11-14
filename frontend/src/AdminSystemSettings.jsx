@@ -9,6 +9,7 @@ import {
   SYSTEM_SETTINGS_SECTIONS, validateAdminSetting,
 } from './adminSystemSettingsData.js';
 import { translate, useLanguage } from './language.js';
+import Logo from './components/Logo.js';
 import './adminSystemSettings.css';
 
 const sectionIcons = {
@@ -569,7 +570,7 @@ export default function AdminSystemSettings() {
           <Card title="Appearance preferences" description="Changes immediately update the preview beside this form.">{renderFields('appearance')}</Card>
           <Card title="Theme preview" description="Preview only; this does not change other application screens.">
             <div className={`as-theme-preview ${settings.appearance.dashboardLayout.toLowerCase()} ${settings.appearance.cardStyle.toLowerCase()}`} style={{ '--preview-primary': settings.appearance.primaryColor, '--preview-secondary': settings.appearance.secondaryColor, '--preview-accent': settings.appearance.accentColor, '--preview-bg': previewDark ? '#172033' : settings.appearance.backgroundColor, '--preview-text': previewDark ? '#f3f5fa' : settings.appearance.textColor, '--preview-surface': previewDark ? '#26344c' : '#fff', '--preview-sidebar': previewSidebarColor, '--preview-sidebar-text': previewSidebarLight ? '#344158' : '#fff', '--preview-radius': `${settings.appearance.borderRadius}px`, fontFamily: settings.appearance.fontFamily }}>
-              <div className="as-preview-sidebar"><img className="as-preview-logo" src={settings.general.logo || '/eventhub-logo.png'} alt="Platform logo preview" /><span>Dashboard</span><span>Bookings</span><span>Settings</span></div>
+              <div className="as-preview-sidebar">{settings.general.logo ? <img className="as-preview-logo" src={settings.general.logo} alt="Platform logo preview" /> : <Logo className="as-preview-logo" size="xs" variant="icon" />}<span>Dashboard</span><span>Bookings</span><span>Settings</span></div>
               <div className="as-preview-main"><span className="as-preview-chip">Live preview</span><h3>Good morning, Admin</h3><p>Your event platform at a glance.</p><div className="as-preview-metric"><strong>128</strong><span>Active bookings</span></div><button type="button" onClick={() => setPreview({ title: 'Theme preview', text: 'Your appearance settings are shown in this preview only.' })}>Preview Theme</button></div>
             </div>
           </Card>

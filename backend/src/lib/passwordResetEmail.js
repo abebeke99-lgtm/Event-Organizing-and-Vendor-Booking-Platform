@@ -54,10 +54,41 @@ export function getSmtpDiagnostic(error) {
   return 'SMTP delivery failed; check the provider configuration and server logs.';
 }
 
-export function buildPasswordResetOtpEmail({ email, name, otp }, environment = process.env) {
+function getEmailBrandFooter(environment) {
+  const configuredOrigin = environment.FRONTEND_URL || environment.WEB_ORIGIN;
+  const logoUrl = configuredOrigin ? new URL('/assets/logo.svg', configuredOrigin) : null;
+  if (logoUrl && (!['http:', 'https:'].includes(logoUrl.protocol)
+    || (environment.NODE_ENV === 'production' && logoUrl.protocol !== 'https:')
+    || logoUrl.username || logoUrl.password)) {
+    throw new Error('Email logo URL must use a valid public HTTP or HTTPS origin.');
+  }
+  const logo = logoUrl
+    ? `<img src="${logoUrl.href.replace(/[&<>"']/g, (character) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    })[character])}" alt="EH logo" style="display:block;width:32px;height:auto;margin:0 auto 8px" />`
+    : '';
+  const year = new Date().getFullYear();
+  return {
+    html: `<div style="margin-top:28px;text-align:center;color:#758198">${logo}<p style="margin:0;font-size:11px">© ${year} EventHub</p></div>`,
+    text: `© ${year} EventHub`,
+  };
+}
+
+export function buildPasswordResetOtpEmail({
+  email,
+  name,
+  otp,
+  language = 'en',
+  expiryMinutes = 10,
+}, environment = process.env) {
   const config = getPasswordResetEmailConfig(environment);
   if (!config) throw new Error('Password reset email is not configured.');
 
+  const isAmharic = language === 'am';
   const greetingName = String(name || '').trim();
   const safeName = greetingName.replace(/[&<>"']/g, (character) => ({
     '&': '&amp;',
@@ -66,14 +97,59 @@ export function buildPasswordResetOtpEmail({ email, name, otp }, environment = p
     '"': '&quot;',
     "'": '&#39;',
   })[character]);
-  const greeting = greetingName ? `Hello ${greetingName},` : 'Hello,';
+  const greeting = isAmharic
+    ? `${greetingName ? `${greetingName}፣ ` : ''}ሰላም፣`
+    : greetingName ? `Hello ${greetingName},` : 'Hello,';
+  const subject = isAmharic
+    ? 'የEventHub የይለፍ ቃል ማረጋገጫ ኮድ'
+    : 'EventHub Password Reset Verification Code';
+  const heading = isAmharic ? 'የEventHub የይለፍ ቃል ለውጥ' : 'EventHub password reset';
+  const instruction = isAmharic
+    ? 'የይለፍ ቃልዎን ለመቀየር ይህን የማረጋገጫ ኮድ ያስገቡ፦'
+    : 'Enter this verification code to reset your password:';
+  const expiry = isAmharic
+    ? `ይህ ኮድ በ${expiryMinutes} ደቂቃ ውስጥ ጊዜው ያልፋል።`
+    : `This code expires in ${expiryMinutes} minutes.`;
+  const ignore = isAmharic
+    ? 'ይህን ጥያቄ ካላቀረቡ፣ ይህን ኢሜይል ችላ ይበሉ።'
+    : 'If you did not request this, ignore this email.';
+  const brandFooter = getEmailBrandFooter(environment);
 
   return {
     from: config.from,
     to: email,
-    subject: 'EventHub Password Reset Verification Code',
-    text: `${greeting}\n\nYour EventHub password reset verification code is:\n\n${otp}\n\nThis code expires in 5 minutes.\n\nIf you did not request a password reset, ignore this email.\n\nEventHub`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">EventHub password reset</h1><p>${safeName ? `Hello ${safeName},` : 'Hello,'}</p><p>Your EventHub password reset verification code is:</p><p style="font-size:30px;font-weight:700;letter-spacing:8px;color:#2165a6">${otp}</p><p>This code expires in 5 minutes.</p><p>If you did not request a password reset, ignore this email.</p><p style="margin-top:28px;color:#758198">EventHub</p></div>`,
+    subject,
+    text: `${greeting}\n\n${instruction}\n\n${otp}\n\n${expiry}\n\n${ignore}\n\n${brandFooter.text}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">${heading}</h1><p>${isAmharic ? safeName ? `${safeName}፣ ሰላም፣` : 'ሰላም፣' : safeName ? `Hello ${safeName},` : 'Hello,'}</p><p>${instruction}</p><p style="font-size:30px;font-weight:700;letter-spacing:8px;color:#2165a6">${otp}</p><p>${expiry}</p><p>${ignore}</p>${brandFooter.html}</div>`,
+  };
+}
+
+export function buildPasswordChangedEmail({ email, name, language = 'en' }, environment = process.env) {
+  const config = getPasswordResetEmailConfig(environment);
+  if (!config) throw new Error('Password reset email is not configured.');
+  const isAmharic = language === 'am';
+  const greetingName = String(name || '').trim();
+  const safeName = greetingName.replace(/[&<>"']/g, (character) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character]);
+  const greeting = isAmharic
+    ? `${safeName ? `${safeName}፣ ` : ''}ሰላም፣`
+    : safeName ? `Hello ${safeName},` : 'Hello,';
+  const heading = isAmharic ? 'የይለፍ ቃልዎ ተቀይሯል' : 'Your password was changed';
+  const body = isAmharic
+    ? 'የEventHub መለያዎ የይለፍ ቃል ተቀይሯል። ይህን እርምጃ ካላደረጉ፣ እባክዎ ወዲያውኑ የEventHub ድጋፍን ያግኙ።'
+    : 'The password for your EventHub account has been changed. If you did not make this change, contact EventHub support immediately.';
+  const brandFooter = getEmailBrandFooter(environment);
+  return {
+    from: config.from,
+    to: email,
+    subject: isAmharic ? 'የEventHub የይለፍ ቃል ለውጥ' : 'Your EventHub password was changed',
+    text: `${greeting}\n\n${body}\n\n${brandFooter.text}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">${heading}</h1><p>${greeting}</p><p>${body}</p>${brandFooter.html}</div>`,
   };
 }
 
@@ -96,12 +172,13 @@ export function buildPasswordSetupEmail({ email, name, setupUrl }, environment =
   const greeting = greetingName ? `Hello ${greetingName},` : 'Hello,';
   const safeName = greetingName ? escapeHtml(greetingName) : '';
   const safeUrl = escapeHtml(frontendUrl.href);
+  const brandFooter = getEmailBrandFooter(environment);
   return {
     from: config.from,
     to: email,
     subject: 'Set your EventHub password',
-    text: `${greeting}\n\nAn administrator created an EventHub account for you. Set your password using this secure link:\n\n${frontendUrl.href}\n\nThis single-use link expires in 24 hours. If you did not expect this invitation, you can ignore this email.\n\nEventHub`,
-    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">Set your EventHub password</h1><p>${safeName ? `Hello ${safeName},` : 'Hello,'}</p><p>An administrator created an EventHub account for you. Use the button below to choose your password.</p><p style="margin:28px 0"><a href="${safeUrl}" style="display:inline-block;padding:13px 22px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:700">Set your password</a></p><p>This single-use link expires in 24 hours. If you did not expect this invitation, you can ignore this email.</p><p style="margin-top:28px;color:#758198">EventHub</p></div>`,
+    text: `${greeting}\n\nAn administrator created an EventHub account for you. Set your password using this secure link:\n\n${frontendUrl.href}\n\nThis single-use link expires in 24 hours. If you did not expect this invitation, you can ignore this email.\n\n${brandFooter.text}`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:32px;color:#17233a"><h1 style="font-size:24px;color:#17466c">Set your EventHub password</h1><p>${safeName ? `Hello ${safeName},` : 'Hello,'}</p><p>An administrator created an EventHub account for you. Use the button below to choose your password.</p><p style="margin:28px 0"><a href="${safeUrl}" style="display:inline-block;padding:13px 22px;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;font-weight:700">Set your password</a></p><p>This single-use link expires in 24 hours. If you did not expect this invitation, you can ignore this email.</p>${brandFooter.html}</div>`,
   };
 }
 
@@ -122,6 +199,25 @@ export async function sendPasswordResetOtpEmail(
     return String(value || '').toLowerCase() === message.email.toLowerCase();
   });
   if (!accepted || result.rejected?.length) throw new Error('SMTP provider did not accept the reset email.');
+}
+
+export async function sendPasswordChangedEmail(
+  message,
+  environment = process.env,
+  transportFactory = nodemailer.createTransport
+) {
+  const transporter = createSmtpTransport(environment, transportFactory);
+  let result;
+  try {
+    result = await transporter.sendMail(buildPasswordChangedEmail(message, environment));
+  } finally {
+    transporter.close?.();
+  }
+  const accepted = (result.accepted || []).some((address) => {
+    const value = typeof address === 'string' ? address : address.address;
+    return String(value || '').toLowerCase() === message.email.toLowerCase();
+  });
+  if (!accepted || result.rejected?.length) throw new Error('SMTP provider did not accept the password-change email.');
 }
 
 export async function sendPasswordSetupEmail(

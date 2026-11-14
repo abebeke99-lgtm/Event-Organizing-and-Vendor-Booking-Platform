@@ -15,13 +15,52 @@ function matchesCategoryName(candidate = '', target = '') {
   return first === second;
 }
 
+function asBoolean(value) {
+  if (value === undefined || value === null || value === '') return false;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const normalized = String(value).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'y', 'active', 'approved', 'verified'].includes(normalized);
+}
+
+export function isVendorPubliclyEligible(vendor = {}) {
+  const record = { ...vendor };
+  const status = String(record.status || record.account_status || record.user_status || record.userStatus || 'active').trim().toLowerCase();
+  const userStatus = String(record.user_status || record.userStatus || record.account_status || status || 'active').trim().toLowerCase();
+  const visibility = String(record.visibility || record.public_visibility || 'public').trim().toLowerCase();
+  const verificationStatus = String(record.verification_status || record.verificationStatus || '').trim().toLowerCase();
+  const verifiedFlag = asBoolean(record.verified ?? record.is_verified ?? record.isVerified ?? (verificationStatus === 'verified'));
+  const isDeleted = asBoolean(record.deleted ?? record.is_deleted ?? record.isDeleted ?? record.deleted_at ?? record.deletedAt ?? record.isDeleted) || Boolean(record.deleted_at || record.deletedAt);
+  const isBlocked = asBoolean(record.blocked ?? record.is_blocked ?? record.isBlocked ?? record.blocked_at ?? record.blockedAt) || Boolean(record.blocked_at || record.blockedAt);
+  const isSuspended = asBoolean(record.suspended ?? record.is_suspended ?? record.isSuspended ?? record.suspended_at ?? record.suspendedAt) || Boolean(record.suspended_at || record.suspendedAt);
+  const isActive = record.isActive !== undefined ? Boolean(record.isActive) : record.is_active !== undefined ? Boolean(record.is_active) : record.active !== undefined ? Boolean(record.active) : true;
+  const isPublished = record.isPublished !== false && record.published !== false && record.is_published !== false && visibility !== 'private';
+  const expiresAt = record.verification_expires_at || record.verificationExpiresAt || record.expires_at || record.expiresAt;
+  const revokedAt = record.revoked_at || record.revokedAt || record.is_revoked || record.isRevoked;
+  const blockedStatuses = new Set(['blocked', 'deleted', 'disabled', 'inactive', 'suspended', 'archived', 'rejected', 'pending', 'under_review', 'information_requested']);
+
+  if (!isActive || !isPublished || isDeleted || isBlocked || isSuspended) return false;
+  if (status && blockedStatuses.has(status)) return false;
+  if (userStatus && blockedStatuses.has(userStatus)) return false;
+  if (visibility === 'private' || visibility === 'hidden') return false;
+  if (verificationStatus) {
+    if (['pending', 'under_review', 'information_requested', 'rejected', 'suspended'].includes(verificationStatus)) return false;
+    if (verificationStatus !== 'verified') return false;
+  } else if (!verifiedFlag) {
+    return false;
+  }
+  if (expiresAt && Number(new Date(expiresAt)) <= Number(new Date())) return false;
+  if (revokedAt || record.revoked === true || record.revoked === 'true' || record.is_revoked === true || record.isRevoked === true) return false;
+  return true;
+}
+
 export function normalizeVendorRecord(vendor = {}) {
   const record = { ...vendor };
   record.business_name = String(record.business_name || record.name || 'Unnamed vendor').trim();
   record.category = String(record.category || record.primaryCategory || 'General').trim();
   record.city = String(record.city || record.location || 'Remote').trim();
   record.description = String(record.description || '').trim();
-  record.verified = Boolean(record.verified || record.verification_status === 'verified');
+  record.verified = Boolean(record.verified || record.is_verified || record.isVerified || record.verification_status === 'verified');
   record.rating = Number(record.rating ?? 0) || 0;
   record.reviewCount = Number(record.reviewCount ?? record.reviews_count ?? 0) || 0;
   record.bookingCount = Number(record.bookingCount ?? record.booking_count ?? 0) || 0;
@@ -33,13 +72,32 @@ export function normalizeVendorRecord(vendor = {}) {
   if (!Number.isFinite(record.priceFrom)) record.priceFrom = null;
   record.available = record.available === true;
   record.createdAt = record.createdAt || record.created_at || null;
-  record.isPublished = record.isPublished !== false && record.published !== false && record.visibility !== 'private';
+  record.isPublished = record.isPublished !== false && record.published !== false && record.is_published !== false && record.visibility !== 'private';
   record.visibility = String(record.visibility || 'public').toLowerCase();
   record.status = String(record.status || 'active').toLowerCase();
   record.services = Array.isArray(record.services) ? record.services : [];
   record.publicServiceCount = record.services.filter((service) => service && service.published !== false && service.isPublished !== false && service.visibility !== 'private').length;
+  record.publiclyEligible = isVendorPubliclyEligible(record);
   return record;
 }
+
+const SORT_ALIASES = {
+  recommended: 'recommended',
+  popular: 'popular',
+  'highest-rated': 'highest-rated',
+  highest_rated: 'highest-rated',
+  'most-reviewed': 'most-reviewed',
+  most_reviewed: 'most-reviewed',
+  'most-bookings': 'popular',
+  most_bookings: 'popular',
+  'price-low': 'price-low',
+  price_low: 'price-low',
+  'price-high': 'price-high',
+  price_high: 'price-high',
+  'name-az': 'name-az',
+  'recently-added': 'recently-added',
+  newest: 'recently-added',
+};
 
 export function buildVendorFilters(raw = {}) {
   const search = String(raw.search || '').trim().slice(0, 120).toLowerCase();
@@ -49,7 +107,8 @@ export function buildVendorFilters(raw = {}) {
   const minRating = Number(raw.minRating ?? raw.min_rating ?? 0);
   const minPrice = Number(raw.minPrice ?? raw.min_price ?? 0);
   const maxPrice = Number(raw.maxPrice ?? raw.max_price ?? 0);
-  const availableOnly = raw.availableOnly === true || raw.availableOnly === 'true' || raw.availableOnly === '1';
+  const availableValue = raw.available ?? raw.availableOnly;
+  const availableOnly = availableValue === true || availableValue === 'true' || availableValue === '1' || availableValue === 'yes';
   const sort = String(raw.sort || 'recommended').trim().toLowerCase();
   const page = Number.isFinite(Number(raw.page)) ? Math.max(1, Number(raw.page)) : 1;
   const limit = Number.isFinite(Number(raw.limit)) ? Math.max(1, Math.min(50, Number(raw.limit))) : 12;
@@ -64,7 +123,7 @@ export function buildVendorFilters(raw = {}) {
     maxPrice: Number.isFinite(maxPrice) && maxPrice > 0 ? Math.max(minPrice || 0, maxPrice) : 0,
     availableOnly,
     featured: raw.filter === 'featured',
-    sort: ['recommended', 'popular', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added'].includes(sort) ? sort : 'recommended',
+    sort: SORT_ALIASES[sort] || 'recommended',
     page,
     limit,
   };
@@ -72,9 +131,8 @@ export function buildVendorFilters(raw = {}) {
 
 export function listPublicVendors(vendors = [], filters = {}) {
   const normalized = (Array.isArray(vendors) ? vendors : []).map(normalizeVendorRecord).filter((vendor) => {
-    if (!vendor || vendor.isPublished === false || vendor.visibility === 'private' || vendor.visibility === 'hidden') return false;
-    if (vendor.status === 'draft' || vendor.status === 'rejected' || vendor.status === 'suspended') return false;
-    if (!vendor.verified) return false;
+    if (!vendor) return false;
+    if (!isVendorPubliclyEligible(vendor)) return false;
     return true;
   });
 

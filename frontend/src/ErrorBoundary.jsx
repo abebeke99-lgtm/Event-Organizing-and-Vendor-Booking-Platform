@@ -1,4 +1,5 @@
 import { Component, cloneElement } from 'react';
+import Logo from './components/Logo.js';
 
 export default class ErrorBoundary extends Component {
   state = { error: null, retryKey: 0 };
@@ -14,6 +15,7 @@ export default class ErrorBoundary extends Component {
   render() {
     if (this.state.error) {
       return <section className="panel" role="alert">
+        <Logo size="md" variant="full" />
         <h2>This section could not be displayed.</h2>
         <p>Please try again. If the problem continues, refresh the page.</p>
         <button

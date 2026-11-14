@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <defs>
+    <symbol id="eh-icon" viewBox="0 0 48 48">
+      <rect x="3" y="8" width="42" height="36" rx="5" fill="#1B3A78" stroke="#C9A24B" stroke-width="2"/>
+      <path d="M13 5v10M35 5v10" fill="none" stroke="#C9A24B" stroke-linecap="round" stroke-width="4"/>
+      <path d="M5 18h38" fill="none" stroke="#C9A24B" stroke-width="1.5"/>
+      <text x="24" y="37" fill="#E2C98A" font-family="Georgia,serif" font-size="18" font-weight="700" letter-spacing="-1.2" text-anchor="middle">EH</text>
+      <path d="M5 41c5 4 11 6 19 6s14-2 19-6" fill="none" stroke="#1B3A78" stroke-linecap="round" stroke-width="2.5"/>
+    </symbol>
+    <symbol id="eh-mono-icon" viewBox="0 0 48 48">
+      <rect x="3" y="8" width="42" height="36" rx="5" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+      <path d="M13 5v10M35 5v10M5 18h38" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2.5"/>
+      <text x="24" y="37" fill="#FFFFFF" font-family="Georgia,serif" font-size="18" font-weight="700" letter-spacing="-1.2" text-anchor="middle">EH</text>
+      <path d="M5 41c5 4 11 6 19 6s14-2 19-6" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2.5"/>
+    </symbol>
+    <symbol id="eh-full" viewBox="0 0 120 92">
+      <g fill="none" stroke="#C9A24B" stroke-linecap="round" stroke-width="2.2">
+        <path d="M57 81C33 78 19 59 20 40 21 25 30 14 41 8"/>
+        <path d="M63 81c24-3 38-22 37-41-1-15-10-26-21-32"/>
+      </g>
+      <g fill="#C9A24B">
+        <path d="M28 66c-8-1-13-5-17-11 8 0 14 2 19 7z"/>
+        <path d="M22 51c-8-3-12-8-14-15 8 1 14 5 17 11z"/>
+        <path d="M23 36c-6-5-8-11-8-18 7 4 11 9 12 16z"/>
+        <path d="M31 23c-3-7-2-13 1-19 5 6 6 12 4 19z"/>
+        <path d="M92 66c8-1 13-5 17-11-8 0-14 2-19 7z"/>
+        <path d="M98 51c8-3 12-8 14-15-8 1-14 5-17 11z"/>
+        <path d="M97 36c6-5 8-11 8-18-7 4-11 9-12 16z"/>
+        <path d="M89 23c3-7 2-13-1-19-5 6-6 12-4 19z"/>
+      </g>
+      <rect x="36" y="19" width="48" height="48" rx="7" fill="#1B3A78" stroke="#C9A24B" stroke-width="2"/>
+      <path d="M47 13v13M73 13v13" fill="none" stroke="#E2C98A" stroke-linecap="round" stroke-width="5"/>
+      <path d="M42 32h36" fill="none" stroke="#C9A24B" stroke-width="1.5"/>
+      <text x="60" y="57" fill="#E2C98A" font-family="Georgia,serif" font-size="27" font-weight="700" letter-spacing="-2" text-anchor="middle">EH</text>
+      <path d="M36 72c8 7 16 10 24 10s16-3 24-10" fill="none" stroke="#1B3A78" stroke-linecap="round" stroke-width="4"/>
+    </symbol>
+    <symbol id="eh-mono-white" viewBox="0 0 120 92">
+      <g fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2.2">
+        <path d="M57 81C33 78 19 59 20 40 21 25 30 14 41 8"/>
+        <path d="M63 81c24-3 38-22 37-41-1-15-10-26-21-32"/>
+      </g>
+      <g fill="#FFFFFF">
+        <path d="M28 66c-8-1-13-5-17-11 8 0 14 2 19 7z"/>
+        <path d="M22 51c-8-3-12-8-14-15 8 1 14 5 17 11z"/>
+        <path d="M23 36c-6-5-8-11-8-18 7 4 11 9 12 16z"/>
+        <path d="M31 23c-3-7-2-13 1-19 5 6 6 12 4 19z"/>
+        <path d="M92 66c8-1 13-5 17-11-8 0-14 2-19 7z"/>
+        <path d="M98 51c8-3 12-8 14-15-8 1-14 5-17 11z"/>
+        <path d="M97 36c6-5 8-11 8-18-7 4-11 9-12 16z"/>
+        <path d="M89 23c3-7 2-13-1-19-5 6-6 12-4 19z"/>
+      </g>
+      <rect x="36" y="19" width="48" height="48" rx="7" fill="none" stroke="#FFFFFF" stroke-width="2"/>
+      <path d="M47 13v13M73 13v13M42 32h36" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="2.5"/>
+      <text x="60" y="57" fill="#FFFFFF" font-family="Georgia,serif" font-size="27" font-weight="700" letter-spacing="-2" text-anchor="middle">EH</text>
+      <path d="M36 72c8 7 16 10 24 10s16-3 24-10" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="4"/>
+    </symbol>
+  </defs>
+  <use href="#eh-icon"/>
+</svg>

@@ -8,6 +8,8 @@ export const postgresApplicationTables = Object.freeze([
   'user_sessions',
   'password_reset_tokens',
   'password_reset_otp_challenges',
+  'password_reset_otps',
+  'password_reset_sessions',
   'admin_email_change_otp_challenges',
   'service_categories',
   'vendor_profiles',

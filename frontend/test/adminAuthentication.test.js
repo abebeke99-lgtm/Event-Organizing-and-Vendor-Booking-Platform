@@ -26,7 +26,7 @@ const registerSource = appSource.slice(
 );
 const forgotPasswordSource = appSource.slice(
   appSource.indexOf('function ForgotPasswordPage('),
-  appSource.indexOf('function VerifyResetOtpPage('),
+  appSource.indexOf('function SetPasswordPage('),
 );
 
 test('administrator login verifies the shared-auth session before returning an admin', async () => {
@@ -198,12 +198,12 @@ test('registration uses the shared layout and validates required fields, email, 
   assert.match(registerSource, /registration-login-link/);
 });
 
-test('forgot password keeps language selection and localized email validation', () => {
-  assert.match(forgotPasswordSource, /<LanguageSelector\/>/);
+test('forgot password omits the language picker and keeps localized email validation', () => {
+  assert.doesNotMatch(forgotPasswordSource, /LanguageSelector/);
   assert.match(forgotPasswordSource, /t\('registrationEmailRequired'\)/);
   assert.match(forgotPasswordSource, /t\('validEmailRequired'\)/);
-  assert.match(forgotPasswordSource, /placeholder=\{t\('emailPlaceholder'\)\}/);
-  assert.notEqual(translate('emailPlaceholder', 'am'), translate('emailPlaceholder', 'en'));
+  assert.match(forgotPasswordSource, /placeholder="name@example\.com"/);
+  assert.notEqual(translate('validEmailRequired', 'am'), translate('validEmailRequired', 'en'));
 });
 
 test('admin profile retains secure email and password controls', () => {

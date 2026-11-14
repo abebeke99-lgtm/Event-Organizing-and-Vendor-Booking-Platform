@@ -2,6 +2,7 @@ import React, { createElement as h } from 'react';
 import { translate, useLanguage } from './language.js';
 import { getFooterSocialLinks } from './socialLinks.js';
 import SocialMediaLink from './SocialMediaLink.js';
+import Logo from './components/Logo.js';
 
 const SHOW_FOOTER_CONTACT = false;
 
@@ -10,7 +11,6 @@ export default function AppFooter({ socialEnvironment }) {
   const branding = typeof document === 'undefined' ? {} : document.documentElement.dataset;
   const platformName = branding.platformName || 'EventHub';
   const platformDescription = branding.platformDescription || '';
-  const platformLogo = branding.brandingLogoUrl || '';
   const supportPhone = branding.supportPhone || '';
   const configuredSocialLinks = SHOW_FOOTER_CONTACT
     ? getFooterSocialLinks(socialEnvironment).filter((social) => social.url)
@@ -19,7 +19,7 @@ export default function AppFooter({ socialEnvironment }) {
 
   const columns = [
     h('div', { className: 'footer-column', key: 'brand' },
-      h('div', { className: 'brand-pill' }, h('img', { className: 'footer-brand-logo', src: platformLogo || '/eventhub-logo.png', alt: platformName })),
+      h('div', { className: 'brand-pill' }, h(Logo, { className: 'footer-brand-logo', size: 'xs', variant: 'mono-white' }), h('strong', { className: 'footer-brand-name' }, platformName)),
       h('p', null, platformDescription || translate('footerDescription', language))),
     h('div', { className: 'footer-column', key: 'explore' },
       h('h4', null, translate('explore', language)),

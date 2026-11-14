@@ -6,11 +6,13 @@ export function createAuthRateLimiter({
   message,
   skipSuccessfulRequests = false,
   onLimit,
+  keyGenerator,
 }) {
   return rateLimit({
     windowMs,
     limit,
     skipSuccessfulRequests,
+    ...(keyGenerator ? { keyGenerator } : {}),
     standardHeaders: true,
     legacyHeaders: false,
     handler(req, res) {

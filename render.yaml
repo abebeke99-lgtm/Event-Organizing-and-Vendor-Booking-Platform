@@ -63,3 +63,7 @@ services:
         sync: false
       - key: SMTP_SECURE
         sync: false
+      - key: OTP_HMAC_SECRET
+        sync: false
+      - key: OTP_EXPIRY_MINUTES
+        value: "10"

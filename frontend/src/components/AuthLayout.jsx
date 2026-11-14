@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import authBackground from '../assets/auth-bg.jpg';
 import { translate, useLanguage } from '../language.js';
+import Logo from './Logo.js';
 
 export default function AuthLayout({ children, languageSelector }) {
   const language = useLanguage();
@@ -21,7 +22,7 @@ export default function AuthLayout({ children, languageSelector }) {
           />
         )}
         <div className="auth-panel-logo">
-          <img src="/eventhub-logo.png" alt="EventHub" />
+          <Logo size="lg" variant="mono-white" />
         </div>
         <div className="auth-panel-copy">
           <h2>{t('authHeroTitle')}</h2>

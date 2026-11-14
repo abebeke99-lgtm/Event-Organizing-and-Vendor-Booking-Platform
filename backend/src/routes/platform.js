@@ -313,17 +313,40 @@ router.get('/categories/:slug', async (req, res) => {
 });
 
 router.get('/vendors', asyncHandler(async (req, res) => {
+  const vendorSortValue = z.preprocess((value) => {
+    const entry = String(value ?? '').trim().toLowerCase();
+    const aliases = {
+      recommended: 'recommended',
+      popular: 'popular',
+      'highest-rated': 'highest-rated',
+      highest_rated: 'highest-rated',
+      'most-reviewed': 'most-reviewed',
+      most_reviewed: 'most-reviewed',
+      'most-bookings': 'popular',
+      most_bookings: 'popular',
+      'price-low': 'price-low',
+      price_low: 'price-low',
+      'price-high': 'price-high',
+      price_high: 'price-high',
+      'name-az': 'name-az',
+      'recently-added': 'recently-added',
+      newest: 'recently-added',
+    };
+    return aliases[entry] ?? entry;
+  }, z.enum(['recommended', 'popular', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added']));
+
   const filtersSchema = z.object({
     search: z.string().trim().max(120).optional(),
     category: z.string().trim().max(80).optional(),
     location: z.string().trim().max(120).optional(),
     verified: z.enum(['true', 'false', '1', '0']).optional(),
     filter: z.enum(['featured']).optional(),
-    availableOnly: z.enum(['true', 'false', '1', '0']).optional(),
+    available: z.preprocess((value) => value === undefined ? undefined : String(value).trim().toLowerCase(), z.enum(['true', 'false', '1', '0']).optional()),
+    availableOnly: z.preprocess((value) => value === undefined ? undefined : String(value).trim().toLowerCase(), z.enum(['true', 'false', '1', '0']).optional()),
     minRating: z.coerce.number().finite().min(0).max(5).optional(),
     minPrice: z.coerce.number().finite().min(0).optional(),
     maxPrice: z.coerce.number().finite().min(0).optional(),
-    sort: z.enum(['recommended', 'popular', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'name-az', 'recently-added']).optional(),
+    sort: vendorSortValue.optional(),
     page: z.coerce.number().int().min(1).max(100000).optional(),
     limit: z.coerce.number().int().min(1).max(50).optional(),
   }).strict().superRefine((filters, context) => {

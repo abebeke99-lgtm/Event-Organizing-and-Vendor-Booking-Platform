@@ -31,6 +31,9 @@ import HomepageImage from './HomepageImage.jsx';
 import HomepageVenueCarousel from './HomepageVenueCarousel.jsx';
 import HomepageTrustStrip from './HomepageTrustStrip.jsx';
 import AuthLayout from './components/AuthLayout.jsx';
+import AuthCard from './components/AuthCard.jsx';
+import Logo from './components/Logo.js';
+import SplashScreen from './components/SplashScreen.jsx';
 import ContactTopBar from './ContactTopBar.js';
 import AppFooter from './AppFooter.js';
 import PublicNavigation from './PublicNavigation.jsx';
@@ -151,11 +154,11 @@ const dashboardMenuIcons = {
 
 function AuthBrand({ showEventHubLogo = true }) {
   return <div className="auth-brand" aria-label="EventHub">
-    {showEventHubLogo && <img className="auth-brand-logo" src="/eventhub-logo.png" alt="EventHub" />}
+    {showEventHubLogo && <Logo size="lg" variant="full" />}
   </div>;
 }
 
-function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileOpen, onCloseMobile, language, className = '' }) {
+function Sidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileOpen, onCloseMobile, language, className = '' }) {
   const sidebarRef = useRef(null);
   const [expandedGroups, setExpandedGroups] = useState(() => Object.fromEntries(groups.map((group) => [group.id, true])));
   const [flyout, setFlyout] = useState(null);
@@ -203,7 +206,11 @@ function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, collapsed
   }
 
   return <aside ref={sidebarRef} className={`sidebar role-dashboard-sidebar ${className} ${mobileOpen ? 'open' : ''}`} aria-label={`${roleTitle} ${translate('nav.dashboard.navigation', language)}`}>
-    <div className="sidebar-brand"><img className="sidebar-brand-logo" src="/eventhub-logo.png" alt="EventHub"/><img className="sidebar-brand-symbol" src="/eventhub-symbol.png" alt="" aria-hidden="true"/><div className="sidebar-brand-copy"><span>{roleTitle}</span></div></div>
+    <div className="sidebar-brand">
+      <Logo className="sidebar-brand-logo" size="sm" variant="mono-white" />
+      <Logo className="sidebar-brand-symbol" size="xs" variant="icon" />
+      <div className="sidebar-brand-copy"><strong>EventHub</strong><span>{roleTitle}</span></div>
+    </div>
     <nav aria-label={translate('nav.dashboard.sections', language)}>{groups.map((group) => {
       const groupLabel = translate(group.label, language);
       return <div className={`nav-group ${group.flyoutWhenCollapsed ? 'has-collapsed-flyout' : 'nav-group-flat'}`} key={group.id}>
@@ -217,6 +224,7 @@ function DashboardSidebar({ roleTitle, groups, activePage, onNavigate, collapsed
     })()}
   </aside>;
 }
+const DashboardSidebar = Sidebar;
 const toDemoUser = (profile) => {
   const savedProfile = readDemoProfile(profile.email);
   const name = savedProfile?.name || profile.name;
@@ -652,7 +660,6 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   const language = useLanguage();
   const authSessionState = useAuthSessionSnapshot();
   const platformName = document.documentElement.dataset.platformName || 'EventHub';
-  const platformLogo = document.documentElement.dataset.brandingLogoUrl || '';
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -920,8 +927,9 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
     <header className="site-header">
       <div className="site-header-inner">
         <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}>
-          <img className="site-brand-logo" src={platformLogo || '/eventhub-logo.png'} alt={`${platformName} logo`} />
-          <span className="site-brand-tagline">Plan. Book. Celebrate.</span>
+          <Logo className="site-brand-logo site-brand-logo-full" size="sm" variant="full" />
+          <Logo className="site-brand-logo site-brand-logo-icon" size="xs" variant="icon" />
+          <span className="site-brand-copy"><strong>{platformName}</strong><small className="site-brand-tagline">Plan. Book. Celebrate.</small></span>
         </a>
         <PublicNavigation
           currentPath={currentPath}
@@ -1089,7 +1097,7 @@ function ProfilePhotoDisplay({ user, isAdmin = false }) {
   </div>;
 }
 
-function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sidebarExpanded, isAdmin = false, isOrganizer = false, isVendor = false, isCustomer = false }) {
+function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sidebarExpanded, isAdmin = false, isOrganizer = false, isVendor = false, isCustomer = false }) {
   const language = useLanguage();
   const [activePanel, setActivePanel] = useState('');
   const [viewingPhoto, setViewingPhoto] = useState(false);
@@ -1349,7 +1357,14 @@ function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, onNavi
   }
 
   return <header className={`dashboard-header ${sidebarExpanded ? 'sidebar-expanded' : ''}`} ref={headerRef}>
-    <button className="icon-button dashboard-sidebar-toggle" type="button" onClick={onToggleSidebar} aria-label={sidebarExpanded ? 'Collapse dashboard navigation' : 'Expand dashboard navigation'} aria-expanded={sidebarExpanded} title={sidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}>{sidebarExpanded ? <PanelLeftClose size={19}/> : <PanelLeftOpen size={19}/>}</button>
+    <div className="dashboard-header-start">
+      <a className="dashboard-brand" href="/" aria-label="EventHub home">
+        <Logo className="dashboard-brand-full" size="sm" variant="mono-white" />
+        <Logo className="dashboard-brand-icon" size="xs" variant="icon" />
+        <span>EventHub</span>
+      </a>
+      <button className="icon-button dashboard-sidebar-toggle" type="button" onClick={onToggleSidebar} aria-label={sidebarExpanded ? 'Collapse dashboard navigation' : 'Expand dashboard navigation'} aria-expanded={sidebarExpanded} title={sidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}>{sidebarExpanded ? <PanelLeftClose size={19}/> : <PanelLeftOpen size={19}/>}</button>
+    </div>
     <div className="dashboard-header-actions">
       <LanguageSelector user={user} isAdmin={isAdmin}/>
       <ThemeToggle/>
@@ -1395,6 +1410,8 @@ function DashboardHeader({ user, onLogout, onToggleSidebar, onUserChange, onNavi
   </header>;
 }
 
+const DashboardHeader = Navbar;
+
 function DashboardSettings({ user }) {
   const storageKey = `eventhub-demo-settings:${user.email}`;
   const [initialPreferences] = useState(() => {
@@ -1437,7 +1454,7 @@ function PasswordField({ name, label, value, onChange, autoComplete = 'current-p
 }
 
 function EmptyState({ title, message }) {
-  return <div className="empty panel"><strong>{title}</strong><span>{message}</span></div>;
+  return <div className="empty panel"><Logo size="md" variant="full"/><strong>{title}</strong><span>{message}</span></div>;
 }
 
 function Reveal({ children, className = '', direction = 'up', delay = 0, as: Component = 'div' }) {
@@ -3277,12 +3294,14 @@ function VendorsPage({ onNavigate, user, currentPath }) {
       if (nextFilters.featuredOnly) params.set('filter', 'featured');
       if (nextFilters.availableOnly) params.set('availableOnly', 'true');
       const response = await api(`/platform/vendors?${params.toString()}`, { signal });
-      setVendors(response.data || []);
+      const payload = response.data || {};
+      const vendorRows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload) ? payload : [];
+      setVendors(vendorRows);
       setPagination({
-        page: response.pagination?.page || 1,
-        totalPages: response.pagination?.totalPages || 1,
-        total: response.pagination?.total || 0,
-        limit: response.pagination?.limit || 12,
+        page: payload.pagination?.page || 1,
+        totalPages: payload.pagination?.totalPages || 1,
+        total: payload.pagination?.total || 0,
+        limit: payload.pagination?.limit || 12,
       });
     } catch (issue) {
       if (issue.name !== 'AbortError' && !signal?.aborted) {
@@ -3301,7 +3320,9 @@ function VendorsPage({ onNavigate, user, currentPath }) {
       setCategoryError('');
       try {
         const response = await api('/platform/categories', { signal: controller.signal });
-        setCategoryOptions(Array.isArray(response.data) ? response.data : []);
+        const payload = response.data || {};
+        const rows = Array.isArray(payload.categories) ? payload.categories : Array.isArray(payload.data) ? payload.data : [];
+        setCategoryOptions(rows);
       } catch (issue) {
         if (issue.name !== 'AbortError' && !controller.signal.aborted) {
           setCategoryOptions([]);
@@ -3405,7 +3426,21 @@ function VendorsPage({ onNavigate, user, currentPath }) {
           <option value="price-high">{t('priceHighLow')}</option>
           <option value="recently-added">Newly registered</option>
         </select>
-        <button type="button" className="button secondary small" onClick={() => { setPage(1); setSearchInput(''); setSearch(''); setCategory('all'); setLocation(''); setMinPrice(''); setMaxPrice(''); setMinRating(''); setVerifiedOnly(false); setFeaturedOnly(false); setAvailableOnly(false); setSort('recommended'); }}>{t('reset')}</button>
+        <button type="button" className="button secondary small" onClick={() => {
+          setPage(1);
+          setSearchInput('');
+          setSearch('');
+          setCategory('all');
+          setLocation('');
+          setMinPrice('');
+          setMaxPrice('');
+          setMinRating('');
+          const keepVerified = initialParams.get('verified') === 'true' || verifiedOnly || String(currentPath).includes('verified=true');
+          setVerifiedOnly(keepVerified);
+          setFeaturedOnly(false);
+          setAvailableOnly(false);
+          setSort('recommended');
+        }}>{t('reset')}</button>
       </div>
     </div>
 
@@ -4146,6 +4181,7 @@ function LoginPage({
   const [accountNotFound, setAccountNotFound] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
   const registrationSucceeded = queryParams.get('registered') === '1';
+  const passwordResetSucceeded = queryParams.get('passwordReset') === '1';
   const sessionExpired = queryParams.get('sessionExpired') === '1';
   useEffect(() => {
     if (!callbackError) return;
@@ -4188,12 +4224,13 @@ function LoginPage({
     }
   }
 
-  return <AuthLayout languageSelector={<LanguageSelector/>}><section className="login-card">
+  return <AuthLayout languageSelector={<LanguageSelector/>}><AuthCard>
     <h1>{t('loginHeading')}</h1>
     <p className="muted">{administrator ? t('useAdminAccount') : t('loginSubtitle')}</p>
     {!callbackError && !callbackErrorDismissed && oauthNotice
       && <div className={`alert ${queryParams.get('oauth') === 'link_required' ? 'error' : 'success'}`} role={queryParams.get('oauth') === 'link_required' ? 'alert' : 'status'}>{oauthNotice}</div>}
     {registrationSucceeded && <div className="alert success" role="status">{t('registrationSuccess')}</div>}
+    {passwordResetSucceeded && <div className="alert success" role="status">{t('passwordResetLoginSuccess')}</div>}
     {sessionExpired && <div className="alert error" role="alert">{t('runtimeSessionExpired')}</div>}
     {pendingLink && <p className="oauth-link-note">{t(administrator ? 'oauthAdminLinkPasswordNote' : 'oauthAccountLinkPasswordNote')}</p>}
     {error && <div className="alert error" role="alert">{translateText(error, language)}{accountNotFound
@@ -4257,7 +4294,7 @@ function LoginPage({
       <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccountAction')}</button>
     </div>}
     <div className="auth-home-footer"><AuthHomeLink /></div>
-  </section></AuthLayout>;
+  </AuthCard></AuthLayout>;
 }
 
 function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled = true }) {
@@ -4324,7 +4361,7 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
       setBusy(false);
     }
   }
-  return <AuthLayout languageSelector={<LanguageSelector/>}><section className="login-card registration-card">
+  return <AuthLayout languageSelector={<LanguageSelector/>}><AuthCard className="registration-card">
     <h1>{t('createAccountHeading')}</h1>
     <p className="muted">{t('registerAsRole')}</p>
     {!registrationEnabled && <div className="alert warning" role="status">{t('publicRegistrationDisabled')}</div>}
@@ -4388,146 +4425,88 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     </form>
     <div className="registration-login-link"><span>{t('alreadyHaveAccount')}</span><button type="button" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div>
     <div className="auth-home-footer"><AuthHomeLink /></div>
-  </section></AuthLayout>;
+  </AuthCard></AuthLayout>;
 }
 
-function ForgotPasswordPage({ onSubmit }) {
+function ForgotPasswordPage({ onSubmit, onVerify, onReset }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [email, setEmail] = useState('');
-  const [emailError, setEmailError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const redirectTimer = useRef(null);
-  useEffect(() => () => window.clearTimeout(redirectTimer.current), []);
-
-  async function submit(event) {
-    event.preventDefault();
-    const normalizedEmail = email.trim();
-    if (!normalizedEmail) {
-      setEmailError(t('registrationEmailRequired'));
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-      setEmailError(t('validEmailRequired'));
-      return;
-    }
-    setEmailError('');
-    setBusy(true); setError(''); setSuccess('');
-    try {
-      await onSubmit(normalizedEmail);
-      setSuccess(t('resetOtpSent'));
-      redirectTimer.current = window.setTimeout(() => navigateBrowserPath('/verify-reset-otp'), 1200);
-    } catch (issue) {
-      setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 503 ? t('resetServiceUnavailable') : translateText(issue.message, language));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return <main className="login-wrap"><section className="login-card reset-card">
-    <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
-    <p className="eyebrow">{t('resetEyebrow')}</p>
-    <h1>{t('forgotPasswordTitle')}</h1>
-    <p className="muted">{t('resetEmailCopy')}</p>
-    {error && <div className="alert error" role="alert">{error}</div>}
-    {success && <div className="alert success" role="status">{success}</div>}
-    <form onSubmit={submit} noValidate>
-      <label className="field"><span>{t('emailAddress')}</span><input name="email" type="email" autoComplete="email" maxLength="254" placeholder={t('emailPlaceholder')} value={email} onChange={(event) => { setEmail(event.target.value); setEmailError(''); }} required aria-invalid={Boolean(emailError)} aria-describedby={emailError ? 'forgot-password-email-error' : undefined} />{emailError && <small id="forgot-password-email-error" className="field-error" role="alert">{emailError}</small>}</label>
-      <button className="button login-button" type="submit" disabled={busy || Boolean(success)}>{busy ? t('sending') : t('sendResetLink')}</button>
-    </form>
-    <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); window.clearTimeout(redirectTimer.current); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>
-  </section></main>;
-}
-
-function VerifyResetOtpPage({ email: initialEmail, onEmailChange, onVerify, onResend }) {
-  const language = useLanguage();
-  const t = (key) => translate(key, language);
-  const [email, setEmail] = useState(initialEmail || '');
-  const [otp, setOtp] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [resending, setResending] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(initialEmail ? 60 : 0);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    if (!initialEmail) return;
-    setEmail(initialEmail);
-    setSecondsLeft(60);
-  }, [initialEmail]);
-  useEffect(() => {
-    if (secondsLeft <= 0) return undefined;
-    const timer = window.setTimeout(() => setSecondsLeft((seconds) => seconds - 1), 1000);
-    return () => window.clearTimeout(timer);
-  }, [secondsLeft]);
-
-  async function submit(event) {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    setMessage('');
-    try {
-      await onVerify(email.trim(), otp);
-      navigateBrowserPath('/reset-password');
-    } catch (issue) {
-      setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 400 ? t('invalidOtp') : issue.status === 429 ? t('resetRateLimited') : issue.status === 503 ? t('resetServiceUnavailable') : translateText(issue.message, language));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function resend() {
-    setResending(true);
-    setError('');
-    setMessage('');
-    try {
-      await onResend(email.trim());
-      onEmailChange(email.trim());
-      setOtp('');
-      setSecondsLeft(60);
-      setMessage(t('otpSent'));
-    } catch (issue) {
-      setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 503 ? t('resetServiceUnavailable') : issue.status === 429 ? t('resetRateLimited') : translateText(issue.message, language));
-    } finally {
-      setResending(false);
-    }
-  }
-
-  return <main className="login-wrap"><section className="login-card reset-card">
-    <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
-    <AuthBrand />
-    <p className="eyebrow">{t('resetEyebrow')}</p>
-    <h1>{t('verifyOtp')}</h1>
-    <p className="muted">{t('ifAccountMatches')}</p>
-    {error && <div className="alert error" role="alert">{error}</div>}
-    {message && <div className="alert success" role="status">{message}</div>}
-    <form onSubmit={submit}>
-      <label className="field"><span>{t('emailAddress')}</span><input name="otp-email" type="email" autoComplete="email" maxLength="254" value={email} onChange={(event) => setEmail(event.target.value)} required /></label>
-      <label className="field"><span>{t('otpCode')}</span><input className="otp-code-input" name="otp" type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength="6" value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, '').slice(0, 6))} required /></label>
-      <button className="button login-button" type="submit" disabled={busy || otp.length !== 6}>{busy ? t('verifyingOtp') : t('verifyOtp')}</button>
-    </form>
-    <button className="text-link otp-resend-button" type="button" onClick={resend} disabled={resending || secondsLeft > 0 || !email.trim()}>{resending ? t('sending') : secondsLeft > 0 ? `${t('resendIn')} ${secondsLeft} ${t('seconds')}` : t('resendOtp')}</button>
-    <div className="auth-home-footer"><a className="auth-home-link" href="/forgot-password" onClick={(event) => { event.preventDefault(); navigateBrowserPath('/forgot-password'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('back')}</span></a></div>
-  </section></main>;
-}
-
-function ResetPasswordPage({ onSubmit }) {
-  const language = useLanguage();
-  const t = (key) => translate(key, language);
+  const [email, setEmail] = useState(() => new URLSearchParams(window.location.search).get('email') || '');
+  const [step, setStep] = useState(1);
+  const [otp, setOtp] = useState(() => Array(6).fill(''));
+  const [resetSessionToken, setResetSessionToken] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [emailError, setEmailError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [completed, setCompleted] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(0);
   const [error, setError] = useState('');
-  const passwordValid = password.length >= 12 && password.length <= 16
-    && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password);
+  const [success, setSuccess] = useState('');
+  const [validationAttempted, setValidationAttempted] = useState(false);
+  const emailInputRef = useRef(null);
+  const otpInputRefs = useRef([]);
 
   async function submit(event) {
     event.preventDefault();
-    setError('');
-    if (!passwordValid) {
+    if (step === 1) {
+      const normalizedEmail = email.trim();
+      if (!normalizedEmail) {
+        setEmailError(t('registrationEmailRequired'));
+        emailInputRef.current?.focus();
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        setEmailError(t('validEmailRequired'));
+        emailInputRef.current?.focus();
+        return;
+      }
+      setEmailError('');
+      setBusy(true);
+      setError('');
+      setSuccess('');
+      try {
+        await onSubmit(normalizedEmail);
+        setEmail(normalizedEmail);
+        setOtp(Array(6).fill(''));
+        setSuccess(t('resetOtpSent'));
+        setSecondsLeft(60);
+        setStep(2);
+      } catch (issue) {
+        setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 503 ? t('resetServiceUnavailable') : issue.status === 429 ? t('resetRateLimited') : translateText(issue.message, language));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    if (step === 2) {
+      if (otp.some((digit) => !digit)) {
+        setError(t('invalidOtp'));
+        return;
+      }
+      setBusy(true);
+      setError('');
+      setSuccess('');
+      try {
+        const result = await onVerify(email.trim(), otp.join(''));
+        setResetSessionToken(result.resetSessionToken);
+        setStep(3);
+      } catch (issue) {
+        setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 400 ? t('invalidOtp') : issue.status === 429 ? t('resetRateLimited') : issue.status === 503 ? t('resetServiceUnavailable') : translateText(issue.message, language));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    setValidationAttempted(true);
+    const strongPassword = password.length >= 8 && password.length <= 128
+      && new TextEncoder().encode(password).length <= 72
+      && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password);
+    if (!strongPassword) {
       setError(t('passwordInvalid'));
       return;
     }
@@ -4536,33 +4515,137 @@ function ResetPasswordPage({ onSubmit }) {
       return;
     }
     setBusy(true);
+    setError('');
     try {
-      const response = await onSubmit(password);
-      if (!response?.success) throw new Error(t('resetServiceUnavailable'));
-      setCompleted(true);
-      setPassword(''); setConfirmPassword('');
+      await onReset(email.trim(), resetSessionToken, password, confirmPassword);
+      setPassword('');
+      setConfirmPassword('');
+      navigateBrowserPath(`/login?passwordReset=1&email=${encodeURIComponent(email.trim())}`);
     } catch (issue) {
-      setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 400 ? t('resetAuthorizationExpired') : issue.status === 429 ? t('resetRateLimited') : issue.status === 503 ? t('resetServiceUnavailable') : translateText(issue.message, language));
+      const message = issue.message === 'New password must be different from your current password.'
+        ? t('passwordReuse')
+        : issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable')
+          : issue.status === 400 && issue.message.includes('Passwords do not match') ? t('passwordMismatch')
+            : issue.status === 400 && issue.message.includes('Password must be at least') ? t('passwordInvalid')
+            : issue.status === 400 ? t('resetAuthorizationExpired')
+              : issue.status === 429 ? t('resetRateLimited')
+                : issue.status === 503 ? t('resetServiceUnavailable') : translateText(issue.message, language);
+      setError(message);
     } finally {
       setBusy(false);
     }
   }
 
-  return <main className="login-wrap"><section className="login-card reset-card">
-    <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
-    <AuthBrand />
-    <p className="eyebrow">{t('completeResetEyebrow')}</p>
-    <h1>{completed ? t('passwordResetSuccessful') : t('resetPasswordTitle')}</h1>
-    <p className="muted">{completed ? t('passwordResetSuccessCopy') : t('completeResetCopy')}</p>
-    {error && <div className="alert error" role="alert">{error}</div>}
-    {completed ? <button className="button login-button" type="button" onClick={() => navigateBrowserPath('/login')}>{t('backToSignIn')}</button>
-      : <form onSubmit={submit}>
-          <div className="registration-password-field"><PasswordField name="reset-new-password" label={t('newPassword')} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" language={language} minLength={12} maxLength={16} invalid={Boolean(password && !passwordValid)} /></div>
-          <div className="registration-confirm-field"><PasswordField name="reset-confirm-password" label={t('confirmPassword')} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" language={language} minLength={12} maxLength={16} invalid={Boolean(confirmPassword && confirmPassword !== password)} /></div>
-          <button className="button login-button" type="submit" disabled={busy}>{busy ? t('updatingPassword') : t('resetPassword')}</button>
-        </form>}
-    {!completed && <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>}
-  </section></main>;
+  async function resend() {
+    setResending(true);
+    setError('');
+    setSuccess('');
+    try {
+      await onSubmit(email.trim());
+      setOtp(Array(6).fill(''));
+      setSecondsLeft(60);
+      setSuccess(t('resetOtpSent'));
+    } catch (issue) {
+      setError(issue.code === 'DEMO_AUTH' ? t('resetDemoUnavailable') : issue.status === 503 ? t('resetServiceUnavailable') : issue.status === 429 ? t('resetRateLimited') : translateText(issue.message, language));
+    } finally {
+      setResending(false);
+    }
+  }
+
+  function updateOtp(index, value) {
+    const digits = value.replace(/\D/g, '');
+    if (digits.length > 1) {
+      const next = [...otp];
+      digits.slice(0, 6 - index).split('').forEach((digit, offset) => { next[index + offset] = digit; });
+      setOtp(next);
+      otpInputRefs.current[Math.min(index + digits.length, 5)]?.focus();
+      return;
+    }
+    const next = [...otp];
+    next[index] = digits;
+    setOtp(next);
+    if (digits && index < 5) otpInputRefs.current[index + 1]?.focus();
+  }
+
+  function handleOtpPaste(event) {
+    const digits = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6);
+    if (!digits) return;
+    event.preventDefault();
+    setOtp(digits.padEnd(6, ' ').split('').map((digit) => digit.trim()));
+    otpInputRefs.current[Math.min(digits.length, 5)]?.focus();
+  }
+
+  const passwordRequirements = [
+    password.length >= 8,
+    /[A-Z]/.test(password),
+    /[a-z]/.test(password),
+    /\d/.test(password),
+  ];
+  const strength = passwordRequirements.filter(Boolean).length;
+  const maskedEmail = email.replace(/^(.).*(?=@)/, '$1***');
+
+  useEffect(() => {
+    if (step === 1) emailInputRef.current?.focus();
+    else if (step === 2) otpInputRefs.current[0]?.focus();
+    else document.querySelector('[name="reset-new-password"]')?.focus();
+  }, [step]);
+
+  useEffect(() => {
+    if (secondsLeft <= 0) return undefined;
+    const interval = window.setInterval(() => setSecondsLeft((seconds) => Math.max(0, seconds - 1)), 1000);
+    return () => window.clearInterval(interval);
+  }, [secondsLeft > 0]);
+
+  return <main className="login-wrap reset-screen"><AuthCard className="reset-card">
+    <h1>{step === 1 ? t('forgotPasswordTitle') : step === 2 ? t('verifyCodeTitle') : t('createNewPasswordTitle')}</h1>
+    <p className="muted">{step === 1 ? t('resetEmailCopy') : step === 2 ? <>{t('maskedEmailIntro')} <strong>{maskedEmail}</strong>.</> : t('resetPasswordRequirements')}</p>
+    {error && <div className="alert error" role="alert" aria-live="assertive">{error}</div>}
+    {success && <div className="alert success" role="status" aria-live="polite">{success}</div>}
+    <form onSubmit={submit} noValidate>
+      {step === 1 && <label className="field"><span>{t('emailAddress')}</span><div className="reset-email-control"><Mail size={21} aria-hidden="true"/><input ref={emailInputRef} name="email" type="email" autoComplete="email" maxLength="254" placeholder="name@example.com" value={email} onChange={(event) => { setEmail(event.target.value); setEmailError(''); }} required aria-invalid={Boolean(emailError)} aria-describedby={emailError ? 'forgot-password-email-error' : undefined} /></div>{emailError && <small id="forgot-password-email-error" className="field-error" role="alert">{emailError}</small>}</label>}
+      {step === 2 && <fieldset className="otp-digit-fieldset">
+        <legend>{t('otpCode')}</legend>
+        <div className="otp-digit-inputs" dir="ltr">
+          {Array.from({ length: 6 }, (_, index) => <input
+            key={index}
+            ref={(element) => { otpInputRefs.current[index] = element; }}
+            aria-label={`${t('otpDigit')} ${index + 1}`}
+            name={`otp-${index + 1}`}
+            type="text"
+            inputMode="numeric"
+            autoComplete={index === 0 ? 'one-time-code' : 'off'}
+            pattern="[0-9]*"
+            maxLength="1"
+            value={otp[index] || ''}
+            onChange={(event) => updateOtp(index, event.target.value)}
+            onPaste={handleOtpPaste}
+            onKeyDown={(event) => {
+              if (event.key === 'Backspace' && !otp[index] && index > 0) otpInputRefs.current[index - 1]?.focus();
+              if (event.key === 'ArrowLeft' && index > 0) otpInputRefs.current[index - 1]?.focus();
+              if (event.key === 'ArrowRight' && index < 5) otpInputRefs.current[index + 1]?.focus();
+            }}
+            aria-invalid={Boolean(error)}
+          />)}
+        </div>
+      </fieldset>}
+      {step === 3 && <>
+        <div className="registration-password-field">
+          <label className="field"><span>{t('newPassword')}</span><div className="password-input-wrap"><input name="reset-new-password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" minLength="8" maxLength="128" value={password} onChange={(event) => setPassword(event.target.value)} aria-invalid={Boolean(validationAttempted && !passwordRequirements.every(Boolean))} /><button className="password-visibility" type="button" aria-label={showPassword ? t('hidePassword') : t('showPassword')} onClick={() => setShowPassword((shown) => !shown)}>{showPassword ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}</button></div></label>
+        </div>
+        <div className="password-strength" aria-live="polite"><span>{t('passwordStrength')}</span><strong className={`strength-${strength >= 4 ? 'strong' : strength >= 2 ? 'medium' : 'weak'}`}>{t(strength >= 4 ? 'strengthStrong' : strength >= 2 ? 'strengthMedium' : 'strengthWeak')}</strong></div>
+        <div className="registration-confirm-field"><label className="field"><span>{t('confirmPassword')}</span><div className="password-input-wrap"><input name="reset-confirm-password" type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" maxLength="128" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} aria-invalid={Boolean(validationAttempted && confirmPassword !== password)} /><button className="password-visibility" type="button" aria-label={showConfirmPassword ? t('hidePassword') : t('showPassword')} onClick={() => setShowConfirmPassword((shown) => !shown)}>{showConfirmPassword ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}</button></div></label></div>
+      </>}
+      <button className="button login-button" type="submit" disabled={busy || (step === 1 && !email.trim()) || (step === 2 && otp.some((digit) => !digit))}>
+        {busy ? <><span className="login-loading-spinner" aria-hidden="true" />{step === 1 ? t('sendingOtp') : step === 2 ? t('verifyingOtp') : t('updatingPassword')}</> : step === 1 ? t('sendOtp') : step === 2 ? t('verifyCodeAction') : t('resetPassword')}
+      </button>
+    </form>
+    {step === 2 && <div className="otp-step-actions">
+      <button className="text-link otp-resend-button" type="button" onClick={resend} disabled={resending || secondsLeft > 0 || busy}>{resending ? t('sendingOtp') : secondsLeft > 0 ? `${t('otpResendWaiting')} ${secondsLeft} ${t('seconds')}` : t('resendOtp')}</button>
+      <button className="text-link" type="button" onClick={() => { setStep(1); setError(''); setSuccess(''); setOtp(Array(6).fill('')); setSecondsLeft(0); }}>{t('useDifferentEmail')}</button>
+    </div>}
+    <div className="reset-divider" aria-hidden="true" />
+    <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>
+  </AuthCard></main>;
 }
 
 function SetPasswordPage({ onSubmit }) {
@@ -4604,9 +4687,8 @@ function SetPasswordPage({ onSubmit }) {
     }
   }
 
-  return <main className="login-wrap"><section className="login-card reset-card">
+  return <main className="login-wrap"><AuthCard className="reset-card">
     <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
-    <AuthBrand />
     <p className="eyebrow">{t('setPasswordEyebrow')}</p>
     <h1>{completed ? t('setPasswordCompleteTitle') : t('setPasswordTitle')}</h1>
     <p className="muted">{completed ? t('setPasswordCompleteCopy') : t('setPasswordCopy')}</p>
@@ -4618,7 +4700,7 @@ function SetPasswordPage({ onSubmit }) {
           <button className="button login-button" type="submit" disabled={busy}>{busy ? t('updatingPassword') : t('setPasswordAction')}</button>
         </form>}
     {!completed && <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>}
-  </section></main>;
+  </AuthCard></main>;
 }
 
 function PrivacyPage() {
@@ -4664,7 +4746,7 @@ function HelpPage() {
 
 function AccessDeniedPage({ onNavigate }) {
   const language = useLanguage();
-  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">403 · {translate('accessDenied', language)}</p><h2>{translate('accessDeniedTitle', language)}</h2><p>{translate('accessDeniedCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('backHome', language)}</button></div></div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><Logo size="md" variant="full"/><p className="eyebrow">403 · {translate('accessDenied', language)}</p><h2>{translate('accessDeniedTitle', language)}</h2><p>{translate('accessDeniedCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('backHome', language)}</button></div></div></main>;
 }
 
 function Navigate({ to, replace = false }) {
@@ -4699,7 +4781,7 @@ function ProtectedRoute({ user, allowedRoles, onNavigate, children }) {
 
 function NotFoundPage({ onNavigate }) {
   const language = useLanguage();
-  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><p className="eyebrow">404</p><h2>{translate('pageNotFound', language)}</h2><p>{translate('pageNotFoundCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('returnHome', language)}</button></div></div></main>;
+  return <main className="page-shell"><div className="content-stack"><div className="info-card wide danger-card"><Logo size="md" variant="full"/><p className="eyebrow">404</p><h2>{translate('pageNotFound', language)}</h2><p>{translate('pageNotFoundCopy', language)}</p><button className="button" onClick={() => onNavigate('/')}>{translate('returnHome', language)}</button></div></div></main>;
 }
 
 function VendorDashboard({ user, onLogout, onUserChange }) {
@@ -6688,7 +6770,6 @@ export default function App(){
   const language = useLanguage();
   const authSessionState = useAuthSessionSnapshot();
   const [user,setUser]=useState(null);const [checking,setChecking]=useState(true);const [slug,setSlug]=useState('overview');const [sidebarOpen,setSidebarOpen]=useState(false);const [sidebarCollapsed,setSidebarCollapsed]=useState(false);const [globalError,setGlobalError]=useState('');const [showLogin,setShowLogin]=useState(false);const [portal,setPortal]=useState('admin');const [currentPath,setCurrentPath]=useState(() => `${window.location.pathname || '/'}${window.location.search || ''}`);const [platformAvailability,setPlatformAvailability]=useState(null);
-  const [passwordResetEmail, setPasswordResetEmail] = useState('');
 
   const normalizePath = useCallback((path) => {
     if (!path || path === '') return '/';
@@ -6947,10 +7028,9 @@ export default function App(){
   async function setPassword(token, password) {
     return api('/platform/set-password', { method: 'POST', body: JSON.stringify({ token, password }) });
   }
-  async function requestPasswordResetOtp(email){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); const response=await api('/auth/forgot-password/otp',{method:'POST',body:JSON.stringify({email})}); setPasswordResetEmail(email); return response; }
-  async function resendPasswordResetOtp(email){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/resend-reset-otp',{method:'POST',body:JSON.stringify({email})}); }
-  async function verifyPasswordResetOtp(email,otp){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/verify-reset-otp',{method:'POST',body:JSON.stringify({email,otp})}); }
-  async function resetPassword(newPassword){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/reset-password',{method:'POST',body:JSON.stringify({newPassword})}); }
+  async function requestPasswordResetOtp(email){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/platform/account/password/forgot',{method:'POST',body:JSON.stringify({email})}); }
+  async function verifyPasswordResetOtp(email,code){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/platform/account/password/verify-otp',{method:'POST',body:JSON.stringify({email,code})}); }
+  async function resetPassword(email,resetSessionToken,newPassword,confirmPassword){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/platform/account/password/reset',{method:'POST',body:JSON.stringify({email,resetSessionToken,newPassword,confirmPassword})}); }
   async function verifyEmail(token){ const response = await api('/platform/verify-email',{method:'POST',body:JSON.stringify({token})}); return response; }
   function navigate(next){const destination=DEMO_AUTH_ENABLED&&next==='account-settings'?'settings':next;const path=adminPathForSlug(destination);history.pushState({},'',path);setSlug(adminSlugFromPath(path)||'overview');setSidebarOpen(false);setGlobalError('');}
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
@@ -6996,9 +7076,7 @@ export default function App(){
     '/categories': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><CategoriesPage onNavigate={navigatePublic} /></PublicPageLayout>,
     '/login': <LoginPage onLogin={loginPublic} demoMode={DEMO_AUTH_ENABLED} showForgotPassword oauthNotice={oauthNoticeFromPath(currentPath, language)} />,
     '/register': <RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true} />,
-    '/forgot-password': <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />,
-    '/verify-reset-otp': <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />,
-    '/reset-password': <ResetPasswordPage onSubmit={resetPassword} />,
+    '/forgot-password': <ForgotPasswordPage onSubmit={requestPasswordResetOtp} onVerify={verifyPasswordResetOtp} onReset={resetPassword} />,
     '/set-password': <SetPasswordPage onSubmit={setPassword} />,
     '/help': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>,
   };
@@ -7011,7 +7089,7 @@ export default function App(){
   const customerBookingRoute = routePath.match(/^\/customer\/bookings\/(\d+)$/);
   const roleDashboardRoute = /^\/(customer|organizer|vendor)\/dashboard(?:\/|$)/.test(routePath);
   const requiresSession = routePath.startsWith('/admin') || routePath === '/my-bookings' || routePath === '/my-favorites' || isAiChatRoute || roleDashboardRoute || Boolean(customerBookingRoute);
-  if (checking && requiresSession) return <div className="loading full-screen"><img className="loading-brand-symbol" src="/eventhub-symbol.png" alt="EventHub"/><span className="spinner"/>Checking your session…</div>;
+  if (checking && requiresSession) return <SplashScreen label="Checking your session…" />;
   if (requiresSession && !user && ['error', 'rate-limited', 'waking'].includes(authSessionState.status)) {
     return <SessionRecoveryPage sessionState={authSessionState}/>;
   }
@@ -7110,9 +7188,7 @@ export default function App(){
   if(!user){
     if (routePath === '/login') return <><LoginPage onLogin={loginPublic} onOAuthLink={linkPublicOAuth} showForgotPassword oauthNotice={oauthNoticeFromPath(currentPath, language)} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/register') return <><RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
-    if (routePath === '/forgot-password') return <><ForgotPasswordPage onSubmit={requestPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
-    if (routePath === '/verify-reset-otp') return <><VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
-    if (routePath === '/reset-password') return <><ResetPasswordPage onSubmit={resetPassword} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/forgot-password') return <ForgotPasswordPage onSubmit={requestPasswordResetOtp} onVerify={verifyPasswordResetOtp} onReset={resetPassword} />;
     if (routePath === '/set-password') return <><SetPasswordPage onSubmit={setPassword} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (currentPath === '/help') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>;
     if (['/events', '/events/upcoming'].includes(currentPath.split('?')[0])) return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={null} currentPath={currentPath} /></PublicPageLayout>;

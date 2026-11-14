@@ -28,7 +28,7 @@ test('public header contact links use the central settings and correct display v
   assert.doesNotMatch(markup, /old@example\.com|\+251 11 123 4567/);
 });
 
-test('contact details lead the right-side group while social icons stay on the left', () => {
+test('contact details remain separate while social icons align to the right on desktop', () => {
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, {
     environment: { VITE_FACEBOOK_URL: 'https://facebook.com/eventhub' },
     children: React.createElement('span', { id: 'language-switcher' }, 'English'),
@@ -38,6 +38,7 @@ test('contact details lead the right-side group while social icons stay on the l
 
   assert.doesNotMatch(leftContent, /contact-top-bar-item/);
   assert.match(leftContent, /contact-top-bar-social/);
+  assert.match(styleSource, /@media\(min-width:1100px\)\{[\s\S]*?\.contact-top-bar-inner\{[^}]*flex-direction:row-reverse/);
   assert.ok(actionsContent.indexOf('contact-top-bar-info') < actionsContent.indexOf('contact-top-bar-actions-divider'));
   assert.ok(actionsContent.indexOf('contact-top-bar-actions-divider') < actionsContent.indexOf('id="language-switcher"'));
 });

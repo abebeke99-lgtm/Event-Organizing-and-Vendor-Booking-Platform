@@ -193,6 +193,7 @@ export function createApp({
       loadContext: aiChatServices.loadContext || loadPostgresAiChatContext,
     }));
     app.use('/api', createPostgresHomepageRouter({ database: normalizedDatabase }));
+    app.use('/api', requirePlatformAvailable, createPostgresMarketplaceRouter({ database: normalizedDatabase }));
     app.use('/api/admin', requireAdmin);
     app.use('/api/admin/profile/photo', createPostgresProfilePhotoRouter({
       database: normalizedDatabase,
@@ -255,6 +256,7 @@ export function createApp({
       });
     }));
     app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'), organizerRoutes);
+    app.use('/api', requirePlatformAvailable, platformRoutes);
     app.use('/api/platform', requirePlatformAvailable, platformRoutes);
     app.use('/api/hero-slides', heroSlidesRoutes);
     app.use('/api/about', requirePlatformAvailable, aboutRoutes);

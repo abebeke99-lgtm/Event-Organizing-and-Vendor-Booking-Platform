@@ -5,9 +5,108 @@ import { test } from 'node:test';
 import { loadNeonTestEnvironment } from '../src/lib/neonTestEnvironment.js';
 import { isPublicCategoryName } from '../src/lib/categoryName.js';
 import { createPostgresDatabase } from '../src/postgresDb.js';
+import { listPublicVendors } from '../src/lib/vendorCatalog.js';
 
 const integrationEnabled = process.env.RUN_NEON_INTEGRATION === 'true';
 const diagnosticsEnabled = process.env.NEON_MARKETPLACE_TRACE === 'true';
+
+function makeVendor(overrides = {}) {
+  return {
+    id: 1,
+    business_name: 'Alpha Studios',
+    category: 'Photography',
+    city: 'Addis Ababa',
+    description: 'Wedding coverage',
+    verification_status: 'verified',
+    verified: true,
+    status: 'active',
+    user_status: 'active',
+    visibility: 'public',
+    isPublished: true,
+    published: true,
+    is_active: true,
+    rating: 4.8,
+    reviewCount: 8,
+    bookingCount: 5,
+    priceFrom: 2000,
+    available: true,
+    services: [{ title: 'Wedding photography', description: 'Photo coverage', published: true, visibility: 'public' }],
+    ...overrides,
+  };
+}
+
+test('public vendor filters accept compatibility aliases and ignore inactive or blocked records', () => {
+  const vendors = [
+    makeVendor({ id: 1, business_name: 'Alpha Studios', category: 'Photography', city: 'Addis Ababa', description: 'Wedding coverage', verified: true, status: 'active', visibility: 'public', isPublished: true, rating: 4.8, reviewCount: 8, bookingCount: 5, priceFrom: 2000, available: true, services: [{ title: 'Wedding photography', description: 'Photo coverage', published: true, visibility: 'public' }] }),
+    makeVendor({ id: 2, business_name: 'Blocked Studio', category: 'Photography', city: 'Addis Ababa', description: 'Hidden vendor', verified: true, status: 'blocked', visibility: 'public', isPublished: true, rating: 4.5, reviewCount: 3, bookingCount: 1, priceFrom: 1500, available: true, services: [{ title: 'Blocked service', description: 'Blocked', published: true, visibility: 'public' }] }),
+    makeVendor({ id: 3, business_name: 'Inactive Studio', category: 'Photography', city: 'Addis Ababa', description: 'Inactive vendor', verified: true, status: 'inactive', visibility: 'public', isPublished: true, rating: 4.5, reviewCount: 3, bookingCount: 1, priceFrom: 1500, available: true, services: [{ title: 'Inactive service', description: 'Inactive', published: true, visibility: 'public' }] }),
+    makeVendor({ id: 4, business_name: 'Unverified Studio', category: 'Photography', city: 'Addis Ababa', description: 'Unverified vendor', verification_status: 'pending', verified: false, status: 'active', visibility: 'public', isPublished: true, rating: 4.9, reviewCount: 9, bookingCount: 7, priceFrom: 2200, available: true, services: [{ title: 'Premium video', description: 'Premium', published: true, visibility: 'public' }] }),
+  ];
+
+  const verifiedOnly = listPublicVendors(vendors, { verified: 'true', available: 'true', sort: 'newest', minRating: 4.5 });
+  const falseVerified = listPublicVendors(vendors, { verified: 'false', available: 'true', sort: 'newest', minRating: 4.5 });
+  assert.equal(verifiedOnly.total, 1);
+  assert.equal(verifiedOnly.vendors[0].id, 1);
+  assert.equal(verifiedOnly.sort, 'recently-added');
+  assert.equal(falseVerified.total, 1);
+});
+
+test('public vendor eligibility enforces verified-only rules for all status and validation states', () => {
+  const cases = [
+    ['approved active vendor is returned', makeVendor(), true],
+    ['unverified vendor is excluded', makeVendor({ verification_status: 'pending', verified: false, status: 'active' }), false],
+    ['pending vendor is excluded', makeVendor({ verification_status: 'pending', verified: false, status: 'active' }), false],
+    ['rejected vendor is excluded', makeVendor({ verification_status: 'rejected', verified: false, status: 'active' }), false],
+    ['expired verification is excluded', makeVendor({ verification_status: 'verified', verified: true, verification_expires_at: new Date(Date.now() - 1000).toISOString() }), false],
+    ['revoked verification is excluded', makeVendor({ verification_status: 'verified', verified: true, revoked_at: new Date().toISOString() }), false],
+    ['suspended vendor is excluded', makeVendor({ verification_status: 'verified', verified: true, status: 'suspended' }), false],
+    ['blocked vendor is excluded', makeVendor({ verification_status: 'verified', verified: true, status: 'blocked' }), false],
+    ['deleted vendor is excluded', makeVendor({ verification_status: 'verified', verified: true, deleted_at: new Date().toISOString() }), false],
+    ['private vendor is excluded', makeVendor({ verification_status: 'verified', verified: true, visibility: 'private' }), false],
+  ];
+
+  for (const [name, vendor, expected] of cases) {
+    const result = listPublicVendors([vendor], { verified: 'true' });
+    assert.equal(result.total, expected ? 1 : 0, name);
+  }
+});
+
+test('public vendor search, category, availability, sort and pagination stay verified-only', () => {
+  const vendors = [
+    makeVendor({ id: 1, business_name: 'Alpha Photography', category: 'Photography', city: 'Addis Ababa', verification_status: 'verified', verified: true, rating: 4.9, reviewCount: 12, priceFrom: 1500, available: true, createdAt: '2024-01-02T00:00:00Z', services: [{ title: 'Wedding photography', description: 'Photo coverage', published: true, visibility: 'public' }] }),
+    makeVendor({ id: 2, business_name: 'Beta Catering', category: 'Catering', city: 'Bahir Dar', verification_status: 'verified', verified: true, rating: 4.6, reviewCount: 8, priceFrom: 3000, available: true, createdAt: '2024-02-01T00:00:00Z', services: [{ title: 'Event catering', description: 'Meals for events', published: true, visibility: 'public' }] }),
+    makeVendor({ id: 3, business_name: 'Gamma Photography', category: 'Photography', city: 'Addis Ababa', verification_status: 'verified', verified: true, rating: 4.5, reviewCount: 7, priceFrom: 1800, available: false, createdAt: '2024-03-01T00:00:00Z', services: [{ title: 'Photo booth service', description: 'Custom booths with props', published: true, visibility: 'public' }] }),
+    makeVendor({ id: 4, business_name: 'Delta Photo', category: 'Photography', city: 'Addis Ababa', verification_status: 'pending', verified: false, rating: 5, reviewCount: 20, priceFrom: 2500, available: true, createdAt: '2024-04-01T00:00:00Z', services: [{ title: 'Premium video', description: 'Premium', published: true, visibility: 'public' }] }),
+  ];
+
+  const searchResult = listPublicVendors(vendors, { verified: 'true', search: 'alpha' });
+  assert.equal(searchResult.total, 1);
+  assert.ok(searchResult.vendors.every((vendor) => vendor.verified));
+
+  const categoryResult = listPublicVendors(vendors, { verified: 'true', category: 'photography' });
+  assert.equal(categoryResult.total, 2);
+  assert.ok(categoryResult.vendors.every((vendor) => vendor.category && vendor.category.toLowerCase() === 'photography'));
+
+  const availabilityResult = listPublicVendors(vendors, { verified: 'true', available: 'true' });
+  assert.equal(availabilityResult.total, 2);
+  assert.ok(availabilityResult.vendors.every((vendor) => vendor.available));
+
+  const sortingResult = listPublicVendors(vendors, { verified: 'true', sort: 'newest' });
+  assert.equal(sortingResult.total, 3);
+  assert.ok(sortingResult.vendors.every((vendor) => vendor.verified));
+  assert.equal(sortingResult.vendors[0].id, 3);
+
+  const paginationResult = listPublicVendors(vendors, { verified: 'true', page: 2, limit: 1 });
+  assert.equal(paginationResult.total, 3);
+  assert.equal(paginationResult.page, 2);
+  assert.equal(paginationResult.limit, 1);
+  assert.equal(paginationResult.vendors.length, 1);
+  assert.ok(paginationResult.vendors.every((vendor) => vendor.verified));
+
+  const invalidPagination = listPublicVendors(vendors, { verified: 'true', page: 0, limit: 0 });
+  assert.equal(invalidPagination.page, 1);
+  assert.equal(invalidPagination.limit, 1);
+});
 
 function installMarketplaceDiagnostics(pool) {
   if (!diagnosticsEnabled) return;

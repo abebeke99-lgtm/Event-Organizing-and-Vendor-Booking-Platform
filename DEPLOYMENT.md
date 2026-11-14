@@ -32,12 +32,16 @@ These settings are **optional**:
   - Google Cloud Console: add the Google URI to the OAuth client’s authorized redirect URIs. Azure Portal: add the Microsoft URI as a **Web** platform redirect URI and use a single-tenant app matching `MICROSOFT_TENANT_ID`.
   - Both providers use OIDC state, nonce, and PKCE, and credentials remain on the backend. `GET /api/platform/oauth/providers` reports configuration status; this does not prove a complete provider flow. Provider registration uses the selected Customer, Event Organizer, or Vendor role, respects `public_registration_enabled`, and cannot assign Administrator. Existing matching accounts must confirm their password before provider linking. Password sessions last 8 hours, or 30 days when Remember me is selected.
   - Instagram is not offered as a general consumer authentication provider.
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURE`: configure only when password-reset email is required. Keep credentials private.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURE`: configure valid SMTP delivery for password-reset and password-change emails. Keep credentials private.
+- `OTP_HMAC_SECRET`: required private random secret of at least 32 bytes used to HMAC reset codes. Set it in Render's secret environment settings and local `backend/.env`; never commit it or put it in a `VITE_*` setting.
+- `OTP_EXPIRY_MINUTES=10`: OTP lifetime (the backend accepts 1–30 minutes); the reset-session token always expires after 10 minutes.
 - `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_CHAT_MODELS`: configure only when enabling the AI assistant. `OPENAI_API_KEY` is a backend secret.
 - `PAYMENT_PROVIDER_ADAPTER`: optional server-side payment adapter module; do not set it unless a real provider adapter is configured.
 - `PLATFORM_STATUS` and `MAINTENANCE_MODE`: optional platform status overrides; leave unset for the normal open state.
 
-Do not configure `SESSION_SECRET`: database-backed random session tokens are used; the variable is reserved for a future integration. Do not configure bootstrap or seed passwords for a normal deployment. Do not create demo or fake administrator accounts. No database initialization, migration, seed, reset, or schema operation is needed for the already initialized production database.
+Do not configure `SESSION_SECRET`: database-backed random session tokens are used; the variable is reserved for a future integration. Do not configure bootstrap or seed passwords for a normal deployment. Do not create demo or fake administrator accounts. Do not initialize, reset, seed, or otherwise replace the production database.
+
+The OTP flow adds the idempotent migration `backend/postgres/migrations/017_password_reset_otp_sessions.sql`. Review its SQL and apply it manually to the intended PostgreSQL database before enabling this flow; application startup does not apply it. The endpoints are `POST /api/platform/account/password/forgot`, `POST /api/platform/account/password/verify-otp`, and `POST /api/platform/account/password/reset`. SMTP is required for delivery; delivery failures are reported through sanitized backend diagnostics without logging the code or email body.
 
 `RENDER_GIT_COMMIT` is supplied by Render. `GIT_COMMIT` is an optional fallback for other hosts. `API_PORT` and `VITE_API_PROXY_TARGET` are local Vite development settings, while `TEST_USER_EMAIL`, `TEST_USER_NAME`, `TEST_USER_ROLE`, and `TEST_USER_PASSWORD` are local-only test-user inputs; do not set these on production services.
 

@@ -14,6 +14,18 @@ import { getSystemLockState } from '../lib/rbac.js';
 import { newSessionToken } from '../lib/security.js';
 import { isTransientPostgresError } from '../lib/postgresRetry.js';
 import { normalizeDatabaseAdapter } from '../db.js';
+import {
+  getPasswordResetEmailConfig,
+  getSmtpDiagnostic,
+  sendPasswordChangedEmail,
+  sendPasswordResetOtpEmail,
+} from '../lib/passwordResetEmail.js';
+import {
+  createPasswordResetCode,
+  hashPasswordResetCode,
+  hashPasswordResetEmailKey,
+  verifyPasswordResetCode,
+} from '../lib/passwordResetSecurity.js';
 
 const emailSchema = z.string().trim().email().max(254).transform(normalizeEmail);
 const registrationLimiter = createAuthRateLimiter({
@@ -21,11 +33,31 @@ const registrationLimiter = createAuthRateLimiter({
   limit: 5,
   message: 'Too many registration attempts. Please try again later.',
 });
-const passwordRecoveryLimiter = createAuthRateLimiter({
-  windowMs: 15 * 60 * 1000,
-  limit: 5,
-  message: 'Too many password recovery requests. Please try again later.',
-});
+const resetIpLimits = {
+  forgot: createAuthRateLimiter({ windowMs: 15 * 60 * 1000, limit: 20, message: 'Too many requests. Please try again later.' }),
+  verify: createAuthRateLimiter({ windowMs: 15 * 60 * 1000, limit: 30, message: 'Too many requests. Please try again later.' }),
+  reset: createAuthRateLimiter({ windowMs: 15 * 60 * 1000, limit: 20, message: 'Too many requests. Please try again later.' }),
+};
+const resetEmailLimits = {
+  forgot: createAuthRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    message: 'Too many requests. Please try again later.',
+    keyGenerator: (req) => hashPasswordResetEmailKey(req.body?.email),
+  }),
+  verify: createAuthRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    message: 'Too many requests. Please try again later.',
+    keyGenerator: (req) => hashPasswordResetEmailKey(req.body?.email),
+  }),
+  reset: createAuthRateLimiter({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    message: 'Too many requests. Please try again later.',
+    keyGenerator: (req) => hashPasswordResetEmailKey(req.body?.email),
+  }),
+};
 const setPasswordLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 8,
@@ -118,7 +150,15 @@ export async function createRegistrationNotifications(executor, {
   }
 }
 
-export function createPostgresAuthRouter({ database, adminNamespace = false }) {
+export function createPostgresAuthRouter({
+  database,
+  adminNamespace = false,
+  otpHmacSecret = process.env.OTP_HMAC_SECRET,
+  otpExpiryMinutes = process.env.OTP_EXPIRY_MINUTES || '10',
+  resetOtpEmailSender = sendPasswordResetOtpEmail,
+  passwordChangedEmailSender = sendPasswordChangedEmail,
+  emailConfiguration = getPasswordResetEmailConfig(),
+}) {
   const normalizedDatabase = normalizeDatabaseAdapter(database);
   if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
     throw new TypeError('A PostgreSQL database adapter is required.');
@@ -292,25 +332,269 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
     }
   });
 
-  router.post('/password-recovery', passwordRecoveryLimiter, async (req, res, next) => {
-    const parsed = emailSchema.safeParse(req.body?.email);
-    if (!parsed.success) {
-      return res.status(400).json({ error: 'Enter a valid email address.' });
-    }
-    try {
-      await writeAudit(database, {
-        actorId: null,
-        action: 'auth.password_recovery_requested',
-        entityType: 'user',
-        entityId: null,
-        details: { email: parsed.data.toLowerCase() },
-        ip: req.ip,
+  if (!adminNamespace) {
+    const resetCryptographyReady = () => {
+      const expiry = Number(otpExpiryMinutes);
+      return typeof otpHmacSecret === 'string' && Buffer.byteLength(otpHmacSecret, 'utf8') >= 32
+        && Number.isInteger(expiry) && expiry >= 1 && expiry <= 30;
+    };
+    const resetEmailReady = () => Boolean(emailConfiguration);
+    const resetServiceUnavailable = (res) => res.status(503).json({
+      error: 'Password reset is temporarily unavailable. Please try again later.',
+    });
+    const genericResetResponse = {
+      message: 'If an account exists for this email, a verification code has been sent.',
+    };
+    const resetEmailSchema = z.object({ email: emailSchema }).strict();
+    const resetVerifySchema = resetEmailSchema.extend({ code: z.string().regex(/^\d{6}$/) }).strict();
+    const resetPasswordSchema = z.object({
+      email: emailSchema,
+      resetSessionToken: z.string().min(32).max(256),
+      newPassword: z.string()
+        .min(8)
+        .max(128)
+        .refine((value) => Buffer.byteLength(value, 'utf8') <= 72)
+        .refine((value) => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value)),
+      confirmPassword: z.string().min(1).max(128),
+    }).strict().refine((value) => value.newPassword === value.confirmPassword, {
+      message: 'Passwords do not match.',
+      path: ['confirmPassword'],
+    });
+
+    router.post('/account/password/forgot',
+      resetIpLimits.forgot,
+      resetEmailLimits.forgot,
+      async (req, res, next) => {
+        const parsed = resetEmailSchema.safeParse(req.body || {});
+        if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email address.' });
+        if (!resetCryptographyReady() || !resetEmailReady()) {
+          console.error('Password reset OTP delivery is unavailable: required configuration is missing or invalid.');
+          return resetServiceUnavailable(res);
+        }
+        try {
+          const expiryMinutes = Number(otpExpiryMinutes);
+          const challenge = await inTransaction(database, async (tx) => {
+            const found = await tx.query(
+              `SELECT id, full_name, email, status, preferred_language
+               FROM users WHERE LOWER(email) = $1 LIMIT 1 FOR UPDATE`,
+              [parsed.data.email],
+            );
+            const user = found.rows[0];
+            const userId = user?.id ?? 0;
+            const accountCanReceiveEmail = user?.status === 'active';
+            const cooldown = await tx.query(
+              `SELECT id FROM password_reset_otps
+               WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+               ORDER BY created_at DESC LIMIT 1`,
+              [userId],
+            );
+            await tx.query(
+              `UPDATE password_reset_otps SET used_at = NOW()
+               WHERE user_id = $1 AND used_at IS NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM password_reset_otps
+                   WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+                 )`,
+              [userId],
+            );
+            await tx.query(
+              `UPDATE password_reset_sessions SET used_at = NOW()
+               WHERE user_id = $1 AND used_at IS NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM password_reset_otps
+                   WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+                 )`,
+              [userId],
+            );
+            await tx.query(
+              `UPDATE password_reset_otp_challenges
+               SET consumed_at = NOW(), reset_token_used_at = NOW()
+               WHERE user_id = $1
+                 AND NOT EXISTS (
+                   SELECT 1 FROM password_reset_otps
+                   WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+                 )`,
+              [userId],
+            );
+            const code = createPasswordResetCode();
+            const inserted = await tx.query(
+              `INSERT INTO password_reset_otps
+                 (user_id, otp_hash, expires_at, ip, user_agent)
+               SELECT $1, $2, NOW() + ($3 * INTERVAL '1 minute'), $4, $5
+               WHERE $1 <> 0
+                 AND EXISTS (SELECT 1 FROM users WHERE id = $1 AND status = 'active')
+                 AND NOT EXISTS (
+                   SELECT 1 FROM password_reset_otps
+                   WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+                 )
+               RETURNING id`,
+              [
+                userId,
+                hashPasswordResetCode(code, userId, otpHmacSecret),
+                expiryMinutes,
+                req.ip || null,
+                String(req.get('user-agent') || '').slice(0, 512) || null,
+              ],
+            );
+            if (!accountCanReceiveEmail || cooldown.rows[0] || !inserted.rows[0]) return null;
+            return { id: inserted.rows[0].id, user, code };
+          });
+          if (challenge) {
+            setImmediate(() => {
+              Promise.resolve().then(() => resetOtpEmailSender({
+                email: challenge.user.email,
+                name: challenge.user.full_name,
+                otp: challenge.code,
+                language: challenge.user.preferred_language === 'am' ? 'am' : 'en',
+                expiryMinutes: Number(otpExpiryMinutes),
+              })).catch(async (error) => {
+                console.error('Password reset OTP email delivery failed.', getSmtpDiagnostic(error));
+                try {
+                  await query(
+                    database,
+                    'UPDATE password_reset_otps SET used_at = NOW() WHERE id = $1 AND used_at IS NULL',
+                    [challenge.id],
+                  );
+                } catch (cleanupError) {
+                  console.error('Failed to invalidate an undelivered password reset challenge.');
+                }
+              });
+            });
+          }
+          return res.status(202).json(genericResetResponse);
+        } catch (error) {
+          return next(error);
+        }
       });
-      return res.json({ message: 'If the account exists, recovery instructions will be sent.' });
-    } catch (error) {
-      return next(error);
-    }
-  });
+
+    router.post('/account/password/verify-otp',
+      resetIpLimits.verify,
+      resetEmailLimits.verify,
+      async (req, res, next) => {
+        const parsed = resetVerifySchema.safeParse(req.body || {});
+        if (!parsed.success) return res.status(400).json({ error: 'Invalid or expired code.' });
+        if (!resetCryptographyReady()) return resetServiceUnavailable(res);
+        try {
+          const result = await inTransaction(database, async (tx) => {
+            const found = await tx.query(
+              `SELECT otp.id, otp.user_id, otp.otp_hash, otp.expires_at, otp.attempts,
+                      u.status
+               FROM password_reset_otps otp
+               JOIN users u ON u.id = otp.user_id
+               WHERE LOWER(u.email) = $1 AND otp.used_at IS NULL
+               ORDER BY otp.created_at DESC LIMIT 1
+               FOR UPDATE OF otp`,
+              [parsed.data.email],
+            );
+            const challenge = found.rows[0];
+            if (!challenge || challenge.status !== 'active'
+              || new Date(challenge.expires_at).getTime() <= Date.now()
+              || Number(challenge.attempts) >= 5) return null;
+            if (!verifyPasswordResetCode(
+              parsed.data.code,
+              challenge.user_id,
+              String(challenge.otp_hash).trim(),
+              otpHmacSecret,
+            )) {
+              const attempts = Number(challenge.attempts) + 1;
+              await tx.query(
+                `UPDATE password_reset_otps
+                 SET attempts = $1, used_at = CASE WHEN $1 >= 5 THEN NOW() ELSE used_at END
+                 WHERE id = $2`,
+                [attempts, challenge.id],
+              );
+              return null;
+            }
+            await tx.query('UPDATE password_reset_otps SET used_at = NOW() WHERE id = $1', [challenge.id]);
+            const resetSessionToken = newSessionToken();
+            await tx.query(
+              `INSERT INTO password_reset_sessions (user_id, token_hash, expires_at)
+               VALUES ($1, $2, NOW() + INTERVAL '10 minutes')`,
+              [challenge.user_id, hashToken(resetSessionToken)],
+            );
+            return { resetSessionToken };
+          });
+          if (!result) return res.status(400).json({ error: 'Invalid or expired code.' });
+          return res.json(result);
+        } catch (error) {
+          return next(error);
+        }
+      });
+
+    router.post('/account/password/reset',
+      resetIpLimits.reset,
+      resetEmailLimits.reset,
+      async (req, res, next) => {
+        const parsed = resetPasswordSchema.safeParse(req.body || {});
+        if (!parsed.success) {
+          const mismatch = parsed.error.issues.some((issue) => issue.path.includes('confirmPassword'));
+          return res.status(400).json({
+            error: mismatch ? 'Passwords do not match.' : 'Password must be at least 8 characters and include uppercase, lowercase, and a number.',
+          });
+        }
+        if (!resetCryptographyReady()) return resetServiceUnavailable(res);
+        try {
+          const passwordHash = await bcrypt.hash(parsed.data.newPassword, 12);
+          const changed = await inTransaction(database, async (tx) => {
+            const found = await tx.query(
+              `SELECT reset.id AS reset_session_id, reset.user_id, u.email, u.full_name,
+                      u.password_hash, u.status, u.preferred_language
+               FROM password_reset_sessions reset
+               JOIN users u ON u.id = reset.user_id
+               WHERE reset.token_hash = $1 AND LOWER(u.email) = $2
+                 AND reset.used_at IS NULL AND reset.expires_at > NOW()
+               LIMIT 1 FOR UPDATE OF reset, u`,
+              [hashToken(parsed.data.resetSessionToken), parsed.data.email],
+            );
+            const user = found.rows[0];
+            if (!user || user.status !== 'active') {
+              const error = new Error('Invalid or expired reset session.');
+              error.status = 400;
+              throw error;
+            }
+            if (user.password_hash && await bcrypt.compare(parsed.data.newPassword, user.password_hash)) {
+              const error = new Error('New password must be different from your current password.');
+              error.status = 400;
+              throw error;
+            }
+            await tx.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, user.user_id]);
+            await tx.query(
+              'UPDATE password_reset_sessions SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
+              [user.user_id],
+            );
+            await tx.query(
+              'UPDATE password_reset_otps SET used_at = NOW() WHERE user_id = $1 AND used_at IS NULL',
+              [user.user_id],
+            );
+            await tx.query('DELETE FROM password_reset_otp_challenges WHERE user_id = $1', [user.user_id]);
+            await tx.query('DELETE FROM password_reset_tokens WHERE user_id = $1', [user.user_id]);
+            await tx.query('DELETE FROM user_sessions WHERE user_id = $1', [user.user_id]);
+            await tx.query('DELETE FROM admin_sessions WHERE user_id = $1', [user.user_id]);
+            await writeAudit(tx, {
+              actorId: user.user_id,
+              action: 'auth.password_reset',
+              entityId: user.user_id,
+              details: {},
+              ip: req.ip,
+            });
+            return {
+              email: user.email,
+              name: user.full_name,
+              language: user.preferred_language === 'am' ? 'am' : 'en',
+            };
+          });
+          setImmediate(() => {
+            Promise.resolve().then(() => passwordChangedEmailSender(changed)).catch((error) => {
+              console.error('Password change notification email failed.', getSmtpDiagnostic(error));
+            });
+          });
+          return res.json({ message: 'Password reset successfully. Please sign in.' });
+        } catch (error) {
+          if (error.status) return res.status(error.status).json({ error: error.message });
+          return next(error);
+        }
+      });
+  }
 
   router.post('/login', loginLimiter, async (req, res, next) => {
     const schema = z.object({

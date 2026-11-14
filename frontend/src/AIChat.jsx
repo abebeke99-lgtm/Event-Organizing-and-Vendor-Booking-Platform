@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github.css';
 import apiClient from './api/axios.js';
 import { translate, translateText, useLanguage } from './language.js';
+import Logo from './components/Logo.js';
 import { redactAiChatSecrets } from './aiChatSecurity.js';
 import { buildChatMessageContent, isSupportedChatTextFile, MAX_CHAT_FILE_BYTES, MAX_CHAT_PROMPT_LENGTH, parseSseEvent } from './aiChatUtils.js';
 import './aiChat.css';
@@ -453,8 +454,9 @@ export default function AIChat({ user, currentPath, onNavigate }) {
       <div className="ai-sidebar-brand">
         <button className="ai-icon-button ai-collapse-button" type="button" aria-label={t(sidebarCollapsed ? 'aiChatExpandHistory' : 'aiChatCollapseHistory')} title={t(sidebarCollapsed ? 'aiChatExpandHistory' : 'aiChatCollapseHistory')} onClick={() => setSidebarCollapsed((value) => !value)}>{sidebarCollapsed ? <PanelLeftOpen size={17}/> : <PanelLeftClose size={17}/>}</button>
         <button className="ai-icon-button ai-mobile-close" type="button" aria-label={t('aiChatCloseHistory')} onClick={() => setSidebarOpen(false)}><X size={18}/></button>
-        <img src="/eventhub-symbol.png" alt="" />
-        <strong>{t('aiChatAssistant')}</strong>
+        <Logo className="ai-sidebar-logo" size={sidebarCollapsed ? 'xs' : 'sm'} variant={sidebarCollapsed ? 'icon' : 'full'} />
+        <strong>EventHub</strong>
+        <small>{t('aiChatAssistant')}</small>
       </div>
       <button className="ai-new-chat" type="button" aria-label={t('aiChatNew')} title={t('aiChatNew')} onClick={() => { stopGenerating(); setMessages([]); setError(''); setDraft(''); setAttachment(null); setShowArchived(false); onNavigate('/ai-chat'); setSidebarOpen(false); }}>
         <Plus size={17}/> {t('aiChatNew')}
