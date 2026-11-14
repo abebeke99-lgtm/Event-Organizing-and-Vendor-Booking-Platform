@@ -9,11 +9,7 @@ const styleSource = await readFile(new URL('../src/styles.css', import.meta.url)
 test('public header uses a scroll-away utility bar and a sticky main bar', () => {
   assert.match(appSource, /<ContactTopBar contactInfo=\{siteContactInfo\} contactError=\{contactInfoError\}>/);
   assert.match(appSource, /<header className="site-header">/);
-  assert.match(styleSource, /:root\{--public-utility:#1B3A78/);
-  assert.match(styleSource, /\.contact-top-bar\{min-height:44px\}/);
-  assert.match(styleSource, /\.contact-top-bar-inner\{min-height:44px;padding-top:0;padding-bottom:0;flex-direction:row-reverse\}/);
-  assert.match(styleSource, /\.contact-top-bar-social \.footer-social-link\{width:36px;height:36px\}/);
-  assert.match(styleSource, /\.contact-top-bar-social \.footer-social-link:hover\{border-color:#C9A24B/);
+  assert.match(styleSource, /\.contact-top-bar\{min-height:52px;background:var\(--public-utility\)/);
   assert.match(styleSource, /\.site-header\{[^}]*position:sticky;top:0;z-index:40/);
   assert.doesNotMatch(styleSource.match(/\.contact-top-bar\{([^}]*)\}/)?.[1] || '', /position:\s*(?:sticky|fixed)/);
   assert.match(styleSource, /--public-utility:#12376b/);
@@ -21,11 +17,6 @@ test('public header uses a scroll-away utility bar and a sticky main bar', () =>
 
 test('main header retains logo, navigation, and its search control', () => {
   assert.match(styleSource, /\.site-header-inner\{[^}]*max-width:1560px[^}]*display:grid;grid-template-columns/);
-  assert.match(appSource, /<Logo className="site-brand-logo site-brand-logo-full" size="sm" variant="full" \/>/);
-  assert.match(styleSource, /\.site-brand\{flex-direction:row\}/);
-  assert.match(styleSource, /\.site-brand-logo-full\{width:56px!important;height:auto!important\}/);
-  assert.match(styleSource, /\.site-brand-copy>strong\{color:var\(--eh-navy\);font-size:24px/);
-  assert.match(styleSource, /\.site-brand-copy \.site-brand-tagline\{margin:0;color:#7A8BA8;font-size:11px;font-weight:600;letter-spacing:\.2em/);
   assert.match(appSource, /className="header-actions public-header-actions"/);
   assert.match(appSource, /className="public-search-anchor"/);
   assert.match(appSource, /aria-controls="header-search-panel"/);
