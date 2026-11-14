@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { loadNeonTestEnvironment } from '../src/lib/neonTestEnvironment.js';
+import { isPublicCategoryName } from '../src/lib/categoryName.js';
 import { createPostgresDatabase } from '../src/postgresDb.js';
 
 const integrationEnabled = process.env.RUN_NEON_INTEGRATION === 'true';
@@ -82,10 +83,10 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
   const database = createPostgresDatabase(environment);
   const suffix = randomUUID();
   const email = `marketplace-${suffix}@example.invalid`;
-  const businessName = `Marketplace ${suffix} Vendor`;
-  const categoryName = `Marketplace ${suffix} Category`;
-  const serviceTitle = `Marketplace ${suffix} Service`;
-  const city = `Marketplace ${suffix} City`;
+  const businessName = `Fixture ${suffix} Vendor`;
+  const categoryName = `Fixture ${suffix} Category`;
+  const serviceTitle = `Fixture ${suffix} Service`;
+  const city = `Fixture ${suffix} City`;
   let availableDate = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
   const app = createApp({ database: database.runtimeAdapter, databaseDialect: 'postgres' });
   const server = app.listen(0, '127.0.0.1');
@@ -331,10 +332,13 @@ test('PostgreSQL public marketplace preserves vendor, category, and service work
          WHERE is_active = TRUE AND service_menu_order IS NOT NULL
          ORDER BY service_menu_order, name`,
       );
+      const expectedPublicNames = expected.rows
+        .map((row) => row.name)
+        .filter(isPublicCategoryName);
       const response = await get('/api/platform/categories?scope=services');
       assert.equal(response.status, 200);
       const { categories } = await response.json();
-      assert.deepEqual(categories.map((category) => category.name), expected.rows.map((row) => row.name));
+      assert.deepEqual(categories.map((category) => category.name), expectedPublicNames);
       assert.ok(categories.some((category) => category.id === categoryId));
       const categoryDetail = await get(`/api/platform/categories/${categories.find((category) => category.id === categoryId).slug}`);
       assert.equal(categoryDetail.status, 200);

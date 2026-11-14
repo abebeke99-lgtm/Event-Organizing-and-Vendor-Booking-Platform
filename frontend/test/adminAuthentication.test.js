@@ -6,6 +6,7 @@ import {
   authenticateAdministrator,
   authenticatePlatformUser,
   dashboardPathForRole,
+  getAdministratorSessionExpiredRedirect,
   getAdministratorRouteRedirect,
 } from '../src/adminAuthentication.js';
 
@@ -14,6 +15,10 @@ const adminProfileSource = await readFile(new URL('../src/AdminProfile.jsx', imp
 const loginSource = appSource.slice(
   appSource.indexOf('function LoginPage('),
   appSource.indexOf('function RegisterPage('),
+);
+const oauthButtonsSource = appSource.slice(
+  appSource.indexOf('function OAuthButtons('),
+  appSource.indexOf('function oauthNoticeFromPath('),
 );
 const registerSource = appSource.slice(
   appSource.indexOf('function RegisterPage('),
@@ -58,8 +63,8 @@ test('administrator login rejects a mismatched, missing, or non-admin authentica
   }
 });
 
-test('platform sign-in accepts only customer, organizer, and vendor accounts', async () => {
-  for (const role of ['organizer', 'vendor', 'customer']) {
+test('public sign-in accepts all supported account roles', async () => {
+  for (const role of ['admin', 'organizer', 'vendor', 'customer']) {
     const calls = [];
     const user = { id: 12, email: 'user@example.test', role };
     const result = await authenticatePlatformUser(async (...args) => {
@@ -73,23 +78,28 @@ test('platform sign-in accepts only customer, organizer, and vendor accounts', a
     assert.deepEqual(JSON.parse(calls[0][1].body), {
       email: 'user@example.test',
       password: 'synthetic-password',
+      rememberMe: false,
     });
   }
 });
 
-test('platform sign-in revokes a unified login session when the account is an administrator', async () => {
-  const paths = [];
-  await assert.rejects(
-    authenticatePlatformUser(async (path) => {
-      paths.push(path);
-      return path === '/platform/login'
-        ? { user: { id: 12, email: 'admin@example.test', role: 'admin' } }
-        : { user: null };
-    }, 'admin@example.test', 'synthetic-password'),
-    (error) => error.code === 'ADMIN_LOGIN_REQUIRED'
-      && error.message === 'Administrator accounts must sign in at /admin/login.',
-  );
-  assert.deepEqual(paths, ['/platform/login', '/auth/logout']);
+test('administrator and platform login send the selected remember-me preference', async () => {
+  const calls = [];
+  const adminUser = { id: 12, email: 'admin@example.test', role: 'admin' };
+  await authenticateAdministrator(async (...args) => {
+    calls.push(args);
+    return args[0] === '/auth/login'
+      ? { user: adminUser }
+      : { user: { ...adminUser, status: 'active', roles: ['Admin'] } };
+  }, adminUser.email, 'synthetic-password', true);
+  assert.equal(JSON.parse(calls[0][1].body).rememberMe, true);
+
+  let platformBody;
+  await authenticatePlatformUser(async (_path, options) => {
+    platformBody = JSON.parse(options.body);
+    return { user: { id: 14, email: 'user@example.test', role: 'customer' } };
+  }, 'user@example.test', 'synthetic-password', true);
+  assert.equal(platformBody.rememberMe, true);
 });
 
 test('login rejects unsupported or missing roles and preserves backend errors', async () => {
@@ -120,6 +130,16 @@ test('administrator routes preserve the dedicated login and protect the dashboar
   assert.equal(getAdministratorRouteRedirect('/login', null), null);
 });
 
+test('expired administrator sessions route to the localized admin sign-in notice', () => {
+  assert.equal(getAdministratorSessionExpiredRedirect('/admin/users'), '/admin/login?sessionExpired=1');
+  assert.equal(getAdministratorSessionExpiredRedirect('/admin/login'), '/admin/login?sessionExpired=1');
+  assert.equal(getAdministratorSessionExpiredRedirect('/customer/dashboard'), null);
+  assert.match(loginSource, /queryParams\.get\('sessionExpired'\)/);
+  assert.match(appSource, /getAdministratorSessionExpiredRedirect\(window\.location\.pathname\)/);
+  assert.equal(translate('runtimeSessionExpired', 'en'), 'Your session has expired. Please sign in again.');
+  assert.equal(translate('runtimeSessionExpired', 'am'), 'የግባት ጊዜዎ አልቋል። እባክዎ እንደገና ይግቡ።');
+});
+
 test('unified login includes localization without quick logins or developer credit', () => {
   assert.match(loginSource, /type=\{showPassword \? 'text' : 'password'\}/);
   assert.match(loginSource, /aria-label=\{t\(showPassword \? 'hidePassword' : 'showPassword'\)\}/);
@@ -133,6 +153,11 @@ test('unified login includes localization without quick logins or developer cred
   assert.match(loginSource, /noValidate/);
   assert.match(loginSource, /login-loading-spinner/);
   assert.match(loginSource, /t\('noAccount'\)/);
+  assert.match(loginSource, /intent=\{administrator \? 'admin-login' : 'login'\}/);
+  assert.match(loginSource, /window\.history\.replaceState/);
+  assert.match(loginSource, /oauth-callback-notice/);
+  assert.match(loginSource, /setAccountNotFound\(issue\.status === 404/);
+  assert.doesNotMatch(loginSource, /oauth(Facebook|Apple)|Continue with Facebook|Continue with Apple/);
   assert.equal(translate('loginHeading', 'en'), 'Welcome back');
   assert.equal(translate('loginSubtitle', 'en'), 'Sign in to manage your events, guests, and bookings.');
   assert.equal(translate('loginEmailPlaceholder', 'am'), 'የኢሜይል አድራሻ ያስገቡ');
@@ -144,8 +169,16 @@ test('unified login includes localization without quick logins or developer cred
   assert.equal(translate('hidePassword', 'en'), 'Hide password');
   assert.doesNotMatch(appSource, /function AdminLogin|function Login\(/);
   assert.match(appSource, /routePath === '\/admin\/login'/);
-  assert.match(appSource, /onLogin=\{loginAdministrator\} administrator/);
+  assert.match(appSource, /onLogin=\{loginAdministrator\} onOAuthLink=\{linkAdministratorOAuth\} administrator/);
+  assert.match(appSource, /onOAuthLink=\{linkPublicOAuth\}/);
   assert.match(appSource, /issue\?\.code === 'ADMIN_LOGIN_REQUIRED'[\s\S]*navigatePublic\('\/admin\/login'\)/);
+  assert.match(oauthButtonsSource, /allowedProviders = \['google', 'microsoft'\]/);
+  assert.match(oauthButtonsSource, /aria-busy=\{busy\}/);
+  assert.match(oauthButtonsSource, /aria-label=\{/);
+  assert.match(oauthButtonsSource, /setBusyProvider\(provider\)/);
+  assert.doesNotMatch(oauthButtonsSource, /\/platform\/oauth\/providers|facebook|apple|NotConfigured/);
+  assert.match(loginSource, /oauthNoticeFromPath\([\s\S]*callbackError\.reason[\s\S]*callbackError\.provider/);
+  assert.doesNotMatch(loginSource, /api\('\/platform\/oauth\/providers'/);
   assert.doesNotMatch(appSource, /function (?:Customer|Organizer|Vendor)Login/);
 });
 
@@ -155,10 +188,13 @@ test('registration uses the shared layout and validates required fields, email, 
   assert.match(registerSource, /registrationEmailRequired/);
   assert.match(registerSource, /validEmailRequired/);
   assert.match(registerSource, /minLength=\{8\}/);
+  assert.match(registerSource, /maxLength=\{72\}/);
   assert.match(registerSource, /registrationPasswordRequired/);
+  assert.match(registerSource, /registrationPasswordMinimum/);
   assert.match(registerSource, /registrationConfirmPasswordRequired/);
+  assert.doesNotMatch(registerSource, /name="role"|registrationRole|OAuthButtons|oauth-divider/);
   assert.match(registerSource, /passwordMismatch/);
-  assert.match(registerSource, /disabled=\{busy \|\| Boolean\(success\) \|\| !registrationEnabled\}/);
+  assert.match(registerSource, /disabled=\{busy \|\| !registrationEnabled\}/);
   assert.match(registerSource, /registration-login-link/);
 });
 

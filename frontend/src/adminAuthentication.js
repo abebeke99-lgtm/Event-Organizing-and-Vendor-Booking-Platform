@@ -1,9 +1,9 @@
-const PLATFORM_ROLES = new Set(['organizer', 'vendor', 'customer']);
+const PLATFORM_ROLES = new Set(['admin', 'organizer', 'vendor', 'customer']);
 
-export async function authenticateAdministrator(request, email, password) {
+export async function authenticateAdministrator(request, email, password, rememberMe = false) {
   const loginResponse = await request('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+    body: JSON.stringify({ email: email.trim().toLowerCase(), password, rememberMe }),
   });
   const loginUser = loginResponse?.user;
   if (!loginUser || loginUser.id == null || typeof loginUser.email !== 'string'
@@ -44,20 +44,13 @@ export async function authenticateAdministrator(request, email, password) {
   return sessionUser;
 }
 
-export async function authenticatePlatformUser(request, email, password) {
+export async function authenticatePlatformUser(request, email, password, rememberMe = false) {
   const response = await request('/platform/login', {
     method: 'POST',
-    body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+    body: JSON.stringify({ email: email.trim().toLowerCase(), password, rememberMe }),
   });
   const user = response?.user ?? response?.data?.user;
   if (!user || !PLATFORM_ROLES.has(String(user.role || '').toLowerCase())) {
-    if (user && String(user.role || '').toLowerCase() === 'admin') {
-      await request('/auth/logout', { method: 'POST' });
-      throw Object.assign(
-        new Error('Administrator accounts must sign in at /admin/login.'),
-        { code: 'ADMIN_LOGIN_REQUIRED' },
-      );
-    }
     throw new Error('The server did not confirm a valid account and role.');
   }
   return { ...user, role: String(user.role).toLowerCase() };
@@ -79,4 +72,10 @@ export function getAdministratorRouteRedirect(path, user) {
   if (route === '/admin/login') return role === 'admin' ? '/admin' : null;
   if (!route.startsWith('/admin') || role === 'admin') return null;
   return user ? null : '/admin/login';
+}
+
+export function getAdministratorSessionExpiredRedirect(path) {
+  return String(path || '').split('?')[0].startsWith('/admin')
+    ? '/admin/login?sessionExpired=1'
+    : null;
 }

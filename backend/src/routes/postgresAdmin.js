@@ -1,9 +1,13 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { normalizeDatabaseAdapter } from '../db.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { requirePermission } from '../middleware/rbac.js';
+import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
+import { getPasswordResetEmailConfig, sendPasswordSetupEmail } from '../lib/passwordResetEmail.js';
+import { hashToken, newSessionToken } from '../lib/security.js';
 import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
 import { createPostgresAdminProfileRouter } from './postgresAdminProfile.js';
 import {
@@ -16,6 +20,21 @@ import {
 
 const userIdSchema = z.coerce.number().int().positive();
 const emailSchema = z.string().trim().email().max(254).transform((email) => email.toLowerCase());
+const phoneSchema = z.string().trim().max(40).nullable().optional().refine((value) => {
+  if (!value) return true;
+  const digits = value.replace(/\D/g, '');
+  return /^\+?[\d().\s-]+$/.test(value) && digits.length >= 7 && digits.length <= 15;
+});
+const createUserLimiter = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: 'Too many account invitations. Please try again later.',
+});
+const resendInviteLimiter = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: 'Too many invitation requests. Please try again later.',
+});
 const listSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -53,7 +72,12 @@ async function writeAudit(executor, { actorId, action, entityType = 'user', enti
   );
 }
 
-export function createPostgresAdminRouter({ database }) {
+export function createPostgresAdminRouter({
+  database,
+  emailConfigured = () => Boolean(getPasswordResetEmailConfig()),
+  emailSender = sendPasswordSetupEmail,
+  frontendUrl = process.env.FRONTEND_URL || process.env.WEB_ORIGIN,
+}) {
   const normalizedDatabase = normalizeDatabaseAdapter(database);
   if (!normalizedDatabase || typeof normalizedDatabase.query !== 'function') {
     throw new TypeError('A PostgreSQL database adapter is required.');
@@ -520,21 +544,20 @@ export function createPostgresAdminRouter({ database }) {
     }
   });
 
-  router.post('/users', requirePermission('users.create'), async (req, res, next) => {
+  router.post('/users', requirePermission('users.create'), createUserLimiter, async (req, res, next) => {
     const parsed = z.object({
       full_name: z.string().trim().min(1).max(160),
       email: emailSchema,
-      phone: z.string().trim().max(40).nullable().optional(),
-      password: z.string().min(16).max(128).refine((password) => (
-        /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password)
-      )),
+      phone: phoneSchema,
       role_id: z.coerce.number().int().positive(),
-      status: z.enum(['active', 'suspended']).default('active'),
+      business_name: z.string().trim().min(1).max(160).optional(),
+      category_id: z.coerce.number().int().positive().optional(),
     }).strict().safeParse(req.body);
     if (!parsed.success) return sendValidationError(res, parsed.error);
 
     try {
-      const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+      const passwordHash = await bcrypt.hash(randomBytes(48).toString('base64url'), 12);
+      const invitationToken = newSessionToken();
       const created = await database.inTransaction(async (client) => {
         await client.query('SELECT pg_advisory_xact_lock(hashtext(LOWER($1)))', [parsed.data.email]);
         const roleResult = await client.query(
@@ -542,8 +565,22 @@ export function createPostgresAdminRouter({ database }) {
           [parsed.data.role_id],
         );
         const role = roleResult.rows[0];
-        if (!role || !['organizer', 'vendor'].includes(String(role.name).toLowerCase())) {
-          throw statusError('Administrator-created accounts must use the Organizer or Vendor role.', 400);
+        const roleName = String(role?.name || '').toLowerCase();
+        if (!role || !['customer', 'organizer', 'vendor'].includes(roleName)) {
+          throw statusError('Choose Customer, Event Organizer, or Vendor for this account.', 400);
+        }
+        if (roleName === 'vendor' && (!parsed.data.business_name || !parsed.data.category_id)) {
+          throw statusError('Vendor accounts require a business name and service category.', 400);
+        }
+        if (roleName !== 'vendor' && (parsed.data.business_name || parsed.data.category_id)) {
+          throw statusError('Business name and service category are only valid for Vendor accounts.', 400);
+        }
+        if (roleName === 'vendor') {
+          const category = await client.query(
+            'SELECT id FROM service_categories WHERE id = $1 AND is_active = TRUE',
+            [parsed.data.category_id],
+          );
+          if (!category.rows.length) throw statusError('Choose an active service category.', 400);
         }
         const existing = await client.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [parsed.data.email]);
         if (existing.rows.length) throw statusError('An account with this email already exists.', 409);
@@ -553,31 +590,102 @@ export function createPostgresAdminRouter({ database }) {
         }
         const userResult = await client.query(
           `INSERT INTO users (full_name, email, phone, password_hash, status)
-           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [parsed.data.full_name, parsed.data.email, parsed.data.phone || null, passwordHash, parsed.data.status],
+           VALUES ($1, $2, $3, $4, 'pending') RETURNING id`,
+          [parsed.data.full_name, parsed.data.email, parsed.data.phone || null, passwordHash],
         );
         const userId = userResult.rows[0].id;
         await client.query('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [userId, role.id]);
-        if (String(role.name).toLowerCase() === 'vendor') {
+        if (roleName === 'vendor') {
           await client.query(
-            `INSERT INTO vendor_profiles (user_id, business_name, verification_status)
-             VALUES ($1, $2, 'pending')`,
-            [userId, parsed.data.full_name],
+            `INSERT INTO vendor_profiles (user_id, business_name, category_id, verification_status)
+             VALUES ($1, $2, $3, 'pending')`,
+            [userId, parsed.data.business_name, parsed.data.category_id],
           );
         }
+        await client.query(
+          `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, used_at)
+           VALUES ($1, $2, $3, NULL)
+           ON CONFLICT (user_id) DO UPDATE
+           SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at, used_at = NULL`,
+          [userId, hashToken(invitationToken), new Date(Date.now() + 24 * 60 * 60 * 1000)],
+        );
         await writeAudit(client, {
           actorId: req.admin.id,
-          action: 'user.created',
+          action: 'user.invitation_created',
           entityId: userId,
-          details: { role: role.name, status: parsed.data.status },
+          details: { role: role.name },
           ip: req.ip,
         });
-        return userId;
+        return { id: userId, role: role.name };
       });
-      return res.status(201).json({ data: { id: created } });
+      try {
+        if (!emailConfigured()) throw new Error('Email is not configured.');
+        const configuredFrontend = String(frontendUrl || '').split(',')[0].trim();
+        const setupUrl = new URL('/set-password', configuredFrontend);
+        setupUrl.searchParams.set('token', invitationToken);
+        await emailSender({
+          email: parsed.data.email,
+          name: parsed.data.full_name,
+          setupUrl: setupUrl.href,
+        });
+      } catch {
+        return res.status(503).json({
+          error: 'The account was created, but the invitation email could not be sent. Check email settings and resend the invitation.',
+          data: { id: created.id },
+        });
+      }
+      return res.status(201).json({ data: { id: created.id }, invitationSent: true });
     } catch (error) {
       if (error.status) return res.status(error.status).json({ error: error.message });
       if (error.code === '23505') return res.status(409).json({ error: 'A record with the same unique value already exists.' });
+      return next(error);
+    }
+  });
+
+  router.post('/users/:id/resend-invite', requirePermission('users.edit'), resendInviteLimiter, async (req, res, next) => {
+    const id = userIdSchema.safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'User ID is invalid.' });
+    try {
+      const invitationToken = newSessionToken();
+      const invite = await database.inTransaction(async (client) => {
+        const result = await client.query(
+          `SELECT u.id, u.full_name, u.email, u.status
+           FROM users u WHERE u.id = $1 FOR UPDATE`,
+          [id.data],
+        );
+        const user = result.rows[0];
+        if (!user) throw statusError('User not found.', 404);
+        if (user.status !== 'pending') throw statusError('Only invited accounts can receive a new invitation.', 409);
+        await client.query(
+          `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, used_at)
+           VALUES ($1, $2, $3, NULL)
+           ON CONFLICT (user_id) DO UPDATE
+           SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at, used_at = NULL`,
+          [user.id, hashToken(invitationToken), new Date(Date.now() + 24 * 60 * 60 * 1000)],
+        );
+        await writeAudit(client, {
+          actorId: req.admin.id,
+          action: 'user.invitation_resent',
+          entityId: user.id,
+          details: {},
+          ip: req.ip,
+        });
+        return user;
+      });
+      try {
+        if (!emailConfigured()) throw new Error('Email is not configured.');
+        const configuredFrontend = String(frontendUrl || '').split(',')[0].trim();
+        const setupUrl = new URL('/set-password', configuredFrontend);
+        setupUrl.searchParams.set('token', invitationToken);
+        await emailSender({ email: invite.email, name: invite.full_name, setupUrl: setupUrl.href });
+      } catch {
+        return res.status(503).json({
+          error: 'The invitation email could not be sent. Check email settings and try again.',
+        });
+      }
+      return res.json({ message: 'Invitation email sent.' });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
       return next(error);
     }
   });
@@ -694,7 +802,7 @@ export function createPostgresAdminRouter({ database }) {
   router.patch('/users/:id/status', requirePermission('users.deactivate'), async (req, res, next) => {
     const id = userIdSchema.safeParse(req.params.id);
     const parsed = z.object({
-      status: z.enum(['active', 'suspended', 'pending']),
+      status: z.enum(['active', 'suspended']),
       reason: z.string().trim().min(3).max(500),
     }).strict().safeParse(req.body);
     if (!id.success || !parsed.success || (id.data === Number(req.admin.id) && parsed.data.status !== 'active')) {
@@ -702,6 +810,7 @@ export function createPostgresAdminRouter({ database }) {
     }
     try {
       await database.inTransaction(async (client) => {
+        await client.query('SELECT pg_advisory_xact_lock($1)', [7342720]);
         const targetResult = await client.query('SELECT id, status FROM users WHERE id = $1 FOR UPDATE', [id.data]);
         const target = targetResult.rows[0];
         if (!target) throw statusError('User not found.', 404);

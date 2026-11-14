@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { generateKeyPairSync } from 'node:crypto';
 import { createOAuthProviderService } from '../src/lib/oauthProviders.js';
 
 test('only providers with complete callback and credential configuration are advertised', () => {
@@ -9,43 +8,19 @@ test('only providers with complete callback and credential configuration are adv
       NODE_ENV: 'production',
       GOOGLE_CLIENT_ID: 'google-client',
       GOOGLE_CLIENT_SECRET: 'google-secret',
-      GOOGLE_CALLBACK_URL: 'http://api.example.test/api/platform/oauth/google/callback',
-      FACEBOOK_APP_ID: 'facebook-app',
-      FACEBOOK_APP_SECRET: 'facebook-secret',
-      FACEBOOK_CALLBACK_URL: 'https://api.example.test/api/platform/oauth/facebook/callback',
-      FACEBOOK_GRAPH_API_VERSION: 'v22.0',
+      GOOGLE_CALLBACK_URL: 'https://api.example.test/api/platform/oauth/google/callback',
+      MICROSOFT_CLIENT_ID: 'microsoft-client',
+      MICROSOFT_CLIENT_SECRET: 'microsoft-secret',
+      MICROSOFT_TENANT_ID: '11111111-2222-4333-8444-555555555555',
+      MICROSOFT_CALLBACK_URL: 'https://api.example.test/api/platform/oauth/microsoft/callback',
     },
   });
 
-  assert.deepEqual(service.getEnabledProviders(), ['facebook']);
+  assert.deepEqual(service.getEnabledProviders(), ['google', 'microsoft']);
   assert.deepEqual(service.getProviderStatuses(), [
-    { id: 'google', configured: false, status: 'not_configured' },
-    { id: 'facebook', configured: true, status: 'configured' },
-    { id: 'apple', configured: false, status: 'not_configured' },
+    { id: 'google', configured: true, status: 'configured' },
+    { id: 'microsoft', configured: true, status: 'configured' },
   ]);
-});
-
-test('Apple is advertised only when a valid P-256 private key and matching callback are configured', () => {
-  const { privateKey } = generateKeyPairSync('ec', {
-    namedCurve: 'prime256v1',
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-  });
-  const environment = {
-    NODE_ENV: 'production',
-    APPLE_SERVICE_ID: 'eventhub-service',
-    APPLE_TEAM_ID: 'team-id',
-    APPLE_KEY_ID: 'key-id',
-    APPLE_PRIVATE_KEY: privateKey,
-    APPLE_CALLBACK_URL: 'https://api.example.test/api/platform/oauth/apple/callback',
-  };
-  const service = createOAuthProviderService({ environment });
-  assert.deepEqual(service.getEnabledProviders(), ['apple']);
-  assert.equal(service.getProviderStatuses()[2].status, 'configured');
-  assert.equal(JSON.stringify(service.getProviderStatuses()).includes(privateKey), false);
-  assert.deepEqual(createOAuthProviderService({
-    environment: { ...environment, APPLE_PRIVATE_KEY: 'not-a-private-key' },
-  }).getEnabledProviders(), []);
 });
 
 test('Google authorization requires state, nonce, and an S256 PKCE challenge', () => {
@@ -59,29 +34,6 @@ test('Google authorization requires state, nonce, and an S256 PKCE challenge', (
     },
   });
 
-  test('Apple authorization uses a form-post callback mode supported by its callback route', () => {
-    const service = createOAuthProviderService({
-      environment: {
-        NODE_ENV: 'development',
-        APPLE_SERVICE_ID: 'eventhub-service',
-        APPLE_TEAM_ID: 'team-id',
-        APPLE_KEY_ID: 'key-id',
-        APPLE_PRIVATE_KEY: generateKeyPairSync('ec', {
-          namedCurve: 'prime256v1',
-          privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-          publicKeyEncoding: { type: 'spki', format: 'pem' },
-        }).privateKey,
-        APPLE_CALLBACK_URL: 'http://localhost:4000/api/platform/oauth/apple/callback',
-      },
-    });
-    const authorizationUrl = new URL(service.createAuthorizationUrl('apple', {
-      state: 'one-time-state',
-      nonce: 'one-time-nonce',
-    }));
-    assert.equal(authorizationUrl.searchParams.get('response_mode'), 'form_post');
-    assert.equal(authorizationUrl.searchParams.get('state'), 'one-time-state');
-    assert.equal(authorizationUrl.searchParams.get('nonce'), 'one-time-nonce');
-  });
   const authorizationUrl = new URL(service.createAuthorizationUrl('google', {
     state: 'one-time-state',
     nonce: 'one-time-nonce',
@@ -160,99 +112,107 @@ test('Google identity with a mismatched nonce is rejected', async () => {
   );
 });
 
-test('Facebook exchanges and validates the token server-side before reading the matching profile', async () => {
-  const requests = [];
+test('Microsoft authorization uses tenant-bound OIDC state, nonce, and S256 PKCE', () => {
+  const tenantId = '11111111-2222-4333-8444-555555555555';
   const service = createOAuthProviderService({
     environment: {
       NODE_ENV: 'development',
-      FACEBOOK_APP_ID: '123456789',
-      FACEBOOK_APP_SECRET: 'facebook-secret',
-      FACEBOOK_CALLBACK_URL: 'http://localhost:4000/api/platform/oauth/facebook/callback',
-      FACEBOOK_GRAPH_API_VERSION: 'v22.0',
-    },
-    fetchImpl: async (endpoint, options = {}) => {
-      const url = new URL(endpoint);
-      requests.push({ url, options });
-      if (url.pathname.endsWith('/oauth/access_token')) {
-        return { ok: true, json: async () => ({ access_token: 'provider-access-token' }) };
-      }
-      if (url.pathname.endsWith('/debug_token')) {
-        return {
-          ok: true,
-          json: async () => ({
-            data: { is_valid: true, app_id: '123456789', user_id: 'provider-user-1', expires_at: 0 },
-          }),
-        };
-      }
-      return {
-        ok: true,
-        json: async () => ({
-          id: 'provider-user-1',
-          email: 'Planner@Example.test',
-          name: 'Event Planner',
-        }),
-      };
+      MICROSOFT_CLIENT_ID: 'microsoft-client',
+      MICROSOFT_CLIENT_SECRET: 'microsoft-secret',
+      MICROSOFT_TENANT_ID: tenantId,
+      MICROSOFT_CALLBACK_URL: 'http://localhost:4000/api/platform/oauth/microsoft/callback',
     },
   });
-
-  const result = await service.exchangeAuthorizationCode('facebook', { code: 'authorization-code' });
-  assert.equal(result.subject, 'provider-user-1');
-  assert.equal(result.email, 'planner@example.test');
-  assert.equal(result.emailVerified, true);
-  assert.equal(requests.length, 3);
-  assert.equal(requests[1].url.searchParams.get('input_token'), 'provider-access-token');
-  assert.equal(requests[2].options.headers.Authorization, 'Bearer provider-access-token');
+  const authorizationUrl = new URL(service.createAuthorizationUrl('microsoft', {
+    state: 'one-time-state',
+    nonce: 'one-time-nonce',
+    codeChallenge: 's256-challenge',
+  }));
+  assert.equal(authorizationUrl.origin, `https://login.microsoftonline.com`);
+  assert.equal(authorizationUrl.pathname, `/${tenantId}/oauth2/v2.0/authorize`);
+  assert.equal(authorizationUrl.searchParams.get('state'), 'one-time-state');
+  assert.equal(authorizationUrl.searchParams.get('nonce'), 'one-time-nonce');
+  assert.equal(authorizationUrl.searchParams.get('code_challenge'), 's256-challenge');
+  assert.equal(authorizationUrl.searchParams.get('code_challenge_method'), 'S256');
 });
 
-test('Apple verifies its identity token audience, issuer, algorithm, and nonce server-side', async () => {
+test('Microsoft token validation enforces tenant, audience, issuer, nonce, and verified email', async () => {
+  const tenantId = '11111111-2222-4333-8444-555555555555';
   let verifierOptions;
+  let tokenRequest;
   const service = createOAuthProviderService({
     environment: {
       NODE_ENV: 'development',
-      APPLE_SERVICE_ID: 'eventhub-service',
-      APPLE_TEAM_ID: 'team-id',
-      APPLE_KEY_ID: 'key-id',
-      APPLE_PRIVATE_KEY: generateKeyPairSync('ec', {
-        namedCurve: 'prime256v1',
-        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-        publicKeyEncoding: { type: 'spki', format: 'pem' },
-      }).privateKey,
-      APPLE_CALLBACK_URL: 'http://localhost:4000/api/platform/oauth/apple/callback',
+      MICROSOFT_CLIENT_ID: 'microsoft-client',
+      MICROSOFT_CLIENT_SECRET: 'microsoft-secret',
+      MICROSOFT_TENANT_ID: tenantId,
+      MICROSOFT_CALLBACK_URL: 'http://localhost:4000/api/platform/oauth/microsoft/callback',
     },
-    importPrivateKey: async () => ({}),
-    signJwt: class {
-      setProtectedHeader() { return this; }
-      setIssuer() { return this; }
-      setSubject() { return this; }
-      setAudience() { return this; }
-      setIssuedAt() { return this; }
-      setExpirationTime() { return this; }
-      async sign() { return 'server-created-client-secret'; }
+    fetchImpl: async (url, options) => {
+      tokenRequest = { url: new URL(url), options };
+      return { ok: true, json: async () => ({ id_token: 'microsoft-id-token' }) };
     },
-    fetchImpl: async () => ({
-      ok: true,
-      json: async () => ({ id_token: 'signed-apple-identity-token' }),
-    }),
     verifyJwt: async (_token, _keys, options) => {
       verifierOptions = options;
       return {
         payload: {
-          sub: 'apple-user-1',
+          iss: `https://login.microsoftonline.com/${tenantId}/v2.0`,
+          aud: 'microsoft-client',
+          tid: tenantId,
+          sub: 'microsoft-user-1',
           nonce: 'expected-nonce',
-          email: 'Planner@Example.test',
-          email_verified: 'true',
+          email: 'Admin@Example.test',
+          email_verified: true,
+          name: 'Event Administrator',
         },
       };
     },
   });
 
-  const result = await service.exchangeAuthorizationCode('apple', {
+  const identity = await service.exchangeAuthorizationCode('microsoft', {
     code: 'authorization-code',
+    codeVerifier: 'code-verifier',
     nonce: 'expected-nonce',
   });
-  assert.equal(verifierOptions.audience, 'eventhub-service');
-  assert.equal(verifierOptions.issuer, 'https://appleid.apple.com');
-  assert.deepEqual(verifierOptions.algorithms, ['RS256']);
-  assert.equal(result.subject, 'apple-user-1');
-  assert.equal(result.emailVerified, true);
+  assert.equal(tokenRequest.url.pathname, `/${tenantId}/oauth2/v2.0/token`);
+  assert.equal(tokenRequest.options.body.get('code_verifier'), 'code-verifier');
+  assert.equal(verifierOptions.issuer, `https://login.microsoftonline.com/${tenantId}/v2.0`);
+  assert.equal(verifierOptions.audience, 'microsoft-client');
+  assert.deepEqual(identity, {
+    provider: 'microsoft',
+    subject: 'microsoft-user-1',
+    email: 'admin@example.test',
+    emailVerified: true,
+    name: 'Event Administrator',
+  });
+});
+
+test('Microsoft token validation does not trust an unverified email claim', async () => {
+  const tenantId = '11111111-2222-4333-8444-555555555555';
+  const service = createOAuthProviderService({
+    environment: {
+      NODE_ENV: 'development',
+      MICROSOFT_CLIENT_ID: 'microsoft-client',
+      MICROSOFT_CLIENT_SECRET: 'microsoft-secret',
+      MICROSOFT_TENANT_ID: tenantId,
+      MICROSOFT_CALLBACK_URL: 'http://localhost:4000/api/platform/oauth/microsoft/callback',
+    },
+    fetchImpl: async () => ({ ok: true, json: async () => ({ id_token: 'microsoft-id-token' }) }),
+    verifyJwt: async () => ({
+      payload: {
+        tid: tenantId,
+        sub: 'microsoft-user-1',
+        nonce: 'expected-nonce',
+        email: 'unverified@example.test',
+        email_verified: false,
+      },
+    }),
+  });
+  const identity = await service.exchangeAuthorizationCode('microsoft', {
+    code: 'authorization-code',
+    codeVerifier: 'code-verifier',
+    nonce: 'expected-nonce',
+  });
+  assert.equal(identity.email, null);
+  assert.equal(identity.emailVerified, false);
 });

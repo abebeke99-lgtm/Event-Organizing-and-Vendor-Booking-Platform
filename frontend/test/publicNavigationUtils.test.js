@@ -20,7 +20,7 @@ test('builds public navigation with database-backed categories and supported fea
     [{ id: 30, name: 'Catering Services', slug: 'catering-services', serviceCount: 4, serviceMenuOrder: 1 }],
   );
   assert.deepEqual(menu.map((item) => item.label), [
-    'Home', 'Events', 'Find Vendors', 'Services', 'Categories', 'Discover', 'About Us', 'Contact Us',
+    'Home', 'Find Vendors', 'Events', 'Services', 'Categories', 'Discover', 'About Us', 'Contact Us',
   ]);
   const eventItems = menu.find((item) => item.key === 'events').children;
   const vendorItems = menu.find((item) => item.key === 'vendors').children;
@@ -85,7 +85,7 @@ test('builds public navigation with database-backed categories and supported fea
     ['FAQs', '/about/faqs'],
   ]);
   assert.deepEqual(menu.map((item) => item.path), [
-    '/', '/events', '/vendors', '/services', '/categories', '/calendar', '/about', '/contact',
+    '/', '/vendors', '/events', '/services', '/categories', '/calendar', '/about', '/contact',
   ]);
   assert.equal(menu.find((item) => item.key === 'contact').children, undefined);
   assert.equal(menu.find((item) => item.key === 'home').children, undefined);
@@ -111,7 +111,7 @@ test('navigation labels use bilingual keys and category slugs with original-name
   const label = (item, language) => translateNavigationLabel(item, language);
   assert.equal(label(menu[0], 'en'), 'Home');
   assert.equal(label(menu[0], 'am'), 'መነሻ');
-  assert.equal(label(menu[1].children.find((item) => item.key === 'upcoming-events'), 'am'), 'መጪ ዝግጅቶች');
+  assert.equal(label(menu.find((item) => item.key === 'events').children.find((item) => item.key === 'upcoming-events'), 'am'), 'መጪ ዝግጅቶች');
   assert.equal(label(menu.find((item) => item.key === 'discover').children.find((item) => item.key === 'discover-event-calendar'), 'am'), 'የዝግጅት ቀን መቁጠሪያ');
   assert.equal(label(menu.find((item) => item.key === 'categories').children[0], 'am'), 'ሠርግ');
   assert.equal(label(menu.find((item) => item.key === 'vendors').children.find((item) => item.key === 'vendor-categories').children[0], 'am'), 'ምግብ አቅርቦት');
@@ -137,7 +137,7 @@ test('every fixed public navigation destination has a registered bilingual key',
 test('keeps exactly eight top-level navigation items for guests and every signed-in role', () => {
   const guestMenu = buildPublicNavigationMenu();
   const expectedItems = [
-    'Home', 'Events', 'Find Vendors', 'Services', 'Categories', 'Discover', 'About Us', 'Contact Us',
+    'Home', 'Find Vendors', 'Events', 'Services', 'Categories', 'Discover', 'About Us', 'Contact Us',
   ];
   assert.deepEqual(guestMenu.map((item) => item.label), expectedItems);
   for (const role of ['customer', 'organizer', 'vendor', 'admin']) {

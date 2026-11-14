@@ -18,16 +18,18 @@ test('footer only enables configured profile URLs', () => {
   });
 
   assert.deepEqual(links, [
-    { id: 'telegram', labelKey: 'telegram', url: 'https://t.me/eventhub_official' },
-    { id: 'youtube', labelKey: 'youtube', url: null },
     { id: 'facebook', labelKey: 'facebook', url: 'https://facebook.com/eventhub' },
+    { id: 'x', labelKey: 'xSocial', url: null },
+    { id: 'youtube', labelKey: 'youtube', url: null },
     { id: 'linkedin', labelKey: 'linkedin', url: 'https://linkedin.com/company/eventhub' },
+    { id: 'instagram', labelKey: 'instagram', url: null },
+    { id: 'telegram', labelKey: 'telegram', url: 'https://t.me/eventhub_official' },
   ]);
 });
 
 test('footer renders unconfigured social profiles as accessible non-links', () => {
   const links = getFooterSocialLinks({});
-  assert.deepEqual(links.map(({ id }) => id), ['telegram', 'youtube', 'facebook', 'linkedin']);
+  assert.deepEqual(links.map(({ id }) => id), ['facebook', 'x', 'youtube', 'linkedin', 'instagram', 'telegram']);
   for (const { id, url } of links) {
     assert.equal(url, null);
     const markup = renderToStaticMarkup(React.createElement(SocialMediaLink, {
@@ -49,6 +51,8 @@ test('platform root URLs are treated as unconfigured rather than official profil
     VITE_YOUTUBE_URL: 'https://youtube.com/',
     VITE_FACEBOOK_URL: 'https://facebook.com/',
     VITE_LINKEDIN_URL: 'https://linkedin.com/',
+    VITE_X_URL: 'https://x.com/',
+    VITE_INSTAGRAM_URL: 'https://instagram.com/',
   });
   assert.ok(links.every(({ url }) => url === null));
 });
@@ -140,33 +144,63 @@ test('social media links open safely in a new tab and expose an accessible label
   assert.match(markup, /<svg[^>]*aria-hidden="true"/);
 });
 
-test('contact top bar always renders the configured email and only includes an optional phone', () => {
+test('contact top bar uses the central site contact settings', () => {
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, {
-    environment: {
-      VITE_CONTACT_PHONE: '+251986481821',
+    contactInfo: {
+      email: 'support@eventhub.test',
+      phone: '+251 11 111 1111',
     },
   }));
 
   assert.match(markup, /href="mailto:abebeke99@gmail\.com"/);
   assert.match(markup, /aria-label="Email: abebeke99@gmail\.com"/);
+  assert.match(markup, />abebeke99@gmail\.com<\/span>/);
   assert.match(markup, /href="tel:\+251986481821"/);
-  assert.match(markup, /aria-label="Phone: \+251986481821"/);
+  assert.match(markup, /aria-label="Phone: 0986481821"/);
+  assert.match(markup, />0986481821<\/span>/);
   assert.doesNotMatch(markup, /VITE_CONTACT_ADDRESS|Addis Ababa/);
 });
 
-test('contact top bar omits an empty optional phone and has no social list when URLs are empty', () => {
+test('contact top bar keeps central contacts and omits unconfigured social links', () => {
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, {
     environment: {
-      VITE_CONTACT_PHONE: '',
       VITE_TELEGRAM_URL: '',
       VITE_YOUTUBE_URL: '',
       VITE_FACEBOOK_URL: '',
       VITE_LINKEDIN_URL: '',
+      VITE_X_URL: '',
+      VITE_INSTAGRAM_URL: '',
     },
+    contactInfo: { email: '', phone: '', socials: [] },
   }));
 
-  assert.match(markup, /href="mailto:abebeke99@gmail\.com"/);
-  assert.doesNotMatch(markup, /href="tel:|contact-top-bar-social|https:\/\/|unconfigured/);
+  assert.match(markup, /mailto:abebeke99@gmail\.com/);
+  assert.match(markup, /href="tel:\+251986481821"/);
+  assert.doesNotMatch(markup, /contact-top-bar-social|https:\/\/|unconfigured/);
+});
+
+test('top bar prefers configured site social profiles, including X and Instagram', () => {
+  const settings = [
+    { label: 'Instagram', url: 'https://www.instagram.com/eventhub' },
+    { label: 'X', url: 'https://x.com/eventhub' },
+    { label: 'Facebook', url: 'https://facebook.com/eventhub' },
+    { label: 'Unrecognized', url: 'https://example.com/eventhub' },
+    { label: 'YouTube', url: 'http://youtube.com/@eventhub' },
+  ];
+  assert.deepEqual(getTopBarSocialLinks({}, settings), [
+    { id: 'facebook', labelKey: 'facebook', url: 'https://facebook.com/eventhub' },
+    { id: 'x', labelKey: 'xSocial', url: 'https://x.com/eventhub' },
+    { id: 'instagram', labelKey: 'instagram', url: 'https://www.instagram.com/eventhub' },
+  ]);
+  const markup = renderToStaticMarkup(React.createElement(ContactTopBar, {
+    environment: {},
+    contactInfo: { socials: settings },
+  }));
+  assert.match(markup, /href="https:\/\/x\.com\/eventhub"/);
+  assert.match(markup, /href="https:\/\/www\.instagram\.com\/eventhub"/);
+  assert.doesNotMatch(markup, /example\.com|youtube\.com/);
+  assert.equal((markup.match(/target="_blank"/g) || []).length, 3);
+  assert.equal((markup.match(/rel="noopener noreferrer"/g) || []).length, 3);
 });
 
 test('top bar renders only valid configured HTTPS profile URLs with safe, translated links', () => {
@@ -179,12 +213,12 @@ test('top bar renders only valid configured HTTPS profile URLs with safe, transl
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, { environment }));
 
   assert.deepEqual(getTopBarSocialLinks(environment), [
-    { id: 'telegram', labelKey: 'telegram', url: 'https://t.me/eventhub' },
     { id: 'facebook', labelKey: 'facebook', url: 'https://facebook.com/eventhub' },
+    { id: 'telegram', labelKey: 'telegram', url: 'https://t.me/eventhub' },
   ]);
   assert.deepEqual(
     Array.from(markup.matchAll(/href="(https:\/\/[^"]+)"/g), ([, href]) => href),
-    ['https://t.me/eventhub', 'https://facebook.com/eventhub'],
+    ['https://facebook.com/eventhub', 'https://t.me/eventhub'],
   );
   assert.equal((markup.match(/target="_blank"/g) || []).length, 2);
   assert.equal((markup.match(/rel="noopener noreferrer"/g) || []).length, 2);
@@ -201,13 +235,15 @@ test('top bar supports the supplied internationalized profile URLs', () => {
     VITE_YOUTUBE_URL: 'https://youtube.com/@የአንተ_ቻናል',
     VITE_FACEBOOK_URL: 'https://facebook.com/የአንተ_ገጽ',
     VITE_LINKEDIN_URL: 'https://linkedin.com/company/የአንተ_ገጽ',
-    VITE_CONTACT_PHONE: '+251986481821',
+    VITE_X_URL: 'https://x.com/የአንተ_ገጽ',
+    VITE_INSTAGRAM_URL: 'https://instagram.com/የአንተ_ገጽ',
   };
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, { environment }));
 
-  assert.equal(getTopBarSocialLinks(environment).length, 4);
+  assert.equal(getTopBarSocialLinks(environment).length, 6);
   assert.match(markup, /href="tel:\+251986481821"/);
-  assert.equal((markup.match(/target="_blank"/g) || []).length, 4);
+  assert.match(markup, /mailto:abebeke99@gmail\.com/);
+  assert.equal((markup.match(/target="_blank"/g) || []).length, 6);
 });
 
 test('top bar contact and social labels are translated in Amharic', () => {
@@ -218,17 +254,21 @@ test('top bar contact and social labels are translated in Amharic', () => {
   assert.equal(translate('youtube', 'am'), 'ዩቲዩብ');
   assert.equal(translate('facebook', 'am'), 'ፌስቡክ');
   assert.equal(translate('linkedin', 'am'), 'ሊንክድኢን');
+  assert.equal(translate('xSocial', 'am'), 'X');
+  assert.equal(translate('instagram', 'am'), 'ኢንስታግራም');
 });
 
-test('top bar social icon order follows Telegram, YouTube, Facebook, LinkedIn', () => {
+test('top bar social icon order follows the utility-bar configuration', () => {
   const links = getTopBarSocialLinks({
     VITE_TELEGRAM_URL: 'https://t.me/eventhub',
     VITE_YOUTUBE_URL: 'https://youtube.com/@eventhub',
     VITE_FACEBOOK_URL: 'https://facebook.com/eventhub',
     VITE_LINKEDIN_URL: 'https://linkedin.com/company/eventhub',
+    VITE_X_URL: 'https://x.com/eventhub',
+    VITE_INSTAGRAM_URL: 'https://instagram.com/eventhub',
   });
 
-  assert.deepEqual(links.map(({ id }) => id), ['telegram', 'youtube', 'facebook', 'linkedin']);
+  assert.deepEqual(links.map(({ id }) => id), ['facebook', 'x', 'youtube', 'linkedin', 'instagram', 'telegram']);
 });
 
 test('top bar ignores invalid profile URLs without changing footer output', () => {
@@ -237,6 +277,8 @@ test('top bar ignores invalid profile URLs without changing footer output', () =
     VITE_YOUTUBE_URL: 'not a URL',
     VITE_FACEBOOK_URL: 'https://facebook.com/',
     VITE_LINKEDIN_URL: 'javascript:alert(1)',
+    VITE_X_URL: 'https://x.com/',
+    VITE_INSTAGRAM_URL: 'https://instagram.com/',
   }), []);
 
   const footerWithProfiles = renderToStaticMarkup(React.createElement(AppFooter, {
@@ -254,13 +296,12 @@ test('top bar ignores invalid profile URLs without changing footer output', () =
   assert.equal(footerWithProfiles, footerWithoutProfiles);
 });
 
-test('example, development, and production env files expose configured public contact details', async () => {
+test('example, development, and production env files expose configured social profile URLs', async () => {
   const expectedValues = {
     VITE_TELEGRAM_URL: 'https://t.me/የአንተ_ቻናል',
     VITE_YOUTUBE_URL: 'https://youtube.com/@የአንተ_ቻናል',
     VITE_FACEBOOK_URL: 'https://facebook.com/የአንተ_ገጽ',
     VITE_LINKEDIN_URL: 'https://linkedin.com/company/የአንተ_ገጽ',
-    VITE_CONTACT_PHONE: '+251986481821',
   };
 
   for (const filename of ['../.env.example', '../.env.development', '../.env.production']) {
@@ -269,5 +310,6 @@ test('example, development, and production env files expose configured public co
     for (const [key, value] of Object.entries(expectedValues)) {
       assert.ok(lines.includes(`${key}=${value}`), `${filename} should configure ${key}`);
     }
+    assert.ok(!lines.some((line) => line.startsWith('VITE_CONTACT_PHONE=')), `${filename} should use central contact settings`);
   }
 });

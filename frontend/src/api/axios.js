@@ -4,14 +4,19 @@ import { getLanguage } from '../language.js';
 import { resolveApiBaseUrl } from './apiUrl.js';
 
 const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : import.meta.env;
+const browserHostname = typeof window === 'undefined' ? undefined : window.location.hostname;
 
 const apiClient = axios.create({
-  baseURL: resolveApiBaseUrl(viteEnvironment.VITE_API_URL, Boolean(viteEnvironment.PROD)),
+  baseURL: resolveApiBaseUrl(
+    viteEnvironment.VITE_API_URL,
+    Boolean(viteEnvironment.PROD),
+    browserHostname,
+  ),
   withCredentials: true,
   timeout: 15_000,
 });
 
-let invalidationQueued = false;
+let sessionInvalidationDispatched = false;
 
 apiClient.interceptors.request.use((config) => {
   config.withCredentials = true;
@@ -19,7 +24,13 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-apiClient.interceptors.response.use(undefined, async (error) => {
+apiClient.interceptors.response.use((response) => {
+  const requestPath = String(response.config?.url || '');
+  if (/\/(?:auth|platform)\/(?:login|me)(?:\?|$)/.test(requestPath)) {
+    sessionInvalidationDispatched = false;
+  }
+  return response;
+}, async (error) => {
   if (!axios.isAxiosError(error) || axios.isCancel(error)) throw error;
   if (!error.response) {
     const timedOut = error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT';
@@ -49,16 +60,13 @@ apiClient.interceptors.response.use(undefined, async (error) => {
   const isSessionProbe = /\/(?:auth|platform)\/me(?:\?|$)/.test(requestPath);
   const isPlatformSessionProbe = /\/platform\/me(?:\?|$)/.test(requestPath);
   const isLoginRequest = /\/(?:auth|platform)\/login(?:\?|$)/.test(requestPath);
-  const isPlatformRequest = /^\/(?:platform|vendor|customer|organizer|ai)(?:\/|$)/.test(requestPath);
+  const isAuthenticatedRequest = /^\/(?:admin|platform|vendor|customer|organizer|ai)(?:\/|$)/.test(requestPath);
 
-  if (status === 401 && isPlatformRequest && !isSessionProbe && !isLoginRequest
-    && typeof window !== 'undefined' && !invalidationQueued) {
+  if (status === 401 && isAuthenticatedRequest && !isSessionProbe && !isLoginRequest
+    && typeof window !== 'undefined' && !sessionInvalidationDispatched) {
     clearPlatformSessionHint();
-    invalidationQueued = true;
-    queueMicrotask(() => {
-      window.dispatchEvent(new Event('eventhub:auth-invalidated'));
-      invalidationQueued = false;
-    });
+    sessionInvalidationDispatched = true;
+    window.dispatchEvent(new Event('eventhub:auth-invalidated'));
   }
   if (status === 401 && isPlatformSessionProbe) clearPlatformSessionHint();
 

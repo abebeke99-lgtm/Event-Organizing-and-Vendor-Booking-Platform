@@ -165,7 +165,7 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     const fixtures = await database.inTransaction(async (client) => {
       const createdCategoryId = (await client.query(
         'INSERT INTO service_categories (name) VALUES ($1) RETURNING id',
-        [`Neon booking category ${suffix}`],
+        [`Booking ${suffix}`],
       )).rows[0].id;
       const createdVendorId = (await client.query(
         `INSERT INTO vendor_profiles (user_id, business_name, category_id, verification_status)

@@ -3,27 +3,37 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'utf8');
+const navigationSource = await readFile(new URL('../src/PublicNavigation.jsx', import.meta.url), 'utf8');
 const styleSource = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
 
-test('public header stays above page content and reserves its scroll position', () => {
-  assert.match(styleSource, /\.site-header\{[^}]*position:sticky;top:0;z-index:40;width:100%;background:var\(--card\)/);
-  assert.match(styleSource, /html\{scroll-padding-top:112px\}/);
-  assert.match(styleSource, /@media\(max-width:1120px\)\{[\s\S]*?html\{scroll-padding-top:152px\}/);
-  assert.match(styleSource, /html\[data-theme="dark"\] \.site-header\{background:var\(--card\)/);
+test('public header uses a scroll-away utility bar and a sticky main bar', () => {
+  assert.match(appSource, /<ContactTopBar contactInfo=\{siteContactInfo\} contactError=\{contactInfoError\}>/);
+  assert.match(appSource, /<header className="site-header">/);
+  assert.match(styleSource, /\.contact-top-bar\{min-height:52px;background:var\(--public-utility\)/);
+  assert.match(styleSource, /\.site-header\{[^}]*position:sticky;top:0;z-index:40/);
+  assert.doesNotMatch(styleSource.match(/\.contact-top-bar\{([^}]*)\}/)?.[1] || '', /position:\s*(?:sticky|fixed)/);
+  assert.match(styleSource, /--public-utility:#12376b/);
 });
 
-test('header content and actions cannot shrink into the viewport edge', () => {
-  assert.match(styleSource, /\.site-header-inner\{[^}]*width:100%;max-width:1440px;min-width:0;display:flex/);
+test('main header retains logo, navigation, and its search control', () => {
+  assert.match(styleSource, /\.site-header-inner\{[^}]*max-width:1560px[^}]*display:grid;grid-template-columns/);
   assert.match(appSource, /className="header-actions public-header-actions"/);
-  assert.match(styleSource, /\.public-header-actions\{flex:0 0 auto;min-width:0;white-space:nowrap\}/);
-  assert.match(styleSource, /@media\(max-width:1120px\)\{[\s\S]*?\.public-header-actions\{order:4;flex:0 0 100%;width:100%;margin:0;justify-content:flex-end;flex-wrap:wrap\}/);
+  assert.match(appSource, /className="public-search-anchor"/);
+  assert.match(appSource, /aria-controls="header-search-panel"/);
+  assert.match(styleSource, /\.public-search-panel/);
   assert.doesNotMatch(styleSource, /\.site-header[^}]*width:100vw/);
 });
 
-test('contact top bar sits above, but does not stick with or offset, the public navbar', () => {
-  assert.match(appSource, /<ContactTopBar\/><header className="site-header"/);
-  assert.match(styleSource, /\.contact-top-bar\{height:40px;[^}]*background:var\(--nav\)/);
-  assert.doesNotMatch(styleSource.match(/\.contact-top-bar\{([^}]*)\}/)?.[1] || '', /position:\s*(?:sticky|fixed)/);
-  assert.match(styleSource, /html\{scroll-padding-top:112px\}/);
-  assert.match(styleSource, /@media\(max-width:1120px\)\{[\s\S]*?html\{scroll-padding-top:152px\}/);
+test('tablet and mobile breakpoints use the drawer and keep search controls available', () => {
+  assert.match(styleSource, /@media\(min-width:768px\) and \(max-width:1099px\)\{[\s\S]*?\.site-nav\{[^}]*position:fixed/);
+  assert.match(styleSource, /@media\(max-width:767px\)\{[\s\S]*?\.contact-top-bar-left\{width:100%;min-height:44px;flex-wrap:wrap;justify-content:center;gap:8px\}[\s\S]*?\.site-nav\{[^}]*position:fixed/);
+  assert.match(styleSource, /\.public-nav-backdrop\{position:fixed;inset:0/);
+  assert.match(navigationSource, /document\.body\.style\.overflow = 'hidden'/);
+});
+
+test('skip-to-content and primary content targets are present on public pages', () => {
+  assert.match(appSource, /className="skip-to-content" href="#main-content"/);
+  assert.match(appSource, /className="platform-landing" id="main-content"/);
+  assert.match(appSource, /id="main-content" className="public-main-content"/);
+  assert.match(styleSource, /\.skip-to-content:focus\{transform:translateY\(0\)/);
 });

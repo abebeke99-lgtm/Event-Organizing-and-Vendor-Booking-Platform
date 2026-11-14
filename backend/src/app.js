@@ -58,6 +58,8 @@ export function createApp({
   databaseDialect = defaultDatabaseDialect,
   emailConfigured,
   emailSender,
+  invitationEmailConfigured,
+  invitationEmailSender,
   emailChangeEmailConfigured,
   emailChangeEmailSender,
   emailChangeNoticeSender,
@@ -197,7 +199,12 @@ export function createApp({
       administrator: true,
     }));
     app.use('/api/admin', createPostgresAdminEventsRouter({ database: normalizedDatabase }));
-    app.use('/api/admin', createPostgresAdminRouter({ database: normalizedDatabase }));
+    app.use('/api/admin', createPostgresAdminRouter({
+      database: normalizedDatabase,
+      emailConfigured: invitationEmailConfigured,
+      emailSender: invitationEmailSender,
+      frontendUrl: process.env.FRONTEND_URL || process.env.WEB_ORIGIN,
+    }));
     app.use('/api/admin', createPostgresAdminCatalogRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminBookingsRouter({ database: normalizedDatabase }));
     app.use('/api/admin', createPostgresAdminReportsRouter({ database: normalizedDatabase }));

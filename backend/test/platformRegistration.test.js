@@ -10,6 +10,8 @@ function createDatabase() {
   const sessionsByHash = new Map();
   const roleAssignments = [];
   const audits = [];
+  const roleIds = { customer: 3, organizer: 4, vendor: 5 };
+  const roleNames = { 3: 'customer', 4: 'organizer', 5: 'vendor' };
   let nextUserId = 10;
 
   async function execute(sql, values = []) {
@@ -29,8 +31,8 @@ function createDatabase() {
       const user = usersByEmail.get(String(values[0]).toLowerCase());
       return [user ? [{ id: user.id }] : [], []];
     }
-    if (sql.includes("SELECT id FROM roles WHERE LOWER(name) = 'customer'")) {
-      return [[{ id: 3 }], []];
+    if (sql.includes('SELECT id FROM roles WHERE LOWER(name) = ?')) {
+      return [[{ id: roleIds[values[0]] }], []];
     }
     if (sql.startsWith('INSERT INTO users')) {
       const [fullName, email, phone, passwordHash, preferredLanguage] = values;
@@ -53,6 +55,7 @@ function createDatabase() {
     if (sql.includes('FROM user_sessions s')) {
       const userId = sessionsByHash.get(values[0]);
       const user = [...usersByEmail.values()].find((candidate) => candidate.id === userId);
+      const assignment = user && roleAssignments.find((item) => item.userId === user.id);
       return [user ? [{
         id: user.id,
         full_name: user.full_name,
@@ -60,7 +63,7 @@ function createDatabase() {
         phone: user.phone,
         preferred_language: user.preferred_language,
         status: user.status,
-        role: 'customer',
+        role: roleNames[assignment?.roleId] || 'customer',
         permission_keys: '',
       }] : [], []];
     }
@@ -138,22 +141,31 @@ test('public registration creates and authenticates a persisted customer account
   assert.equal(sessionBody.data.user.id, savedUser.id);
 });
 
-test('public registration rejects all client-supplied roles and duplicate emails', async () => {
-  for (const [index, role] of ['customer', 'organizer', 'vendor', 'admin'].entries()) {
+test('public registration supports only non-administrator account roles and rejects duplicate emails', async () => {
+  for (const [index, role] of ['customer', 'organizer', 'vendor'].entries()) {
     const response = await register({
       name: 'Role Attempt',
       email: `${role}@example.test`,
-      password: 'StrongPass123',
+      password: 'Pass1234',
       role,
     }, { 'X-Forwarded-For': `198.51.100.${index + 10}` });
-    assert.equal(response.status, 403, `role=${role}`);
-    assert.deepEqual(await response.json(), { error: 'Public registration is limited to customer accounts.' });
+    assert.equal(response.status, 201, `role=${role}`);
+    assert.equal((await response.json()).data.user.role, role);
   }
+
+  const adminRole = await register({
+    name: 'Self Registered Admin',
+    email: 'admin@example.test',
+    password: 'Pass1234',
+    role: 'admin',
+  }, { 'X-Forwarded-For': '198.51.100.19' });
+  assert.equal(adminRole.status, 403);
+  assert.deepEqual(await adminRole.json(), { error: 'Choose a supported account type.' });
 
   const duplicate = await register({
     name: 'Duplicate User',
     email: 'hana@example.test',
-    password: 'StrongPass123',
+    password: 'Pass1234',
   }, { 'X-Forwarded-For': '198.51.100.20' });
   assert.equal(duplicate.status, 409);
 });

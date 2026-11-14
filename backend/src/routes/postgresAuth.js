@@ -2,8 +2,13 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
-import { buildRoleRedirect, hashToken, isStrongPassword, normalizeEmail } from '../lib/authFlow.js';
+import { buildRoleRedirect, hashToken, normalizeEmail } from '../lib/authFlow.js';
 import { getCookieOptions } from '../lib/cookieOptions.js';
+import {
+  REMEMBERED_SESSION_LIFETIME_MS,
+  SESSION_LIFETIME_MS,
+  setSessionCookie,
+} from '../lib/sessionCookie.js';
 import { DEFAULT_SYSTEM_SETTINGS, mergeSystemSettings } from '../lib/systemSettings.js';
 import { getSystemLockState } from '../lib/rbac.js';
 import { newSessionToken } from '../lib/security.js';
@@ -21,20 +26,17 @@ const passwordRecoveryLimiter = createAuthRateLimiter({
   limit: 5,
   message: 'Too many password recovery requests. Please try again later.',
 });
+const setPasswordLimiter = createAuthRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  message: 'Too many password setup attempts. Please try again later.',
+});
 const loginLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 10,
   message: 'Too many sign-in attempts. Please try again later.',
   skipSuccessfulRequests: true,
 });
-const sessionLifetimeMs = 8 * 60 * 60 * 1000;
-
-function setSessionCookie(res, token) {
-  res.cookie('platform_session', token, getCookieOptions({
-    maxAge: sessionLifetimeMs,
-  }));
-}
-
 function clearSessionCookie(res) {
   res.clearCookie('platform_session', getCookieOptions());
 }
@@ -61,9 +63,9 @@ async function writeAudit(executor, { actorId, action, entityId, details, ip }) 
   );
 }
 
-async function createSession(executor, userId) {
+async function createSession(executor, userId, lifetimeMs = SESSION_LIFETIME_MS) {
   const token = newSessionToken();
-  const expiresAt = new Date(Date.now() + sessionLifetimeMs);
+  const expiresAt = new Date(Date.now() + lifetimeMs);
   await executor.query(
     'INSERT INTO user_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)',
     [hashToken(token), userId, expiresAt],
@@ -71,9 +73,10 @@ async function createSession(executor, userId) {
   return token;
 }
 
-async function createRegistrationNotifications(executor, {
+export async function createRegistrationNotifications(executor, {
   name,
   userId,
+  role = 'customer',
 }) {
   const setting = await executor.query(
     `SELECT setting_value FROM system_settings
@@ -100,7 +103,7 @@ async function createRegistrationNotifications(executor, {
       [
         admin.id,
         'New user registration',
-        `${name} registered as a customer.`,
+        `${name} registered with the ${role} role.`,
         String(userId),
         `user-registration:${userId}:${admin.id}`,
       ],
@@ -153,11 +156,14 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
     const schema = z.object({
       name: z.string().trim().min(2).max(160),
       email: emailSchema,
-      password: z.string().min(12).max(16).refine(isStrongPassword),
+      password: z.string()
+        .min(8, 'Password must be at least 8 characters.')
+        .max(128, 'Password must be 128 characters or fewer.')
+        .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
+          message: 'Password must use 72 UTF-8 bytes or fewer.',
+        }),
+      role: z.string().optional(),
     }).strict();
-    if (req.body && Object.hasOwn(req.body, 'role')) {
-      return res.status(403).json({ error: 'Public registration is limited to customer accounts.' });
-    }
     const parsed = schema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration.' });
@@ -177,14 +183,16 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
       const passwordHash = await bcrypt.hash(parsed.data.password, 12);
       const preferredLanguage = req.language === 'am' ? 'am' : 'en';
       const normalizedEmail = parsed.data.email;
+      const roleName = 'customer';
       const created = await inTransaction(database, async (tx) => {
         const role = await tx.query(
           `SELECT id FROM roles
-           WHERE LOWER(name) = 'customer' AND is_active = TRUE AND is_admin = FALSE
+           WHERE LOWER(name) = $1 AND is_active = TRUE AND is_admin = FALSE
            LIMIT 1`,
+          [roleName],
         );
         if (!role.rows[0]) {
-          const error = new Error('Customer registration is unavailable.');
+          const error = new Error('The selected account type is unavailable.');
           error.status = 503;
           throw error;
         }
@@ -199,19 +207,17 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
           'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)',
           [userId, role.rows[0].id],
         );
-        const token = await createSession(tx, userId);
         await writeAudit(tx, {
           actorId: userId,
           action: 'auth.register',
           entityId: userId,
-          details: { role: 'Customer' },
+          details: { role: roleName },
           ip: req.ip,
         });
-        await createRegistrationNotifications(tx, { name: parsed.data.name, userId });
-        return { id: userId, token };
+        await createRegistrationNotifications(tx, { name: parsed.data.name, userId, role: roleName });
+        return { id: userId };
       });
 
-      setSessionCookie(res, created.token);
       return res.status(201).json({
         data: {
           user: {
@@ -219,7 +225,7 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
             name: parsed.data.name,
             full_name: parsed.data.name,
             email: normalizedEmail,
-            role: 'customer',
+            role: roleName,
             preferred_language: preferredLanguage,
           },
         },
@@ -229,6 +235,59 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
       if (error.code === '23505') {
         return res.status(409).json({ error: 'An account with this email or phone number already exists.' });
       }
+      return next(error);
+    }
+  });
+
+  router.post('/set-password', setPasswordLimiter, async (req, res, next) => {
+    const parsed = z.object({
+      token: z.string().min(32).max(128),
+      password: z.string()
+        .min(8, 'Password must be at least 8 characters.')
+        .max(128, 'Password must be 128 characters or fewer.')
+        .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
+          message: 'Password must use 72 UTF-8 bytes or fewer.',
+        }),
+    }).strict().safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid password setup request.' });
+    }
+
+    try {
+      const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+      await inTransaction(database, async (tx) => {
+        const token = await tx.query(
+          `SELECT prt.user_id, u.email, u.status
+           FROM password_reset_tokens prt
+           JOIN users u ON u.id = prt.user_id
+           WHERE prt.token_hash = $1 AND prt.expires_at > NOW()
+             AND prt.used_at IS NULL
+           FOR UPDATE OF prt, u`,
+          [hashToken(parsed.data.token)],
+        );
+        const invitation = token.rows[0];
+        if (!invitation || invitation.status !== 'pending') {
+          throw Object.assign(new Error('This invitation link has expired or has already been used.'), { status: 400 });
+        }
+        await tx.query(
+          "UPDATE users SET password_hash = $1, status = 'active' WHERE id = $2",
+          [passwordHash, invitation.user_id],
+        );
+        await tx.query(
+          'UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = $1',
+          [invitation.user_id],
+        );
+        await writeAudit(tx, {
+          actorId: invitation.user_id,
+          action: 'auth.invitation_password_set',
+          entityId: invitation.user_id,
+          details: {},
+          ip: req.ip,
+        });
+      });
+      return res.json({ success: true, message: 'Password set successfully.' });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
       return next(error);
     }
   });
@@ -257,6 +316,7 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
     const schema = z.object({
       email: emailSchema,
       password: z.string().min(1).max(128),
+      rememberMe: z.boolean().optional().default(false),
     });
     const parsed = schema.safeParse(req.body || {});
     if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
@@ -279,7 +339,10 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
         [parsed.data.email],
       );
       const user = result.rows[0];
-      if (!user || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
+      if (!user) {
+        return res.status(404).json({ error: 'No account found. Please create an account first.' });
+      }
+      if (!await bcrypt.compare(parsed.data.password, user.password_hash)) {
         return res.status(401).json({ error: 'Invalid email or password.' });
       }
       if (user.status !== 'active') {
@@ -299,7 +362,10 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
       }
       const token = await inTransaction(database, async (tx) => {
         await tx.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
-        const sessionToken = await createSession(tx, user.id);
+        const lifetimeMs = parsed.data.rememberMe
+          ? REMEMBERED_SESSION_LIFETIME_MS
+          : SESSION_LIFETIME_MS;
+        const sessionToken = await createSession(tx, user.id, lifetimeMs);
         if (role === 'vendor') {
           await tx.query(
             `INSERT INTO vendor_profiles (user_id, business_name)
@@ -317,7 +383,7 @@ export function createPostgresAuthRouter({ database, adminNamespace = false }) {
         });
         return sessionToken;
       });
-      setSessionCookie(res, token);
+      setSessionCookie(res, token, parsed.data.rememberMe);
       return res.json({
         user: { id: user.id, name: user.full_name, email: user.email, role },
       });

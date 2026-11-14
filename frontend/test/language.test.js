@@ -34,31 +34,54 @@ test('navigation feature labels are translated in English and Amharic', () => {
 
 test('social login labels and authentication feedback are localized', () => {
   assert.deepEqual(
-    ['oauthContinueGoogle', 'oauthContinueFacebook', 'oauthContinueApple', 'oauthOrContinue',
-      'oauthAuthenticationFailed', 'oauthPleaseTryAgain', 'oauthCheckingAvailability',
-      'oauthGoogleNotConfigured', 'oauthFacebookNotConfigured', 'oauthAppleNotConfigured',
-      'oauthServiceUnreachable', 'oauthDiscoveryFailed', 'oauthProviderResponseInvalid', 'oauthRetry']
+    ['oauthGoogleUnavailableOnClick', 'oauthMicrosoftUnavailableOnClick', 'oauthAdminAccountNotFound']
       .map((key) => translate(key, 'en')),
-    ['Continue with Google', 'Continue with Facebook', 'Continue with Apple', 'OR CONTINUE WITH',
-      'Authentication failed.', 'Please try again.', 'Checking social login availability...',
-      'Google sign-in is not configured.', 'Facebook sign-in is not configured.', 'Apple sign-in is not configured.',
-      'Social login service is temporarily unreachable.', 'The server could not check social login availability.',
-      'The server returned an invalid social login status.', 'Retry'],
+    [
+      'Google sign-in is not available right now. Please use email and password.',
+      'Microsoft sign-in is not available right now. Please use email and password.',
+      'No administrator account was found for this provider. Please use an existing administrator account.',
+    ],
   );
   assert.deepEqual(
-    ['oauthContinueGoogle', 'oauthContinueFacebook', 'oauthContinueApple', 'oauthOrContinue',
-      'oauthAuthenticationFailed', 'oauthPleaseTryAgain', 'oauthCheckingAvailability',
-      'oauthGoogleNotConfigured', 'oauthFacebookNotConfigured', 'oauthAppleNotConfigured',
-      'oauthServiceUnreachable', 'oauthDiscoveryFailed', 'oauthProviderResponseInvalid', 'oauthRetry']
+    ['oauthGoogleUnavailableOnClick', 'oauthMicrosoftUnavailableOnClick', 'oauthAdminAccountNotFound']
       .map((key) => translate(key, 'am')),
-    ['በGoogle ይቀጥሉ', 'በFacebook ይቀጥሉ', 'በApple ይቀጥሉ', 'ወይም በ',
-      'የመግባት ሂደቱ አልተሳካም።', 'እባክዎ እንደገና ይሞክሩ።',
-      'የማህበራዊ መግቢያ አቅርቦትን በመፈተሽ ላይ...',
-      'የGoogle መግቢያ አልተዋቀረም።', 'የFacebook መግቢያ አልተዋቀረም።',
-      'የApple መግቢያ አልተዋቀረም።', 'የማህበራዊ መግቢያ አገልግሎት ለጊዜው አይደረስበትም።',
-      'አገልጋዩ የማህበራዊ መግቢያ አቅርቦትን መፈተሽ አልቻለም።',
-      'አገልጋዩ የተሳሳተ የማህበራዊ መግቢያ ሁኔታ መልሷል።', 'እንደገና ሞክር'],
+    [
+      'የGoogle መግቢያ በአሁኑ ጊዜ አይገኝም። እባክዎ ኢሜይልና የይለፍ ቃል ይጠቀሙ።',
+      'የMicrosoft መግቢያ በአሁኑ ጊዜ አይገኝም። እባክዎ ኢሜይልና የይለፍ ቃል ይጠቀሙ።',
+      'ለዚህ አቅራቢ የአስተዳዳሪ መለያ አልተገኘም። እባክዎ ነባር የአስተዳዳሪ መለያ ይጠቀሙ።',
+    ],
   );
+  assert.deepEqual(
+    ['oauthContinueGoogle', 'oauthContinueMicrosoft', 'oauthOrContinue',
+      'oauthAuthenticationFailed', 'oauthPleaseTryAgain',
+      'oauthGoogleUnavailableOnClick', 'oauthMicrosoftUnavailableOnClick']
+      .map((key) => translate(key, 'en')),
+    ['Continue with Google', 'Continue with Microsoft', 'OR CONTINUE WITH',
+      'Authentication failed.', 'Please try again.',
+      'Google sign-in is not available right now. Please use email and password.',
+      'Microsoft sign-in is not available right now. Please use email and password.'],
+  );
+  assert.deepEqual(
+    ['oauthContinueGoogle', 'oauthContinueMicrosoft', 'oauthOrContinue',
+      'oauthAuthenticationFailed', 'oauthPleaseTryAgain',
+      'oauthGoogleUnavailableOnClick', 'oauthMicrosoftUnavailableOnClick']
+      .map((key) => translate(key, 'am')),
+    ['በGoogle ይቀጥሉ', 'በMicrosoft ይቀጥሉ', 'ወይም በ',
+      'የመግባት ሂደቱ አልተሳካም።', 'እባክዎ እንደገና ይሞክሩ።',
+      'የGoogle መግቢያ በአሁኑ ጊዜ አይገኝም። እባክዎ ኢሜይልና የይለፍ ቃል ይጠቀሙ።',
+      'የMicrosoft መግቢያ በአሁኑ ጊዜ አይገኝም። እባክዎ ኢሜይልና የይለፍ ቃል ይጠቀሙ።'],
+  );
+  assert.equal(translate('oauthAccountLinkRequired', 'en').includes('password'), true);
+  assert.equal(translate('registrationSuccess', 'en'), 'Account created successfully. Please sign in.');
+  assert.equal(translate('registrationSuccess', 'am'), 'መለያው በተሳካ ሁኔታ ተፈጥሯል። እባክዎ ይግቡ።');
+  assert.equal(translateText('No account found. Please create an account first.', 'am'),
+    'መለያ አልተገኘም። እባክዎ መጀመሪያ መለያ ይፍጠሩ።');
+  assert.equal(translateText('መለያ አልተገኘም። እባክዎ መጀመሪያ መለያ ይፍጠሩ።', 'en'),
+    'No account found. Please create an account first.');
+  assert.equal(translate('oauthMicrosoft', 'en'), 'Microsoft');
+  assert.equal(translate('oauthMicrosoft', 'am'), 'Microsoft');
+  assert.equal(translate('oauthAdminLinkRequired', 'en').includes('password'), true);
+  assert.equal(translate('oauthRegistrationRequired', 'am').includes('መለያ'), true);
 });
 
 test('AI chat labels are translated in English and Amharic', () => {
@@ -125,14 +148,10 @@ test('translates exact interface phrases and falls back for missing keys', () =>
   assert.equal(translate('adminUserFullName', 'en'), 'Full Name');
   assert.equal(translate('adminUserEmailAddress', 'en'), 'Email Address');
   assert.equal(translate('adminUserPhoneNumber', 'en'), 'Phone Number');
-  assert.equal(translate('adminUserInitialPassword', 'en'), 'Initial Password');
-  assert.equal(translate('adminUserConfirmPassword', 'en'), 'Confirm Password');
-  assert.equal(translate('adminUserAccountType', 'en'), 'Account Type');
+  assert.equal(translate('adminUserAccountType', 'en'), 'Role');
   assert.equal(translate('adminUserAccountStatus', 'en'), 'Account Status');
-  assert.equal(translate('adminUserShowPassword', 'en'), 'Show password');
-  assert.equal(translate('adminUserHidePassword', 'en'), 'Hide password');
-  assert.equal(translate('adminUserStatusSuspended', 'en'), 'Inactive');
-  assert.equal(translate('adminUserCreateStatusSuspended', 'en'), 'Suspended');
+  assert.equal(translate('adminUserStatusSuspended', 'en'), 'Deactivated');
+  assert.equal(translate('adminUserStatusPending', 'en'), 'Invited');
   assert.equal(translate('adminUserFullName', 'am'), 'ሙሉ ስም');
   assert.equal(translate('noVendorMatches', 'am'), 'የሚመጥን አገልግሎት አልተገኘም');
   assert.equal(translate('tryDifferentFilters', 'am'), 'ሌላ ቃል ወይም ማጣሪያ ይሞክሩ።');

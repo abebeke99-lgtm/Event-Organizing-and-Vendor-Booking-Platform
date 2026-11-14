@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EventHub responsive header mockup</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #edf2f8;
+        color: #17233a;
+        font-family: "DM Sans", "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(1380px, calc(100% - 48px));
+        margin: 0 auto;
+        padding: 38px 0 42px;
+      }
+      .intro {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 22px;
+      }
+      .eyebrow {
+        margin: 0 0 8px;
+        color: #2563eb;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: .14em;
+        text-transform: uppercase;
+      }
+      h1 {
+        margin: 0;
+        font-size: clamp(26px, 3vw, 38px);
+        letter-spacing: -.04em;
+      }
+      .intro p:last-child {
+        margin: 8px 0 0;
+        color: #607087;
+        font-size: 14px;
+      }
+      .brand-chip {
+        flex: 0 0 auto;
+        padding: 9px 13px;
+        border: 1px solid #dce5f0;
+        border-radius: 999px;
+        background: #fff;
+        color: #314969;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .panel {
+        min-width: 0;
+        padding: 16px;
+        overflow: hidden;
+        border: 1px solid #e1e8f1;
+        border-radius: 18px;
+        background: #fff;
+        box-shadow: 0 12px 30px rgba(27, 49, 79, .07);
+      }
+      .panel-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 12px;
+      }
+      .panel-heading strong {
+        color: #1d3557;
+        font-size: 13px;
+      }
+      .panel-heading span {
+        color: #7a899d;
+        font-size: 11px;
+      }
+      .frame {
+        overflow: hidden;
+        border: 1px solid #e7edf5;
+        border-radius: 12px;
+        background: #fff;
+      }
+      .desktop-frame { height: 110px; }
+      .desktop-frame iframe {
+        width: 1440px;
+        height: 126px;
+        transform: scale(.89);
+        transform-origin: top left;
+      }
+      .lower-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        align-items: start;
+        gap: 18px;
+        margin-top: 18px;
+      }
+      .laptop-frame { height: 108px; }
+      .laptop-frame iframe {
+        width: 1280px;
+        height: 126px;
+        transform: scale(.69);
+        transform-origin: top left;
+      }
+      .mobile-frame {
+        width: 100%;
+        height: 130px;
+        background: #f7f9fc;
+      }
+      .mobile-frame iframe {
+        width: 390px;
+        height: 100px;
+        transform: scale(.88);
+        transform-origin: top left;
+      }
+      @media (max-width: 1100px) {
+        main { width: min(960px, calc(100% - 32px)); padding-top: 24px; }
+        .desktop-frame { height: 80px; }
+        .desktop-frame iframe { transform: scale(.62); }
+        .lower-grid { grid-template-columns: minmax(0, 1fr) 280px; gap: 12px; }
+        .laptop-frame { height: 60px; }
+        .laptop-frame iframe { height: 126px; transform: scale(.46); }
+        .mobile-frame { height: 66px; }
+        .mobile-frame iframe { transform: scale(.64); }
+      }
+      @media (max-width: 700px) {
+        main { width: min(100% - 24px, 520px); padding-top: 24px; }
+        .intro { align-items: flex-start; flex-direction: column; gap: 14px; }
+        .lower-grid { grid-template-columns: 1fr; }
+        .laptop-frame iframe { transform: scale(.62); }
+        .mobile-panel { width: min(100%, 390px); }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="intro">
+        <div>
+          <p class="eyebrow">EventHub · Plan. Book. Celebrate.</p>
+          <h1>One header. Every screen.</h1>
+          <p>A considered, responsive marketplace navigation for life’s best events.</p>
+        </div>
+        <span class="brand-chip">Responsive design study</span>
+      </header>
+      <section class="panel" aria-label="Desktop header mockup">
+        <div class="panel-heading">
+          <strong>Desktop</strong>
+          <span>1440 px · full navigation and actions</span>
+        </div>
+        <div class="frame desktop-frame">
+          <iframe title="EventHub desktop header at 1440 pixels" src="/"></iframe>
+        </div>
+      </section>
+      <div class="lower-grid">
+        <section class="panel" aria-label="Laptop header mockup">
+          <div class="panel-heading">
+            <strong>Laptop</strong>
+            <span>1280 px · optimized spacing</span>
+          </div>
+          <div class="frame laptop-frame">
+            <iframe title="EventHub laptop header at 1280 pixels" src="/"></iframe>
+          </div>
+        </section>
+        <section class="panel mobile-panel" aria-label="Mobile header mockup">
+          <div class="panel-heading">
+            <strong>Mobile</strong>
+            <span>390 px · compact actions</span>
+          </div>
+          <div class="frame mobile-frame">
+            <iframe title="EventHub mobile header at 390 pixels" src="/"></iframe>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script>
+      document.querySelectorAll("iframe").forEach(frame => {
+        const hideChatLauncher = () => {
+          const style = frame.contentDocument.createElement("style");
+          style.textContent = ".ai-widget-launcher, .ai-widget-panel { display: none !important; }";
+          frame.contentDocument.head.append(style);
+        };
+        frame.addEventListener("load", hideChatLauncher);
+        if (frame.contentDocument.readyState === "complete") hideChatLauncher();
+      });
+    </script>
+  </body>
+</html>

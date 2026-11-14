@@ -17,7 +17,6 @@ import {
   VENDOR_VERIFICATION_DOCUMENT_TYPES,
 } from '../lib/vendorVerificationDocuments.js';
 import { loadSystemSettings } from '../lib/systemSettings.js';
-import { isStrongPassword } from '../lib/authFlow.js';
 import { isValidCategoryName } from '../lib/categoryName.js';
 import { calculateDashboardSummary, createBookingSnapshot } from '../lib/bookingRules.js';
 import { buildPublicEventCategoriesQuery, buildPublicEventListingQuery, getPublicEvents, mapDatabaseEvent, resolveEventCategoryFilter, sanitizeText } from '../lib/eventCatalog.js';
@@ -2115,14 +2114,21 @@ router.patch('/quotations/:id/respond', requirePlatformUser, asyncHandler(async 
 }));
 
 router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
+  if (req.body && Object.hasOwn(req.body, 'role')
+    && !['customer', 'organizer', 'vendor'].includes(req.body.role)) {
+    return res.status(403).json({ error: 'Choose a supported account type.' });
+  }
   const schema = z.object({
     name: z.string().trim().min(2).max(160),
     email: emailSchema,
-    password: z.string().min(12).max(16).refine(isStrongPassword),
+    password: z.string()
+      .min(8, 'Password must be at least 8 characters.')
+      .max(128, 'Password must be 128 characters or fewer.')
+      .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
+        message: 'Password must use 72 UTF-8 bytes or fewer.',
+      }),
+    role: z.enum(['customer', 'organizer', 'vendor']).default('customer'),
   }).strict();
-  if (req.body && Object.hasOwn(req.body, 'role')) {
-    return res.status(403).json({ error: 'Public registration is limited to customer accounts.' });
-  }
   const parsed = schema.safeParse(req.body || {});
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration.' });
 
@@ -2132,6 +2138,7 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
     return res.status(403).json({ error: 'Public registration is currently disabled.' });
   }
   const normalizedEmail = parsed.data.email.toLowerCase();
+  const roleName = parsed.data.role;
   const passwordHash = await bcrypt.hash(parsed.data.password, 12);
   const preferredLanguage = req.language === 'am' ? 'am' : 'en';
   let created;
@@ -2142,29 +2149,33 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
         [normalizedEmail],
       );
       if (existingEmail) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
-      const [[customerRole]] = await connection.execute(
-        "SELECT id FROM roles WHERE LOWER(name) = 'customer' AND is_active = TRUE AND is_admin = FALSE LIMIT 1",
+      const [[role]] = await connection.execute(
+        'SELECT id FROM roles WHERE LOWER(name) = ? AND is_active = TRUE AND is_admin = FALSE LIMIT 1',
+        [roleName],
       );
-      if (!customerRole) throw Object.assign(new Error('Customer registration is unavailable.'), { status: 503 });
+      if (!role) throw Object.assign(new Error('The selected account type is unavailable.'), { status: 503 });
 
       const [result] = await connection.execute(
         `INSERT INTO users (full_name, email, phone, password_hash, status, preferred_language)
          VALUES (?, ?, ?, ?, 'active', ?)`,
         [parsed.data.name, normalizedEmail, null, passwordHash, preferredLanguage],
       );
-      await connection.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [result.insertId, customerRole.id]);
+      await connection.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [result.insertId, role.id]);
+      if (roleName === 'vendor') {
+        await ensureVendorProfileRecord(result.insertId, parsed.data.name, connection);
+      }
       const { token } = await createUserSession(connection, result.insertId);
       await writeAudit(connection, {
         actorId: result.insertId,
         action: 'auth.register',
         entityType: 'user',
         entityId: result.insertId,
-        details: { role: 'Customer' },
+        details: { role: roleName },
         ip: req.ip,
       });
       await notifyAdministrators(connection, {
         title: 'New user registration',
-        message: `${parsed.data.name} registered as a customer.`,
+        message: `${parsed.data.name} registered with the ${roleName} role.`,
         type: 'user_registration',
         relatedType: 'user',
         relatedId: result.insertId,
@@ -2184,7 +2195,7 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
   setPlatformCookie(res, created.token);
   return res.status(201).json({
     data: {
-      user: { id: created.id, name: parsed.data.name, full_name: parsed.data.name, email: normalizedEmail, role: 'customer', preferred_language: preferredLanguage },
+      user: { id: created.id, name: parsed.data.name, full_name: parsed.data.name, email: normalizedEmail, role: roleName, preferred_language: preferredLanguage },
     },
   });
 }));

@@ -30,6 +30,8 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
   let secondAdminId;
   let rosterChangeAdminId;
   let userId;
+  let invitedVendorId;
+  let invitedCustomerId;
   let adminRoleId;
   let secondAdminRoleId;
   let rosterChangeAdminRoleId;
@@ -45,6 +47,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
   let server;
   let originalDescription;
   let notificationEmailConfigured = false;
+  const invitationMessages = [];
   let deliveryCalls = 0;
   let notificationEmailSender = async () => ({ messageId: `notification-${suffix}` });
   const ownedReadKey = `admin-notification-read-${suffix}`;
@@ -103,12 +106,22 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     });
     profilePhase('fixture setup');
 
-    const app = createApp({
-      database: database.runtimeAdapter,
-      databaseDialect: 'postgres',
-      notificationEmailConfigured: () => notificationEmailConfigured,
-      notificationEmailSender: (...args) => notificationEmailSender(...args),
-    });
+    const previousFrontendUrl = process.env.FRONTEND_URL;
+    process.env.FRONTEND_URL = 'https://eventhub.example.test';
+    let app;
+    try {
+      app = createApp({
+        database: database.runtimeAdapter,
+        databaseDialect: 'postgres',
+        invitationEmailConfigured: () => true,
+        invitationEmailSender: async (message) => invitationMessages.push(message),
+        notificationEmailConfigured: () => notificationEmailConfigured,
+        notificationEmailSender: (...args) => notificationEmailSender(...args),
+      });
+    } finally {
+      if (previousFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+      else process.env.FRONTEND_URL = previousFrontendUrl;
+    }
     server = app.listen(0, '127.0.0.1');
     await once(server, 'listening');
     const baseUrl = `http://127.0.0.1:${server.address().port}/api/admin`;
@@ -300,12 +313,76 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         full_name: 'Postgres Admin Created User',
         email: `pg-user-${suffix}@example.invalid`,
         phone: `+1555${suffix.replaceAll('-', '').slice(0, 10)}`,
-        password: 'StrongIntegrationPass123',
         role_id: organizerRole.id,
       },
     });
     assert.equal(createdResponse.status, 201);
     userId = (await createdResponse.json()).data.id;
+    assert.equal(invitationMessages.length, 1);
+    const invitationToken = new URL(invitationMessages[0].setupUrl).searchParams.get('token');
+    const storedInvitation = await database.runtimeAdapter.query(
+      'SELECT token_hash, expires_at, used_at FROM password_reset_tokens WHERE user_id = $1',
+      [userId],
+    );
+    assert.equal(storedInvitation.rows[0].token_hash, hashToken(invitationToken));
+    assert.notEqual(storedInvitation.rows[0].token_hash, invitationToken);
+    assert.ok(storedInvitation.rows[0].expires_at > new Date());
+    const apiOrigin = new URL(baseUrl).origin;
+    const setPassword = await fetch(`${apiOrigin}/api/platform/set-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: invitationToken, password: 'StrongIntegrationPass123' }),
+    });
+    assert.equal(setPassword.status, 200);
+    const replayedInvitation = await fetch(`${apiOrigin}/api/platform/set-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: invitationToken, password: 'StrongIntegrationPass123' }),
+    });
+    assert.equal(replayedInvitation.status, 400);
+
+    const activeCategory = await database.runtimeAdapter.query(
+      'SELECT id FROM service_categories WHERE is_active = TRUE ORDER BY id LIMIT 1',
+    );
+    assert.ok(activeCategory.rows.length > 0, 'an active vendor category is required for this integration test');
+    const vendorInvitation = await request('/users', {
+      method: 'POST',
+      body: {
+        full_name: 'Postgres Admin Created Vendor',
+        email: `pg-vendor-${suffix}@example.invalid`,
+        role_id: roles.get('vendor').id,
+        business_name: `Integration Vendor ${suffix}`,
+        category_id: activeCategory.rows[0].id,
+      },
+    });
+    assert.equal(vendorInvitation.status, 201);
+    invitedVendorId = (await vendorInvitation.json()).data.id;
+    const customerInvitation = await request('/users', {
+      method: 'POST',
+      body: {
+        full_name: 'Postgres Admin Created Customer',
+        email: `pg-customer-${suffix}@example.invalid`,
+        role_id: roles.get('customer').id,
+      },
+    });
+    assert.equal(customerInvitation.status, 201);
+    invitedCustomerId = (await customerInvitation.json()).data.id;
+    const forbiddenAdminInvitation = await request('/users', {
+      method: 'POST',
+      body: {
+        full_name: 'Blocked Administrator',
+        email: `pg-blocked-admin-${suffix}@example.invalid`,
+        role_id: adminRoleId,
+      },
+    });
+    assert.equal(forbiddenAdminInvitation.status, 400);
+
+    const invitedVendorProfile = await database.runtimeAdapter.query(
+      'SELECT business_name, category_id FROM vendor_profiles WHERE user_id = $1',
+      [invitedVendorId],
+    );
+    assert.equal(invitedVendorProfile.rows[0].business_name, `Integration Vendor ${suffix}`);
+    assert.equal(String(invitedVendorProfile.rows[0].category_id), String(activeCategory.rows[0].id));
     await database.runtimeAdapter.query(
       'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)',
       [userId, testRoleId],
@@ -873,7 +950,9 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     } finally {
       try {
         await database.inTransaction(async (client) => {
-          const fixtureUserIds = [adminId, secondAdminId, rosterChangeAdminId, userId].filter(Boolean);
+          const fixtureUserIds = [
+            adminId, secondAdminId, rosterChangeAdminId, userId, invitedVendorId, invitedCustomerId,
+          ].filter(Boolean);
           const fixtureRoleIds = [
             adminRoleId, secondAdminRoleId, rosterChangeAdminRoleId, testRoleId,
           ].filter(Boolean);
@@ -948,7 +1027,10 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
             await client.query('DELETE FROM bookings WHERE id = $1', [bookingId]);
           }
           if (eventId) await client.query('DELETE FROM events WHERE id = $1', [eventId]);
-          await client.query('DELETE FROM vendor_profiles WHERE user_id = $1', [userId || -1]);
+          if (fixtureUserIds.length) {
+            await client.query('DELETE FROM vendor_profiles WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);
+            await client.query('DELETE FROM password_reset_tokens WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);
+          }
           if (fixtureUserIds.length) {
             await client.query('DELETE FROM admin_sessions WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);
             await client.query('DELETE FROM user_sessions WHERE user_id = ANY($1::bigint[])', [fixtureUserIds]);

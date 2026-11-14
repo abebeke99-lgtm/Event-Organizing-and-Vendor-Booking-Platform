@@ -357,7 +357,7 @@ test('cookie options use Secure and SameSite=None in production and insecure Lax
 
     process.env.NODE_ENV = 'development';
     process.env.COOKIE_SECURE = 'false';
-    process.env.COOKIE_SAME_SITE = 'strict';
+    process.env.COOKIE_SAME_SITE = 'lax';
     assert.deepEqual(getCookieOptions(), {
       httpOnly: true,
       secure: false,

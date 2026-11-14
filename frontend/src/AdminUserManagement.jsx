@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Eye, EyeOff, KeyRound, Pencil, Plus, Search, Shield, UserRound, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Eye, KeyRound, Mail, Pencil, Plus, Search, Shield, UserRound, X } from 'lucide-react';
 import apiClient from './api/axios.js';
 import { translate, translateText } from './language.js';
 import { validateCreateUserForm } from './adminUserManagementUtils.js';
 import './adminUserManagement.css';
 
-const emptyForm = { full_name: '', email: '', phone: '', role_id: '', password: '', confirm_password: '', status: 'active' };
-const statusOptions = ['active', 'suspended', 'pending'];
+const emptyForm = { full_name: '', email: '', phone: '', role_id: '', business_name: '', category_id: '' };
+const statusOptions = ['active', 'suspended'];
+const userFilterStatusOptions = ['pending', ...statusOptions];
 const initialPagination = { page: 1, pageSize: 20, total: 0 };
 
 function displayDate(value) {
@@ -20,17 +21,23 @@ function displayDateTime(value) {
 }
 
 function statusLabel(status) {
+  if (status === 'pending') return translate('adminUserStatusInvited');
   return translate(`adminUserStatus${status.charAt(0).toUpperCase()}${status.slice(1)}`);
 }
 
-function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors }) {
-  const [passwordVisible, setPasswordVisible] = useState(false);
-  const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
+function displayRoles(roles = '') {
+  return String(roles).split(',').map((role) => {
+    const key = `adminUserRole${role.trim().toLowerCase()}`;
+    const translated = translate(key);
+    return translated === key ? role.trim() : translated;
+  }).filter(Boolean).join(', ');
+}
+
+function UserModal({ modal, roles, rolesLoading, categories, categoriesLoading, onClose, onSave, onChange, form, busy, errors }) {
   if (!modal) return null;
   const isCreate = modal.type === 'create';
-  const assignableRoles = isCreate
-    ? roles.filter((role) => ['organizer', 'vendor'].includes(String(role.name).toLowerCase()))
-    : roles;
+  const selectedRole = roles.find((role) => String(role.id) === String(form.role_id));
+  const isVendor = String(selectedRole?.name || '').toLowerCase() === 'vendor';
   const t = (key) => translate(key);
   function showFieldError(field) {
     return errors[field] ? <small className="um-field-error" id={`um-error-${field}`} role="alert">{errors[field]}</small> : null;
@@ -55,7 +62,7 @@ function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors
           </label>
           <label className="field um-field">
             <span>{t('adminUserEmailAddress')}</span>
-            <input required type="email" maxLength={254} autoComplete="email" placeholder={t('adminUserEmailPlaceholder')} value={form.email} onChange={(event) => onChange('email', event.target.value)} aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? 'um-error-email' : undefined}/>
+            <input required={isCreate} disabled={!isCreate} type="email" maxLength={254} autoComplete="email" placeholder={t('adminUserEmailPlaceholder')} value={form.email} onChange={(event) => onChange('email', event.target.value)} aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? 'um-error-email' : undefined}/>
             {showFieldError('email')}
           </label>
           <label className="field um-field">
@@ -64,38 +71,33 @@ function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors
             {showFieldError('phone')}
           </label>
           {isCreate && <>
-            <div className="field um-field">
-              <label htmlFor="um-initial-password">{t('adminUserInitialPassword')}</label>
-              <span className="um-password-input">
-                <input id="um-initial-password" required type={passwordVisible ? 'text' : 'password'} minLength={16} maxLength={128} autoComplete="new-password" placeholder={t('adminUserPasswordPlaceholder')} value={form.password} onChange={(event) => onChange('password', event.target.value)} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? 'um-error-password' : undefined}/>
-                <button type="button" className="um-password-toggle" onClick={() => setPasswordVisible((visible) => !visible)} aria-label={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={passwordVisible} title={t(passwordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}>{passwordVisible ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
-              </span>
-              {showFieldError('password')}
-            </div>
-            <div className="field um-field">
-              <label htmlFor="um-confirm-password">{t('adminUserConfirmPassword')}</label>
-              <span className="um-password-input">
-                <input id="um-confirm-password" required type={confirmPasswordVisible ? 'text' : 'password'} minLength={16} maxLength={128} autoComplete="new-password" placeholder={t('adminUserConfirmPasswordPlaceholder')} value={form.confirm_password} onChange={(event) => onChange('confirm_password', event.target.value)} aria-invalid={Boolean(errors.confirm_password)} aria-describedby={errors.confirm_password ? 'um-error-confirm_password' : undefined}/>
-                <button type="button" className="um-password-toggle" onClick={() => setConfirmPasswordVisible((visible) => !visible)} aria-label={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')} aria-pressed={confirmPasswordVisible} title={t(confirmPasswordVisible ? 'adminUserHidePassword' : 'adminUserShowPassword')}>{confirmPasswordVisible ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
-              </span>
-              {showFieldError('confirm_password')}
-            </div>
             <label className="field um-field">
               <span>{t('adminUserAccountType')}</span>
-              <select required value={form.role_id} onChange={(event) => onChange('role_id', event.target.value)} aria-invalid={Boolean(errors.role_id)} aria-describedby={errors.role_id ? 'um-error-role_id' : undefined}>
-                <option value="">{t('adminUserChooseAccountType')}</option>
-                {assignableRoles.map((role) => <option key={role.id} value={role.id}>{t(`adminUserRole${String(role.name).toLowerCase()}`)}</option>)}
+              <select required value={form.role_id} onChange={(event) => onChange('role_id', event.target.value)} aria-invalid={Boolean(errors.role_id)} aria-describedby={errors.role_id ? 'um-error-role_id' : undefined} disabled={rolesLoading || roles.length === 0}>
+                <option value="">{t(rolesLoading ? 'adminUserLoadingRoles' : roles.length ? 'adminUserChooseAccountType' : 'adminUserNoRoles')}</option>
+                {roles.map((role) => <option key={role.id} value={role.id}>{t(`adminUserRole${String(role.name).toLowerCase()}`)}</option>)}
               </select>
               {showFieldError('role_id')}
             </label>
-            <label className="field um-field">
-              <span>{t('adminUserAccountStatus')}</span>
-              <select value={form.status} onChange={(event) => onChange('status', event.target.value)}><option value="active">{t('adminUserStatusActive')}</option><option value="suspended">{t('adminUserCreateStatusSuspended')}</option></select>
-            </label>
+            {isVendor && <>
+              <label className="field um-field">
+                <span>{t('adminUserBusinessName')}</span>
+                <input required maxLength={160} value={form.business_name} onChange={(event) => onChange('business_name', event.target.value)} aria-invalid={Boolean(errors.business_name)} aria-describedby={errors.business_name ? 'um-error-business_name' : undefined}/>
+                {showFieldError('business_name')}
+              </label>
+              <label className="field um-field">
+                <span>{t('adminUserServiceCategory')}</span>
+                <select required value={form.category_id} onChange={(event) => onChange('category_id', event.target.value)} aria-invalid={Boolean(errors.category_id)} aria-describedby={errors.category_id ? 'um-error-category_id' : undefined} disabled={categoriesLoading || categories.length === 0}>
+                  <option value="">{t(categoriesLoading ? 'adminUserLoadingCategories' : categories.length ? 'adminUserChooseCategory' : 'adminUserNoCategories')}</option>
+                  {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                </select>
+                {showFieldError('category_id')}
+              </label>
+            </>}
           </>}
           <div className="um-modal-actions">
             <button type="button" className="button secondary" onClick={onClose} disabled={busy}>{t('adminUserCancel')}</button>
-            <button type="submit" className="button" disabled={busy} aria-busy={busy}>{busy ? <><span className="um-spinner" aria-hidden="true"/>{t('adminUserSaving')}</> : isCreate ? t('adminUserCreateAccount') : t('adminUserSaveChanges')}</button>
+            <button type="submit" className="button" disabled={busy} aria-busy={busy}>{busy ? <><span className="um-spinner" aria-hidden="true"/>{t('adminUserSaving')}</> : isCreate ? t('adminUserCreateAndInvite') : t('adminUserSaveChanges')}</button>
           </div>
         </form>
       </section>
@@ -106,7 +108,9 @@ function UserModal({ modal, roles, onClose, onSave, onChange, form, busy, errors
 function ActionModal({ modal, roles, form, busy, onClose, onChange, onSubmit }) {
   if (!modal) return null;
   const isStatus = modal.type === 'status';
-  const title = isStatus ? (form.status === 'active' ? 'Activate account' : 'Change account status') : 'Change user role';
+  const title = isStatus
+    ? translate(form.status === 'active' ? 'adminUserReactivateTitle' : 'adminUserDeactivateTitle')
+    : 'Change user role';
   return (
     <div className="um-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !busy) onClose();
@@ -148,7 +152,7 @@ function UserDetails({ user, details, loading, error, onClose }) {
           <div className="um-detail-grid">
             <div><span>Email</span><strong>{user.email}</strong></div>
             <div><span>Phone</span><strong>{user.phone || '—'}</strong></div>
-            <div><span>Role</span><strong>{user.roles || 'Unassigned'}</strong></div>
+            <div><span>Role</span><strong>{displayRoles(user.roles) || 'Unassigned'}</strong></div>
             <div><span>{translate('adminUserAccountStatus')}</span><strong><span className={`pill ${user.status}`}>{statusLabel(user.status)}</span></strong></div>
             <div><span>Registered</span><strong>{displayDateTime(user.created_at)}</strong></div>
           </div>
@@ -169,11 +173,14 @@ function UserDetails({ user, details, loading, error, onClose }) {
   );
 }
 
-export default function AdminUserManagement({ initialUsers = null } = {}) {
+export default function AdminUserManagement({ initialUsers = null, currentAdminId = null } = {}) {
   const focusId = new URLSearchParams(window.location.search).get('focus');
   const openedFocus = useRef('');
   const [users, setUsers] = useState(initialUsers ?? []);
   const [roles, setRoles] = useState([]);
+  const [rolesLoading, setRolesLoading] = useState(true);
+  const [categories, setCategories] = useState([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [filterRoles, setFilterRoles] = useState([]);
   const [pagination, setPagination] = useState({ ...initialPagination, total: initialUsers?.length ?? 0 });
   const [loading, setLoading] = useState(initialUsers === null);
@@ -228,9 +235,15 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
       .then((response) => {
         const allRoles = response.data.data;
         setFilterRoles(allRoles);
-        setRoles(allRoles.filter((role) => role.is_active && !role.is_admin));
+        setRoles(allRoles.filter((role) => role.is_active && !role.is_admin
+          && ['customer', 'organizer', 'vendor'].includes(String(role.name).toLowerCase())));
       })
-      .catch((issue) => setError((current) => current || issue.message || 'Unable to load available roles.'));
+      .catch((issue) => setError((current) => current || issue.message || translate('adminUserRolesLoadFailed')))
+      .finally(() => setRolesLoading(false));
+    apiClient.get('/admin/categories', { params: { pageSize: 100, status: 'active' } })
+      .then((response) => setCategories(response.data.data))
+      .catch((issue) => setError((current) => current || issue.message || translate('adminUserCategoriesLoadFailed')))
+      .finally(() => setCategoriesLoading(false));
   }, []);
 
   function updateForm(field, value) {
@@ -278,7 +291,8 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
     setError('');
     setNotice('');
     if (modal.type === 'create') {
-      const validationErrors = validateCreateUserForm(form, translate);
+      const vendorRoleId = roles.find((role) => String(role.name).toLowerCase() === 'vendor')?.id;
+      const validationErrors = validateCreateUserForm(form, translate, vendorRoleId);
       setFormErrors(validationErrors);
       if (Object.keys(validationErrors).length) return;
     }
@@ -287,27 +301,31 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
       if (modal.type === 'edit' && !window.confirm(translateText(`Save profile changes for ${modal.user.full_name}?`))) return;
       const payload = { ...form, phone: form.phone.trim() || null };
       if (modal.type === 'create') {
-        if (payload.password !== payload.confirm_password) {
-          setFormErrors({ confirm_password: translate('adminUserPasswordMismatch') });
-          return;
-        }
-        delete payload.confirm_password;
         payload.role_id = Number(payload.role_id);
+        if (!payload.business_name) delete payload.business_name;
+        if (payload.category_id) payload.category_id = Number(payload.category_id);
+        else delete payload.category_id;
         await apiClient.post('/admin/users', payload);
-        setNotice(translate('adminUserCreated'));
+        setNotice(translate('adminUserInvitationSent'));
       } else {
-        delete payload.password;
+        delete payload.email;
         delete payload.role_id;
+        delete payload.business_name;
+        delete payload.category_id;
         await apiClient.patch(`/admin/users/${modal.user.id}`, payload);
-        setNotice('User details updated.');
+        setNotice(translate('adminUserUpdated'));
       }
       setModal(null);
       await loadUsers(pagination.page, filters, pagination.pageSize);
     } catch (issue) {
       if (modal?.type === 'create' && issue.status === 409 && /email|ኢሜይል/i.test(issue.message || '')) {
-        setFormErrors((current) => ({ ...current, email: issue.message }));
+        setFormErrors((current) => ({ ...current, email: translate('adminUserEmailExists') }));
       } else if (modal?.type === 'create' && issue.status === 409 && /phone|ስልክ/i.test(issue.message || '')) {
-        setFormErrors((current) => ({ ...current, phone: issue.message }));
+        setFormErrors((current) => ({ ...current, phone: translate('adminUserPhoneExists') }));
+      } else if (modal?.type === 'create' && issue.status === 503) {
+        setModal(null);
+        await loadUsers(1, filters, pagination.pageSize);
+        setError(translate('adminUserInviteEmailFailed'));
       } else {
         setError(issue.message || 'The user could not be saved.');
       }
@@ -317,7 +335,7 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
   }
 
   function startStatusChange(user) {
-    const status = user.status === 'active' ? 'suspended' : 'active';
+    const status = user.status === 'suspended' ? 'active' : 'suspended';
     setActionForm({ status, reason: '' });
     setActionModal({ type: 'status', user });
   }
@@ -339,7 +357,7 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
     try {
       if (actionModal.type === 'status') {
         await apiClient.patch(`/admin/users/${actionModal.user.id}/status`, { status: actionForm.status, reason: actionForm.reason.trim() });
-        setNotice(`Account status changed to ${actionForm.status}.`);
+        setNotice(translate(actionForm.status === 'active' ? 'adminUserReactivated' : 'adminUserDeactivated'));
       } else {
         await apiClient.patch(`/admin/users/${actionModal.user.id}/role`, { role_id: Number(actionForm.role_id) });
         setNotice('User role updated; their active sessions were revoked.');
@@ -363,6 +381,20 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
       setNotice(response.data.message || 'Password reset was initiated.');
     } catch (issue) {
       setError(issue.message || 'Password reset could not be initiated.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendInvitation(user) {
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      await apiClient.post(`/admin/users/${user.id}/resend-invite`, {});
+      setNotice(translate('adminUserInvitationResent'));
+    } catch (issue) {
+      setError(issue.status === 503 ? translate('adminUserInviteEmailFailed') : issue.message || translate('adminUserInviteResendFailed'));
     } finally {
       setBusy(false);
     }
@@ -394,15 +426,15 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
   return (
     <div className="um-page">
       <div className="page-heading">
-        <div><p className="eyebrow">ADMINISTRATION</p><h2>User Management</h2><p className="muted">Search, review, and manage registered platform accounts.</p></div>
-        <button type="button" className="button um-create-button" onClick={startCreate}><Plus size={16}/> Create user</button>
+        <div><p className="eyebrow">{translate('adminUserAdministration')}</p><h2>{translate('userManagement')}</h2><p className="muted">{translate('adminUserDescription')}</p></div>
+        <button type="button" className="button um-create-button" onClick={startCreate}><Plus size={16}/> {translate('adminUserCreate')}</button>
       </div>
       {error && <div className="alert error" role="alert">{error}<button className="dismiss" onClick={() => setError('')} aria-label="Dismiss error"><X size={15}/></button></div>}
       {notice && <div className="alert success" role="status">{notice}<button className="dismiss" onClick={() => setNotice('')} aria-label="Dismiss notice"><X size={15}/></button></div>}
       <form className="um-filters panel" onSubmit={applyFilters}>
         <label className="um-search"><Search size={16}/><input aria-label="Search users" placeholder="Search name, email, phone, or ID" value={searchInput} onChange={(event) => setSearchInput(event.target.value)}/><button type="submit">Search</button></label>
-        <label className="um-filter"><span>Role</span><select value={filters.role} onChange={(event) => changeFilter('role', event.target.value)}><option value="">All roles</option>{filterRoles.map((role) => <option value={role.name} key={role.id}>{role.name}</option>)}</select></label>
-        <label className="um-filter"><span>{translate('adminUserStatusFilter')}</span><select value={filters.status} onChange={(event) => changeFilter('status', event.target.value)}><option value="">All statuses</option>{statusOptions.map((status) => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label>
+        <label className="um-filter"><span>Role</span><select value={filters.role} onChange={(event) => changeFilter('role', event.target.value)}><option value="">All roles</option>{filterRoles.map((role) => <option value={role.name} key={role.id}>{displayRoles(role.name)}</option>)}</select></label>
+        <label className="um-filter"><span>{translate('adminUserStatusFilter')}</span><select value={filters.status} onChange={(event) => changeFilter('status', event.target.value)}><option value="">All statuses</option>{userFilterStatusOptions.map((status) => <option value={status} key={status}>{statusLabel(status)}</option>)}</select></label>
         <label className="um-filter"><span>Registered from</span><input type="date" value={filters.dateFrom} max={filters.dateTo || undefined} onChange={(event) => changeFilter('dateFrom', event.target.value)}/></label>
         <label className="um-filter"><span>Registered to</span><input type="date" value={filters.dateTo} min={filters.dateFrom || undefined} onChange={(event) => changeFilter('dateTo', event.target.value)}/></label>
         <label className="um-filter"><span>Sort by</span><select value={`${filters.sortBy}:${filters.sortDirection}`} onChange={(event) => {
@@ -424,7 +456,7 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
               return <tr key={user.id}>
                 <td><strong className="um-user-name">{user.full_name}</strong><span className="um-user-email">{user.email}</span>{user.phone && <span className="um-user-phone">{user.phone}</span>}</td>
                 <td>#{user.id}</td>
-                <td>{user.roles || 'Unassigned'}</td>
+                <td>{displayRoles(user.roles) || 'Unassigned'}</td>
                 <td><span className={`pill ${user.status}`}>{statusLabel(user.status)}</span></td>
                 <td>{displayDate(user.created_at)}</td>
                 <td>{Number(user.bookings_count || 0)}</td>
@@ -432,7 +464,8 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
                   <button type="button" title="View details and booking history" aria-label={`View ${user.full_name}`} disabled={busy} onClick={() => openUserDetails(user)}><Eye size={15}/></button>
                   <button type="button" title="Edit user information" aria-label={`Edit ${user.full_name}`} disabled={busy} onClick={() => startEdit(user)}><Pencil size={15}/></button>
                   <button type="button" title={isAdmin ? 'Administrator role changes are restricted' : 'Change role'} aria-label={`Change role for ${user.full_name}`} disabled={busy || isAdmin} onClick={() => startRoleChange(user)}><Shield size={15}/></button>
-                  <button type="button" title={user.status === 'active' ? 'Deactivate account' : 'Activate account'} aria-label={`${user.status === 'active' ? 'Deactivate' : 'Activate'} ${user.full_name}`} disabled={busy} onClick={() => startStatusChange(user)}><UserRound size={15}/></button>
+                  {user.status === 'pending' && <button type="button" title={translate('adminUserResendInvitation')} aria-label={`${translate('adminUserResendInvitation')} ${user.full_name}`} disabled={busy} onClick={() => resendInvitation(user)}><Mail size={15}/></button>}
+                  <button type="button" title={user.status === 'suspended' ? translate('adminUserReactivate') : translate('adminUserDeactivate')} aria-label={`${user.status === 'suspended' ? translate('adminUserReactivate') : translate('adminUserDeactivate')} ${user.full_name}`} disabled={busy || (Number(user.id) === Number(currentAdminId) && user.status === 'active')} onClick={() => startStatusChange(user)}><UserRound size={15}/></button>
                   <button type="button" title="Initiate secure password reset" aria-label={`Reset password for ${user.full_name}`} disabled={busy} onClick={() => initiatePasswordReset(user)}><KeyRound size={15}/></button>
                 </div></td>
               </tr>;
@@ -442,7 +475,7 @@ export default function AdminUserManagement({ initialUsers = null } = {}) {
         </>}
       </section>
       <p className="um-retention-note"><CalendarDays size={14}/> Accounts are deactivated rather than deleted so booking, audit, and financial records remain intact.</p>
-      <UserModal modal={modal} roles={modal?.type === 'create' ? roles.filter((role) => ['organizer', 'vendor'].includes(role.name.toLowerCase())) : roles} form={form} busy={busy} errors={formErrors} onClose={() => { setFormErrors({}); setModal(null); }} onSave={saveUser} onChange={updateForm}/>
+      <UserModal modal={modal} roles={roles} rolesLoading={rolesLoading} categories={categories} categoriesLoading={categoriesLoading} form={form} busy={busy} errors={formErrors} onClose={() => { setFormErrors({}); setModal(null); }} onSave={saveUser} onChange={updateForm}/>
       <ActionModal modal={actionModal} roles={roles} form={actionForm} busy={busy} onClose={() => setActionModal(null)} onChange={updateActionForm} onSubmit={saveSensitiveChange}/>
       <UserDetails user={selectedUser} details={userDetails} loading={detailsLoading} error={detailsError} onClose={() => setSelectedUser(null)}/>
     </div>

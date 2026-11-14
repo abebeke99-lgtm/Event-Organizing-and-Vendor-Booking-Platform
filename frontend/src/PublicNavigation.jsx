@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Building2, Cake, CalendarDays, Camera, Car, Church, ChevronDown, ChevronRight, Clock3, Compass,
+  Building2, Cake, CalendarDays, Camera, Car, Church, ChevronDown, ChevronRight, Clock3, Compass, Mail, Phone, X,
   Flower, GraduationCap, HeartHandshake, Image, Lightbulb, Music, Palette, PartyPopper,
   Presentation, ShieldCheck, Sparkles, Star, Store, Tags, Tent, Ticket, TrendingUp, Trophy, Utensils, BookOpen,
 } from 'lucide-react';
 import { translate, translateNavigationLabel, useLanguage } from './language.js';
 import { buildPublicNavigationMenu, navigateAndCloseMenu, routeIsActive, updateOpenMenuPath } from './publicNavigationUtils.js';
 import { recordRecentlyViewed } from './navigationFeatureUtils.js';
+import { getTopBarSocialLinks } from './socialLinks.js';
+import SocialMediaLink from './SocialMediaLink.js';
+import { PUBLIC_SITE_SETTINGS } from './siteSettings.js';
 import VendorsMenu from './VendorsMenu.jsx';
 import ServicesMenu from './ServicesMenu.jsx';
 
@@ -115,14 +118,14 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
     return <li className={`public-nav-item ${hasChildren ? 'has-children' : ''} ${isOpen ? 'is-open' : ''}`} key={itemKey}
       onMouseEnter={(event) => {
         window.clearTimeout(closeTimer.current);
-        if (hasChildren && window.matchMedia('(min-width: 1121px)').matches) {
+        if (hasChildren && window.matchMedia('(min-width: 1100px)').matches) {
           if (level === 0) clearPointerNavigationFocus();
           const trigger = event.currentTarget.querySelector(':scope > .public-nav-top-link-group > button, :scope > button');
           setOpenPath(itemKey, trigger?.getBoundingClientRect() || event.currentTarget.getBoundingClientRect());
         }
       }}
       onMouseLeave={() => {
-        if (window.matchMedia('(min-width: 1121px)').matches) {
+        if (window.matchMedia('(min-width: 1100px)').matches) {
           closeTimer.current = window.setTimeout(() => setOpenPath(level > 0 ? 'parent' : ''), 150);
         }
       }}>
@@ -141,7 +144,7 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
             aria-controls={`public-menu-${itemKey.replace(/[^a-z0-9_-]/gi, '-')}`}
             onClick={(event) => {
               if (event.detail > 0) clearPointerNavigationFocus();
-              const shouldOpen = window.matchMedia('(min-width: 1121px)').matches || !isOpen;
+              const shouldOpen = window.matchMedia('(min-width: 1100px)').matches || !isOpen;
               setOpenPath(shouldOpen ? itemKey : '', event.currentTarget.getBoundingClientRect());
             }}
             onKeyDown={(event) => {
@@ -158,7 +161,7 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
           aria-haspopup="menu" aria-expanded={isOpen} aria-current={active ? 'page' : undefined} aria-controls={`public-menu-${itemKey.replace(/[^a-z0-9_-]/gi, '-')}`}
           onClick={(event) => {
             if (event.detail > 0 && level === 0) clearPointerNavigationFocus();
-            const shouldOpen = (level === 0 && window.matchMedia('(min-width: 1121px)').matches) || !isOpen;
+            const shouldOpen = (level === 0 && window.matchMedia('(min-width: 1100px)').matches) || !isOpen;
             setOpenPath(shouldOpen ? itemKey : level > 0 ? 'parent' : '', event.currentTarget.getBoundingClientRect());
           }}
           onKeyDown={(event) => {
@@ -223,7 +226,16 @@ function MenuItems({ items, level, routePath, onNavigate, close, openPath, setOp
   });
 }
 
-export default function PublicNavigation({ currentPath, mobileOpen, onCloseMobile, onNavigate, api, user }) {
+export default function PublicNavigation({
+  currentPath,
+  mobileOpen,
+  onCloseMobile,
+  onNavigate,
+  api,
+  user,
+  contactInfo = {},
+  contactSettingsError = false,
+}) {
   const language = useLanguage();
   const [categories, setCategories] = useState([]);
   const [serviceCategories, setServiceCategories] = useState([]);
@@ -237,6 +249,7 @@ export default function PublicNavigation({ currentPath, mobileOpen, onCloseMobil
   const [retry, setRetry] = useState(0);
   const [historyError, setHistoryError] = useState('');
   const [openPath, setOpenPathState] = useState([]);
+  const mobileOpenRef = useRef(mobileOpen);
   const rootRef = useRef(null);
   const menuRefs = useRef(new Map());
   const closeTimer = useRef(null);
@@ -282,6 +295,7 @@ export default function PublicNavigation({ currentPath, mobileOpen, onCloseMobil
   function close() {
     setOpenPathState([]);
     onCloseMobile();
+    if (mobileOpen) requestAnimationFrame(() => document.querySelector('.mobile-nav-toggle')?.focus());
   }
 
   useEffect(() => {
@@ -388,8 +402,21 @@ export default function PublicNavigation({ currentPath, mobileOpen, onCloseMobil
   }, [mobileOpen]);
 
   useEffect(() => {
+    mobileOpenRef.current = mobileOpen;
+  }, [mobileOpen]);
+
+  useEffect(() => {
     setOpenPathState([]);
-  }, [currentPath]);
+    if (mobileOpenRef.current) {
+      onCloseMobile();
+      requestAnimationFrame(() => document.querySelector('.mobile-nav-toggle')?.focus());
+    }
+  }, [currentPath, onCloseMobile]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    requestAnimationFrame(() => rootRef.current?.querySelector('.public-nav-top-item')?.focus());
+  }, [mobileOpen]);
 
   useEffect(() => {
     const match = currentPath.match(/^\/(events|vendors)\/([1-9]\d*)(?:\?|$)/);
@@ -526,8 +553,32 @@ export default function PublicNavigation({ currentPath, mobileOpen, onCloseMobil
     });
   }, [categories, categoriesError, categoriesLoading, eventCategories, eventCategoriesError, eventCategoriesLoading, serviceCategories, serviceCategoriesError, serviceCategoriesLoading, user]);
 
-  return <nav ref={rootRef} className={`site-nav ${mobileOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}
+  const { phone, phoneHref, email, emailHref } = PUBLIC_SITE_SETTINGS.contact;
+  const socialLinks = getTopBarSocialLinks(undefined, contactInfo.socials);
+
+  return <>
+    {mobileOpen && <button type="button" className="public-nav-backdrop" aria-label={translate('closeMenu', language)} onClick={close} />}
+    <nav ref={rootRef} id="public-primary-navigation" className={`site-nav ${mobileOpen ? 'open' : ''}`} aria-label={translate('mainNavigation', language)}
+    onKeyDown={(event) => {
+      if (!mobileOpen || event.key !== 'Tab') return;
+      const focusable = Array.from(rootRef.current?.querySelectorAll('a[href], button:not(:disabled)') || [])
+        .filter((element) => element.offsetParent !== null);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpenPathState([]); }}>
+    <div className="public-nav-drawer-header">
+      <strong>{translate('mainNavigation', language)}</strong>
+      <button type="button" className="public-nav-drawer-close" aria-label={translate('closeMenu', language)} onClick={close}><X size={20} aria-hidden="true" /></button>
+    </div>
     {historyError && <p className="public-nav-history-error" role="status">{historyError}</p>}
     <ul className={`public-nav-list ${mobileOpen ? 'mobile-open' : ''}`}>
       {menu.map((item) => item.key === 'vendors'
@@ -545,5 +596,19 @@ export default function PublicNavigation({ currentPath, mobileOpen, onCloseMobil
             if (node) menuRefs.current.set(key, node); else menuRefs.current.delete(key);
           }} closeTimer={closeTimer} />)}
     </ul>
-  </nav>;
+    <div className="public-nav-drawer-footer">
+      {(phone || email) && <div className="public-nav-drawer-contact">
+        <a href={phoneHref} aria-label={`${translate('topBarPhone', language)}: ${phone}`}><Phone size={16} aria-hidden="true" /><span>{phone}</span></a>
+        <a href={emailHref} aria-label={`${translate('topBarEmail', language)}: ${email}`}><Mail size={16} aria-hidden="true" /><span>{email}</span></a>
+      </div>}
+      {socialLinks.length > 0 && <ul className="public-nav-drawer-social" aria-label={translate('topBarSocialLinks', language)}>
+        {socialLinks.map((social) => <li key={social.id}><SocialMediaLink
+          platform={social.id}
+          label={`${translate('eventHubOn', language)} ${translate(social.labelKey, language)}`}
+          url={social.url}
+        /></li>)}
+      </ul>}
+      {contactSettingsError && <p role="status">{translate('contactInfoUnavailable', language)}</p>}
+    </div>
+  </nav></>;
 }

@@ -110,7 +110,7 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
 - Required: `VITE_API_URL` set in Netlify to the actual Render service HTTPS URL confirmed in the Render Dashboard, ending in `/api`, and `VITE_DEMO_AUTH=false`. These are public build-time settings, not secrets. No unverified Render hostname is baked into the repository. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
 - Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
-- Optionally set `VITE_CONTACT_PHONE` in the frontend build environment to show a `tel:` link in the public top bar; leave it empty to hide the phone. For local development, set these values in `frontend/.env.development`.
+- The public header's phone and email are configured centrally in `frontend/src/siteSettings.js`; social profile links remain build-time settings. For local development, set the social profile URLs in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
 - After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.
 
@@ -362,17 +362,16 @@ The public contact form submits to `POST /api/contact`; `GET /api/contact` retur
 
 Apply `007_contact_inquiry_types.sql` and `036_public_contact_details.sql` with `npm run migrate` to enable the full inquiry type list, resolved status, and the configured public support email, phone, and social links. Migration 036 fills only empty contact settings, preserving values already customized by an administrator. Address and business hours remain unset until provided.
 
-The public top bar displays `abebeke99@gmail.com` as a mail link, `+251986481821` as a telephone link, and the configured Telegram, YouTube, Facebook, and LinkedIn profiles. Profile URLs must use HTTPS and the expected platform host. The same contact details appear on the Contact page after migration 036 is applied. These Vite values configure the top bar and do not change the footer's current output. Set the following Vite environment variables in `frontend/.env.development` for local work or in the frontend host's build environment before building for deployment; Vite reads env files only at startup:
+The public top bar displays `abebeke99@gmail.com` as a mail link, `0986481821` as a telephone link to `tel:+251986481821`, and the configured Telegram, YouTube, Facebook, and LinkedIn profiles. Profile URLs must use HTTPS and the expected platform host. The Contact page reads its contact details from the site's configured contact settings. Set the following Vite environment variables in `frontend/.env.development` for local work or in the frontend host's build environment before building for deployment; Vite reads env files only at startup:
 
 ```env
 VITE_TELEGRAM_URL=https://t.me/የአንተ_ቻናል
 VITE_YOUTUBE_URL=https://youtube.com/@የአንተ_ቻናል
 VITE_FACEBOOK_URL=https://facebook.com/የአንተ_ገጽ
 VITE_LINKEDIN_URL=https://linkedin.com/company/የአንተ_ገጽ
-VITE_CONTACT_PHONE=+251986481821
 ```
 
-For deployment, set these values in the frontend host's build environment and rebuild/redeploy; changing them after the build does not update the frontend. These values are public and included in the frontend bundle, so do not put credentials in them.
+For deployment, set these social profile values in the frontend host's build environment and rebuild/redeploy; changing them after the build does not update the frontend. These values are public and included in the frontend bundle, so do not put credentials in them.
 
 ### Payment and refund management
 

@@ -9,13 +9,13 @@ function isLoopbackHost(hostname) {
     && Number(octets[0]) === 127;
 }
 
-export function resolveApiBaseUrl(configuredUrl, isProduction) {
-  const value = (configuredUrl || '').trim();
+export function resolveApiBaseUrl(configuredUrl, isProduction, currentHostname) {
+  let value = (configuredUrl || '').trim();
   if (!value) {
     if (isProduction) {
       throw new Error('VITE_API_URL must be configured to the deployed API origin or its /api base path.');
     }
-    return LOCAL_API_URL;
+    value = LOCAL_API_URL;
   }
 
   let parsedUrl;
@@ -33,6 +33,10 @@ export function resolveApiBaseUrl(configuredUrl, isProduction) {
     || parsedUrl.hash
     || (path && path !== '/api')) {
     throw new Error('VITE_API_URL must be an API origin or end in /api, without credentials, query, or fragment.');
+  }
+  if (!isProduction && currentHostname && isLoopbackHost(currentHostname)
+    && isLoopbackHost(parsedUrl.hostname)) {
+    parsedUrl.hostname = currentHostname.replace(/^\[|\]$/g, '');
   }
   if (isProduction && parsedUrl.protocol !== 'https:') {
     throw new Error('Production VITE_API_URL must use HTTPS.');

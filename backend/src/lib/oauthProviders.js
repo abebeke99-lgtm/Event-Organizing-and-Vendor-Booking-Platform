@@ -1,12 +1,10 @@
-import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
-import { createPrivateKey } from 'node:crypto';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { normalizeEmail } from './authFlow.js';
 
 const GOOGLE_ISSUERS = ['https://accounts.google.com', 'accounts.google.com'];
-const APPLE_ISSUER = 'https://appleid.apple.com';
 const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
-const APPLE_JWKS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
 const OAUTH_TIMEOUT_MS = 10_000;
+const microsoftJwks = new Map();
 
 export class OAuthProviderError extends Error {
   constructor(code) {
@@ -55,41 +53,17 @@ function readProviderConfig(provider, environment = process.env) {
     };
   }
 
-  if (provider === 'facebook') {
+  if (provider === 'microsoft') {
     const callbackUrl = configuredCallback(environment, provider);
-    const graphVersion = environment.FACEBOOK_GRAPH_API_VERSION?.trim();
-    if (!environment.FACEBOOK_APP_ID?.trim()
-      || !environment.FACEBOOK_APP_SECRET?.trim()
-      || !callbackUrl
-      || !/^v\d+\.\d+$/.test(graphVersion)) return null;
-    return {
-      appId: environment.FACEBOOK_APP_ID.trim(),
-      appSecret: environment.FACEBOOK_APP_SECRET.trim(),
-      callbackUrl: callbackUrl.href,
-      graphVersion,
-    };
-  }
-
-  if (provider === 'apple') {
-    const callbackUrl = configuredCallback(environment, provider);
-    const privateKey = environment.APPLE_PRIVATE_KEY?.replace(/\\n/g, '\n').trim();
-    let parsedPrivateKey;
-    try {
-      parsedPrivateKey = privateKey ? createPrivateKey(privateKey) : null;
-    } catch {
-      return null;
-    }
-    if (!environment.APPLE_SERVICE_ID?.trim()
-      || !environment.APPLE_TEAM_ID?.trim()
-      || !environment.APPLE_KEY_ID?.trim()
-      || parsedPrivateKey?.asymmetricKeyType !== 'ec'
-      || parsedPrivateKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1'
+    const tenantId = environment.MICROSOFT_TENANT_ID?.trim().toLowerCase();
+    if (!environment.MICROSOFT_CLIENT_ID?.trim()
+      || !environment.MICROSOFT_CLIENT_SECRET?.trim()
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(tenantId || '')
       || !callbackUrl) return null;
     return {
-      clientId: environment.APPLE_SERVICE_ID.trim(),
-      teamId: environment.APPLE_TEAM_ID.trim(),
-      keyId: environment.APPLE_KEY_ID.trim(),
-      privateKey,
+      clientId: environment.MICROSOFT_CLIENT_ID.trim(),
+      clientSecret: environment.MICROSOFT_CLIENT_SECRET.trim(),
+      tenantId,
       callbackUrl: callbackUrl.href,
     };
   }
@@ -126,19 +100,6 @@ async function postForm(fetchImpl, endpoint, values) {
   return requireResponse(response);
 }
 
-async function getJson(fetchImpl, endpoint, headers = {}) {
-  let response;
-  try {
-    response = await fetchImpl(endpoint, {
-      headers: { Accept: 'application/json', ...headers },
-      signal: AbortSignal.timeout(OAUTH_TIMEOUT_MS),
-    });
-  } catch {
-    throw new OAuthProviderError('provider_unavailable');
-  }
-  return requireResponse(response);
-}
-
 function identity({ provider, subject, email, emailVerified, name }) {
   if (typeof subject !== 'string' || !subject.trim() || subject.length > 255) {
     throw new OAuthProviderError('invalid_identity');
@@ -162,11 +123,9 @@ export function createOAuthProviderService({
   environment = process.env,
   fetchImpl = globalThis.fetch,
   verifyJwt = jwtVerify,
-  importPrivateKey = importPKCS8,
-  signJwt = SignJWT,
 } = {}) {
   function getProviderStatuses() {
-    return ['google', 'facebook', 'apple'].map((id) => {
+    return ['google', 'microsoft'].map((id) => {
       const configured = Boolean(readProviderConfig(id, environment));
       return { id, configured, status: configured ? 'configured' : 'not_configured' };
     });
@@ -188,7 +147,7 @@ export function createOAuthProviderService({
 
   function createAuthorizationUrl(provider, { state, nonce, codeChallenge }) {
     const config = readProviderConfig(provider, environment);
-    if (!config) throw new OAuthProviderError('provider_unavailable');
+    if (!config) throw new OAuthProviderError('provider_not_configured');
 
     let url;
     if (provider === 'google') {
@@ -203,25 +162,20 @@ export function createOAuthProviderService({
         code_challenge: codeChallenge,
         code_challenge_method: 'S256',
       }).toString();
-    } else if (provider === 'facebook') {
-      url = new URL(`https://www.facebook.com/${config.graphVersion}/dialog/oauth`);
-      url.search = new URLSearchParams({
-        client_id: config.appId,
-        redirect_uri: config.callbackUrl,
-        response_type: 'code',
-        scope: 'email,public_profile',
-        state,
-      }).toString();
     } else {
-      url = new URL('https://appleid.apple.com/auth/authorize');
+      const config = readProviderConfig(provider, environment);
+      if (!config) throw new OAuthProviderError('provider_unavailable');
+      url = new URL(`https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/authorize`);
       url.search = new URLSearchParams({
         client_id: config.clientId,
         redirect_uri: config.callbackUrl,
         response_type: 'code',
-        response_mode: 'form_post',
-        scope: 'name email',
+        response_mode: 'query',
+        scope: 'openid email profile',
         state,
         nonce,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
       }).toString();
     }
     return url.href;
@@ -231,7 +185,6 @@ export function createOAuthProviderService({
     code,
     codeVerifier,
     nonce,
-    appleUser,
   }) {
     const config = readProviderConfig(provider, environment);
     if (!config) throw new OAuthProviderError('provider_unavailable');
@@ -267,100 +220,47 @@ export function createOAuthProviderService({
       });
     }
 
-    if (provider === 'facebook') {
-      const tokenEndpoint = new URL(`https://graph.facebook.com/${config.graphVersion}/oauth/access_token`);
-      tokenEndpoint.search = new URLSearchParams({
-        client_id: config.appId,
-        client_secret: config.appSecret,
-        redirect_uri: config.callbackUrl,
-        code,
-      }).toString();
-      const tokens = await getJson(fetchImpl, tokenEndpoint.href);
-      if (typeof tokens.access_token !== 'string' || !tokens.access_token) {
+    if (provider === 'microsoft') {
+      const tokens = await postForm(fetchImpl,
+        `https://login.microsoftonline.com/${config.tenantId}/oauth2/v2.0/token`,
+        {
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          redirect_uri: config.callbackUrl,
+          grant_type: 'authorization_code',
+          code,
+          code_verifier: codeVerifier,
+          scope: 'openid email profile',
+        });
+      if (typeof tokens.id_token !== 'string') throw new OAuthProviderError('invalid_identity');
+      let payload;
+      try {
+        const keys = microsoftJwks.get(config.tenantId) || createRemoteJWKSet(
+          new URL(`https://login.microsoftonline.com/${config.tenantId}/discovery/v2.0/keys`),
+        );
+        microsoftJwks.set(config.tenantId, keys);
+        ({ payload } = await verifyJwt(tokens.id_token, keys, {
+          issuer: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
+          audience: config.clientId,
+          algorithms: ['RS256'],
+          clockTolerance: 5,
+        }));
+      } catch {
         throw new OAuthProviderError('invalid_identity');
       }
-
-      const debugEndpoint = new URL(`https://graph.facebook.com/${config.graphVersion}/debug_token`);
-      debugEndpoint.search = new URLSearchParams({
-        input_token: tokens.access_token,
-        access_token: `${config.appId}|${config.appSecret}`,
-      }).toString();
-      const debug = await getJson(fetchImpl, debugEndpoint.href);
-      const tokenInfo = debug.data;
-      if (!tokenInfo
-        || tokenInfo.is_valid !== true
-        || String(tokenInfo.app_id) !== config.appId
-        || !tokenInfo.user_id
-        || Number(tokenInfo.expires_at) > 0 && Number(tokenInfo.expires_at) * 1000 <= Date.now()) {
+      if (payload.nonce !== nonce || payload.tid !== config.tenantId) {
         throw new OAuthProviderError('invalid_identity');
       }
-
-      const profileEndpoint = new URL(`https://graph.facebook.com/${config.graphVersion}/me`);
-      profileEndpoint.search = new URLSearchParams({ fields: 'id,name,email' }).toString();
-      const profile = await getJson(fetchImpl, profileEndpoint.href, {
-        Authorization: `Bearer ${tokens.access_token}`,
-      });
-      if (String(profile.id) !== String(tokenInfo.user_id)) throw new OAuthProviderError('invalid_identity');
+      const verifiedEmail = payload.email_verified === true;
       return identity({
         provider,
-        subject: profile.id,
-        email: profile.email,
-        emailVerified: Boolean(profile.email),
-        name: profile.name,
+        subject: payload.sub,
+        email: verifiedEmail ? payload.email : null,
+        emailVerified: verifiedEmail,
+        name: payload.name,
       });
     }
-
-    const secretKey = await importPrivateKey(config.privateKey, 'ES256').catch(() => {
-      throw new OAuthProviderError('provider_unavailable');
-    });
-    const clientSecret = await new signJwt({})
-      .setProtectedHeader({ alg: 'ES256', kid: config.keyId })
-      .setIssuer(config.teamId)
-      .setSubject(config.clientId)
-      .setAudience(APPLE_ISSUER)
-      .setIssuedAt()
-      .setExpirationTime('5m')
-      .sign(secretKey);
-    const tokens = await postForm(fetchImpl, 'https://appleid.apple.com/auth/token', {
-      client_id: config.clientId,
-      client_secret: clientSecret,
-      code,
-      grant_type: 'authorization_code',
-      redirect_uri: config.callbackUrl,
-    });
-    if (typeof tokens.id_token !== 'string') throw new OAuthProviderError('invalid_identity');
-    let payload;
-    try {
-      ({ payload } = await verifyJwt(tokens.id_token, APPLE_JWKS, {
-        issuer: APPLE_ISSUER,
-        audience: config.clientId,
-        algorithms: ['RS256'],
-        clockTolerance: 5,
-      }));
-    } catch {
-      throw new OAuthProviderError('invalid_identity');
-    }
-    if (payload.nonce !== nonce) throw new OAuthProviderError('invalid_identity');
-
-    let userName = '';
-    if (typeof appleUser === 'string' && appleUser.length <= 2048) {
-      try {
-        const parsedUser = JSON.parse(appleUser);
-        const firstName = typeof parsedUser.name?.firstName === 'string' ? parsedUser.name.firstName : '';
-        const lastName = typeof parsedUser.name?.lastName === 'string' ? parsedUser.name.lastName : '';
-        userName = `${firstName} ${lastName}`.trim();
-      } catch {
-        userName = '';
-      }
-    }
-    const verifiedClaim = payload.email_verified;
-    return identity({
-      provider,
-      subject: payload.sub,
-      email: payload.email,
-      emailVerified: verifiedClaim === true || verifiedClaim === 'true',
-      name: userName,
-    });
+    throw new OAuthProviderError('provider_unavailable');
   }
 
   return {

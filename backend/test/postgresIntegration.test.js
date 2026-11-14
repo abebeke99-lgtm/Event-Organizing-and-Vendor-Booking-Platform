@@ -390,7 +390,7 @@ test('Neon PostgreSQL populated marketplace detail workflows return persisted re
   const suffix = randomUUID();
   const userEmail = `pg-marketplace-${suffix}@example.invalid`;
   const inactiveEmail = `pg-marketplace-pending-${suffix}@example.invalid`;
-  const marker = `Marketplace ${suffix}`;
+  const marker = `Fixture ${suffix}`;
   const image = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const app = createApp({ database: database.runtimeAdapter, databaseDialect: 'postgres' });
   const server = app.listen(0, '127.0.0.1');

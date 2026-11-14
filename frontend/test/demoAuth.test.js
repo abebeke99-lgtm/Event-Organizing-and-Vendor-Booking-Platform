@@ -30,14 +30,13 @@ function createStorage() {
   };
 }
 
-test('demo password validation enforces 12 to 16 characters and complexity', () => {
+test('demo registration password validation matches the public password policy', () => {
+  assert.equal(isValidDemoPassword('Password8'), true);
   assert.equal(isValidDemoPassword('StrongPass12'), true);
   assert.equal(isValidDemoPassword('StrongPassword12'), true);
-  assert.equal(isValidDemoPassword('ShortPass1'), false);
-  assert.equal(isValidDemoPassword('StrongPassword123'), false);
-  assert.equal(isValidDemoPassword('alllowercase12'), false);
-  assert.equal(isValidDemoPassword('ALLUPPERCASE12'), false);
-  assert.equal(isValidDemoPassword('NoNumbersHere'), false);
+  assert.equal(isValidDemoPassword('1234567'), false);
+  assert.equal(isValidDemoPassword(`a${'é'.repeat(36)}`), false);
+  assert.equal(isValidDemoPassword(null), false);
 });
 
 test('predefined demo credentials resolve only for exact mock passwords', () => {

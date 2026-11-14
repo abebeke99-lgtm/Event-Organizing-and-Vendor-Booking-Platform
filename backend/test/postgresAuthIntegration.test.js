@@ -44,9 +44,13 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
   const customerEmail = `pg-auth-${suffix}@example.invalid`;
   const rollbackEmail = `pg-auth-rollback-${suffix}@example.invalid`;
   const vendorEmail = `pg-auth-vendor-${suffix}@example.invalid`;
+  const organizerSignupEmail = `pg-auth-organizer-signup-${suffix}@example.invalid`;
+  const vendorSignupEmail = `pg-auth-vendor-signup-${suffix}@example.invalid`;
   const adminEmail = `pg-auth-admin-${suffix}@example.invalid`;
   const adminToken = randomBytes(32).toString('hex');
-  const fixtureEmails = [customerEmail, rollbackEmail, vendorEmail, adminEmail];
+  const fixtureEmails = [
+    customerEmail, rollbackEmail, vendorEmail, organizerSignupEmail, vendorSignupEmail, adminEmail,
+  ];
   const servers = [];
   let injectedRoleLinkErrorCode;
   let fixtureUserIds = [];
@@ -95,12 +99,13 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     const roles = await database.runtimeAdapter.query(
       `SELECT LOWER(name) AS name, id FROM roles
        WHERE is_active = TRUE AND (
-         (LOWER(name) IN ('customer', 'vendor') AND is_admin = FALSE)
+         (LOWER(name) IN ('customer', 'organizer', 'vendor') AND is_admin = FALSE)
          OR is_admin = TRUE
        )`,
     );
     const roleIds = new Map(roles.rows.map((row) => [row.name, row.id]));
     assert.ok(roleIds.has('customer'));
+    assert.ok(roleIds.has('organizer'));
     assert.ok(roleIds.has('vendor'));
     const adminRole = roles.rows.find((row) => {
       const role = row.name.toLowerCase();
@@ -249,6 +254,19 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
       body: JSON.stringify({ name: 'Duplicate Fixture', email: customerEmail, password }),
     });
     assert.equal(duplicate.status, 409);
+
+    for (const [email, role] of [
+      [organizerSignupEmail, 'organizer'],
+      [vendorSignupEmail, 'vendor'],
+    ]) {
+      const roleRegistration = await fetch(`${baseUrl}/api/platform/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `Neon ${role} signup`, email, password, role }),
+      });
+      assert.equal(roleRegistration.status, 201);
+      assert.equal((await roleRegistration.json()).data.user.role, role);
+    }
 
     const invalidLogin = await fetch(`${baseUrl}/api/platform/login`, {
       method: 'POST',

@@ -24,14 +24,14 @@ These settings are **optional**:
 
 - `DB_SSL_CA` or `DB_SSL_CA_BASE64`: provider CA certificate when it is not trusted by Node's system CA store. Certificate verification remains enabled.
 - `FRONTEND_URL`: public frontend URL used in email links. Set to `https://infobekele.netlify.app`.
-- Social sign-in is optional. Configure a provider only after creating its app/service in that provider's developer console. Each callback must exactly match the HTTPS API callback registered with the provider:
-  - Google: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL` (`https://<api-host>/api/platform/oauth/google/callback`)
-  - Facebook: `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_CALLBACK_URL` (`https://<api-host>/api/platform/oauth/facebook/callback`), and `FACEBOOK_GRAPH_API_VERSION` (a currently supported version such as `v22.0`)
-  - Apple: `APPLE_SERVICE_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY`, and `APPLE_CALLBACK_URL` (`https://<api-host>/api/platform/oauth/apple/callback`). Store the complete private key only in Render's secret environment settings; newlines may be entered as `\n`.
-  - Add callback URLs to the provider console, enable the matching sign-in product/scopes, and set the service's associated domain where the provider requires it. Configure `FRONTEND_URL` to the frontend origin. `GET /api/platform/oauth/providers` reports each provider as `configured` or `not_configured`; this validates local configuration, not a completed provider authentication. The application does not expose credentials to the browser.
-  - OAuth starts at `GET /api/platform/oauth/:provider/start`. Google uses OIDC state, nonce, and PKCE; Facebook validates its access token server-side; Apple uses a form-post callback and server-side identity-token validation. Production Apple callbacks require the secure cross-site cookie settings listed above.
-  - Provider identity is verified server-side. Linking requires an existing platform session; matching email alone never merges accounts. New provider signups create customer accounts only and respect `public_registration_enabled`. Administrator authentication remains separate. Users can connect a second provider before disconnecting an existing one; the last connected provider cannot be removed.
-  - Instagram Login is not offered as a general consumer sign-in option: Meta's official Instagram Login API is for professional accounts, not ordinary consumer authentication.
+- Google and Microsoft sign-in are optional. Configure these server-only variables after creating an OAuth/OIDC app in each provider console:
+  - Google: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
+  - Microsoft Entra ID: `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_TENANT_ID`, `MICROSOFT_CALLBACK_URL`
+  - Local callback URLs must be exactly `http://127.0.0.1:4000/api/platform/oauth/google/callback` and `http://127.0.0.1:4000/api/platform/oauth/microsoft/callback`. Register those exact URIs in Google Cloud Console and Azure Portal; `localhost` is not interchangeable with `127.0.0.1`.
+  - Production callback URLs must be `https://<api-host>/api/platform/oauth/google/callback` and `https://<api-host>/api/platform/oauth/microsoft/callback`, with `<api-host>` replaced by the deployed API host. The values in the provider consoles and backend environment must match exactly.
+  - Google Cloud Console: add the Google URI to the OAuth client’s authorized redirect URIs. Azure Portal: add the Microsoft URI as a **Web** platform redirect URI and use a single-tenant app matching `MICROSOFT_TENANT_ID`.
+  - Both providers use OIDC state, nonce, and PKCE, and credentials remain on the backend. `GET /api/platform/oauth/providers` reports configuration status; this does not prove a complete provider flow. Provider registration uses the selected Customer, Event Organizer, or Vendor role, respects `public_registration_enabled`, and cannot assign Administrator. Existing matching accounts must confirm their password before provider linking. Password sessions last 8 hours, or 30 days when Remember me is selected.
+  - Instagram is not offered as a general consumer authentication provider.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURE`: configure only when password-reset email is required. Keep credentials private.
 - `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_CHAT_MODELS`: configure only when enabling the AI assistant. `OPENAI_API_KEY` is a backend secret.
 - `PAYMENT_PROVIDER_ADAPTER`: optional server-side payment adapter module; do not set it unless a real provider adapter is configured.
@@ -58,7 +58,6 @@ These **optional** public build-time variables only affect contact/profile links
 - `VITE_YOUTUBE_URL`
 - `VITE_FACEBOOK_URL`
 - `VITE_LINKEDIN_URL`
-- `VITE_CONTACT_PHONE`
 
 Do not put database credentials, API keys, passwords, or other secrets in any `VITE_*` setting.
 

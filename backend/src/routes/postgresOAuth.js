@@ -1,14 +1,20 @@
-import express, { Router } from 'express';
+import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
-import { buildRoleRedirect, hashToken, normalizeEmail } from '../lib/authFlow.js';
+import { hashToken, normalizeEmail } from '../lib/authFlow.js';
 import { getCookieOptions } from '../lib/cookieOptions.js';
+import {
+  REMEMBERED_SESSION_LIFETIME_MS,
+  SESSION_LIFETIME_MS,
+  setSessionCookie,
+} from '../lib/sessionCookie.js';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { OAuthProviderError, createOAuthProviderService } from '../lib/oauthProviders.js';
 import { normalizeDatabaseAdapter } from '../db.js';
 
 const stateLifetimeMs = 10 * 60 * 1000;
-const supportedProviders = new Set(['google', 'facebook', 'apple']);
+const supportedProviders = new Set(['google', 'microsoft']);
+const adminProviders = new Set(['google', 'microsoft']);
 const oauthLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 20,
@@ -55,19 +61,40 @@ async function withTransaction(database, work) {
   throw new TypeError('A PostgreSQL database adapter is required for OAuth.');
 }
 
-function setBrowserCookie(res, token, provider) {
+function setBrowserCookie(res, token) {
   res.cookie('oauth_browser', token, getCookieOptions({
     maxAge: stateLifetimeMs,
     path: '/api/platform/oauth',
-    sameSite: provider === 'apple' && process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    sameSite: 'lax',
   }));
 }
 
-function oauthErrorRedirect(providerService, intent, code) {
-  return providerService.getFrontendUrl(intent === 'link' ? '/account/connections' : '/login', {
+function setPendingAdminCookie(res, token) {
+  res.cookie('admin_oauth_pending', token, getCookieOptions({
+    maxAge: stateLifetimeMs,
+    path: '/api/platform/oauth/admin-link',
+    sameSite: 'lax',
+  }));
+}
+
+function clearPendingAdminCookie(res) {
+  res.clearCookie('admin_oauth_pending', getCookieOptions({
+    path: '/api/platform/oauth/admin-link',
+    sameSite: 'lax',
+  }));
+}
+
+function oauthErrorRedirect(providerService, intent, code, provider) {
+  const path = intent === 'link' ? '/account/connections'
+    : intent === 'admin-login' ? '/admin/login' : '/login';
+  const query = {
     oauth: 'error',
     reason: code,
-  });
+  };
+  if (code === 'provider_not_configured' && adminProviders.has(provider)) {
+    query.provider = provider;
+  }
+  return providerService.getFrontendUrl(path, query);
 }
 
 async function getPlatformUser(database, req) {
@@ -111,13 +138,15 @@ async function getPrimaryRole(database, userId) {
   const role = user.is_admin || ['admin', 'administrator'].includes(user.role)
     ? 'admin'
     : user.role;
-  if (role === 'admin' || !['organizer', 'vendor', 'customer'].includes(role)) return null;
+  if (!['admin', 'organizer', 'vendor', 'customer'].includes(role)) return null;
   return { ...user, role };
 }
 
-async function createSession(database, userId) {
+async function createSession(database, userId, rememberMe = false) {
   const token = randomToken(32);
-  const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + (
+    rememberMe ? REMEMBERED_SESSION_LIFETIME_MS : SESSION_LIFETIME_MS
+  ));
   await query(
     database,
     'INSERT INTO user_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)',
@@ -126,13 +155,8 @@ async function createSession(database, userId) {
   return token;
 }
 
-function setSessionCookie(res, token) {
-  res.cookie('platform_session', token, getCookieOptions({
-    maxAge: 8 * 60 * 60 * 1000,
-  }));
-}
-
-async function completeLogin(database, req, identity) {
+async function completeLogin(database, req, identity, state, oauthService) {
+  const rememberMe = state.remember_me === true;
   return withTransaction(database, async (tx) => {
     const linked = await tx.query(
       `SELECT u.id, u.full_name, u.email
@@ -158,57 +182,150 @@ async function completeLogin(database, req, identity) {
       const emailCollision = await tx.query('SELECT id FROM users WHERE LOWER(email) = $1 LIMIT 1', [
         normalizeEmail(identity.email),
       ]);
-      if (emailCollision.rows[0]) throw new OAuthProviderError('account_conflict');
-
-      const registrationSetting = await tx.query(
-        `SELECT setting_value FROM system_settings
-         WHERE setting_key = 'public_registration_enabled'`,
-      );
-      if (registrationSetting.rows[0]
-        && !['true', '1'].includes(String(registrationSetting.rows[0].setting_value).toLowerCase())) {
-        throw new OAuthProviderError('registration_disabled');
+      if (emailCollision.rows[0]) {
+        const existingUser = await getPrimaryRole(tx, emailCollision.rows[0].id);
+        if (!existingUser) throw new OAuthProviderError('account_unavailable');
+        const pendingToken = randomToken();
+        await tx.query(
+          `DELETE FROM oauth_pending_admin_links
+           WHERE provider = $1 AND provider_subject = $2 AND expires_at <= NOW()`,
+          [identity.provider, identity.subject],
+        );
+        await tx.query(
+          `INSERT INTO oauth_pending_admin_links
+             (token_hash, user_id, provider, provider_subject, provider_email, remember_me, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            hash(pendingToken),
+            existingUser.id,
+            identity.provider,
+            identity.subject,
+            identity.email,
+            rememberMe,
+            new Date(Date.now() + stateLifetimeMs),
+          ],
+        );
+        return {
+          linkToken: pendingToken,
+          redirect: oauthService.getFrontendUrl('/login', {
+            oauth: 'link_required',
+            email: existingUser.email,
+          }),
+        };
       }
 
-      const role = await tx.query(
-        `SELECT id FROM roles
-         WHERE LOWER(name) = 'customer' AND is_active = TRUE AND is_admin = FALSE
-         LIMIT 1`,
-      );
-      if (!role.rows[0]) throw new OAuthProviderError('provider_unavailable');
-      const name = identity.name || identity.email.split('@')[0];
-      const passwordHash = await bcrypt.hash(randomToken(48), 12);
-      const inserted = await tx.query(
-        `INSERT INTO users (full_name, email, password_hash, status, preferred_language)
-         VALUES ($1, $2, $3, 'active', $4)
-         RETURNING id, full_name, email`,
-        [name.slice(0, 160), normalizeEmail(identity.email), passwordHash, req.language === 'am' ? 'am' : 'en'],
-      );
-      user = { ...inserted.rows[0], role: 'customer' };
-      await tx.query(
-        'INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)',
-        [user.id, role.rows[0].id],
-      );
-      await tx.query(
-        `INSERT INTO oauth_identities
-           (user_id, provider, provider_subject, provider_email, email_verified)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [user.id, identity.provider, identity.subject, identity.email, identity.emailVerified],
-      );
-      await tx.query(
-        `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, details, ip_address)
-         VALUES ($1, 'auth.oauth_register', 'user', $1, $2::jsonb, $3)`,
-        [user.id, JSON.stringify({ provider: identity.provider, role: 'customer' }), req.ip || null],
-      );
+      return {
+        redirect: oauthService.getFrontendUrl('/register', {
+          oauth: 'registration_required',
+          name: identity.name || identity.email.split('@')[0],
+          email: identity.email,
+        }),
+      };
     }
 
+    if (user.role === 'vendor') {
+      await tx.query(
+        `INSERT INTO vendor_profiles (user_id, business_name)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id) DO NOTHING`,
+        [user.id, user.full_name],
+      );
+    }
     await tx.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
-    const sessionToken = await createSession(tx, user.id);
+    const sessionToken = await createSession(tx, user.id, rememberMe);
     await tx.query(
       `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, details, ip_address)
        VALUES ($1, 'auth.oauth_login', 'user', $1, $2::jsonb, $3)`,
       [user.id, JSON.stringify({ provider: identity.provider, role: user.role }), req.ip || null],
     );
-    return { user, sessionToken };
+    return {
+      user,
+      sessionToken,
+      redirect: oauthService.getFrontendUrl('/login', { oauth: 'success' }),
+    };
+  });
+}
+
+async function completeAdminLogin(database, req, res, identity, rememberMe, oauthService) {
+  if (!adminProviders.has(identity.provider)) throw new OAuthProviderError('provider_unavailable');
+  const linked = await query(
+    database,
+    `SELECT u.id, u.full_name, u.email, u.status, r.is_active AS role_is_active
+     FROM oauth_identities oi
+     JOIN users u ON u.id = oi.user_id
+     JOIN user_roles ur ON ur.user_id = u.id
+     JOIN roles r ON r.id = ur.role_id
+     WHERE oi.provider = $1 AND oi.provider_subject = $2
+       AND (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
+     ORDER BY r.is_active DESC
+     LIMIT 1`,
+    [identity.provider, identity.subject],
+  );
+  const administrator = linked.rows[0];
+  if (administrator) {
+    if (administrator.status !== 'active' || !administrator.role_is_active) {
+      throw new OAuthProviderError('account_unavailable');
+    }
+    const sessionToken = await withTransaction(database, async (tx) => {
+      await tx.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [administrator.id]);
+      const token = await createSession(tx, administrator.id, rememberMe);
+      await tx.query(
+        `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, details, ip_address)
+         VALUES ($1, 'auth.oauth_login', 'user', $1, $2::jsonb, $3)`,
+        [administrator.id, JSON.stringify({ provider: identity.provider, role: 'admin' }), req.ip || null],
+      );
+      return token;
+    });
+    setSessionCookie(res, sessionToken, rememberMe);
+    return oauthService.getFrontendUrl('/admin/login', { oauth: 'success' });
+  }
+
+  if (!identity.email || !identity.emailVerified) {
+    throw new OAuthProviderError('email_verification_required');
+  }
+  const existingAdmin = await query(
+    database,
+    `SELECT u.id, u.email
+     FROM users u
+     JOIN user_roles ur ON ur.user_id = u.id
+     JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
+     WHERE LOWER(u.email) = $1 AND u.status = 'active'
+       AND (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
+     LIMIT 1`,
+    [normalizeEmail(identity.email)],
+  );
+  if (!existingAdmin.rows[0]) {
+    return oauthErrorRedirect(oauthService, 'admin-login', 'admin_account_not_found', identity.provider);
+  }
+
+  const alreadyLinked = await query(
+    database,
+    `SELECT user_id FROM oauth_identities
+     WHERE provider = $1 AND provider_subject = $2 LIMIT 1`,
+    [identity.provider, identity.subject],
+  );
+  if (alreadyLinked.rows[0]) throw new OAuthProviderError('account_conflict');
+
+  const pendingToken = randomToken();
+  await query(
+    database,
+    `INSERT INTO oauth_pending_admin_links
+       (token_hash, user_id, provider, provider_subject, provider_email, remember_me, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      hash(pendingToken),
+      existingAdmin.rows[0].id,
+      identity.provider,
+      identity.subject,
+      identity.email,
+      rememberMe,
+      new Date(Date.now() + stateLifetimeMs),
+    ],
+  );
+  setPendingAdminCookie(res, pendingToken);
+  return oauthService.getFrontendUrl('/admin/login', {
+    oauth: 'link_required',
+    email: existingAdmin.rows[0].email,
   });
 }
 
@@ -270,9 +387,19 @@ export function createPostgresOAuthRouter({
   router.get('/:provider/start', oauthLimiter, async (req, res, next) => {
     const { provider } = req.params;
     if (!supportedProviders.has(provider)) return res.status(404).json({ error: 'Provider not found.' });
-    const intent = req.query.intent === 'link' ? 'link' : 'login';
+    const requestedIntent = req.query.intent;
+    const intent = ['link', 'admin-login'].includes(requestedIntent)
+      ? requestedIntent : 'login';
+    if (intent === 'admin-login' && !adminProviders.has(provider)) {
+      return res.status(404).json({ error: 'Provider not found.' });
+    }
     try {
       let linkedUser = null;
+      const providerStatus = oauthService.getProviderStatuses()
+        .find((status) => status.id === provider);
+      if (!providerStatus?.configured) {
+        throw new OAuthProviderError('provider_not_configured');
+      }
       if (intent === 'link') {
         linkedUser = await getPlatformUser(database, req);
         if (!linkedUser) return res.status(401).json({ error: 'Sign in before linking an account.' });
@@ -281,15 +408,22 @@ export function createPostgresOAuthRouter({
       const browserToken = req.cookies?.oauth_browser || randomToken();
       const stateToken = randomToken();
       const nonce = randomToken();
-      const codeVerifier = provider === 'google' ? randomToken(48) : null;
+      const codeVerifier = ['google', 'microsoft'].includes(provider) ? randomToken(48) : null;
       const codeChallenge = codeVerifier
         ? createHash('sha256').update(codeVerifier).digest('base64url')
         : '';
+      const rememberMe = req.query.rememberMe === 'true';
+      const authorizationUrl = oauthService.createAuthorizationUrl(provider, {
+        state: stateToken,
+        nonce,
+        codeChallenge,
+      });
       await query(
         database,
         `INSERT INTO oauth_login_states
-           (state_hash, browser_hash, provider, intent, user_id, nonce, code_verifier, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+           (state_hash, browser_hash, provider, intent, user_id, nonce, code_verifier,
+            remember_me, registration_role, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           hash(stateToken),
           hash(browserToken),
@@ -298,26 +432,23 @@ export function createPostgresOAuthRouter({
           linkedUser?.id || null,
           nonce,
           codeVerifier,
+          rememberMe,
+          null,
           new Date(Date.now() + stateLifetimeMs),
         ],
       );
-      const authorizationUrl = oauthService.createAuthorizationUrl(provider, {
-        state: stateToken,
-        nonce,
-        codeChallenge,
-      });
-      setBrowserCookie(res, browserToken, provider);
+      setBrowserCookie(res, browserToken);
       return res.redirect(302, authorizationUrl);
     } catch (error) {
       if (error instanceof OAuthProviderError) {
-        return res.redirect(302, oauthErrorRedirect(oauthService, intent, error.code));
+        return res.redirect(302, oauthErrorRedirect(oauthService, intent, error.code, provider));
       }
       return next(error);
     }
   });
 
   const callbackHandler = async (req, res, next) => {
-    const provider = req.params.provider || 'apple';
+    const provider = req.params.provider;
     if (!supportedProviders.has(provider)) return res.status(404).json({ error: 'Provider not found.' });
     let intent = 'login';
     try {
@@ -331,7 +462,7 @@ export function createPostgresOAuthRouter({
         database,
         `DELETE FROM oauth_login_states
          WHERE state_hash = $1 AND browser_hash = $2 AND expires_at > NOW()
-         RETURNING provider, intent, user_id, nonce, code_verifier`,
+         RETURNING provider, intent, user_id, nonce, code_verifier, remember_me, registration_role`,
         [hash(stateToken), hash(browserToken)],
       );
       const state = consumed.rows[0];
@@ -345,7 +476,6 @@ export function createPostgresOAuthRouter({
         code,
         codeVerifier: state.code_verifier,
         nonce: state.nonce,
-        appleUser: callbackData.user,
       });
 
       if (state.intent === 'link') {
@@ -359,22 +489,36 @@ export function createPostgresOAuthRouter({
         return res.redirect(302, oauthService.getFrontendUrl('/account/connections', { oauth: 'linked' }));
       }
 
-      const result = await completeLogin(database, req, identity);
-      setSessionCookie(res, result.sessionToken);
-      return res.redirect(302, oauthService.getFrontendUrl('/login', { oauth: 'success' }));
+      if (state.intent === 'admin-login') {
+        const destination = await completeAdminLogin(
+          database,
+          req,
+          res,
+          identity,
+          state.remember_me === true,
+          oauthService,
+        );
+        if (req.cookies?.admin_oauth_pending) {
+          clearPendingAdminCookie(res);
+        }
+        return res.redirect(302, destination);
+      }
+
+      const result = await completeLogin(database, req, identity, state, oauthService);
+      if (result.linkToken) setPendingAdminCookie(res, result.linkToken);
+      if (result.sessionToken) setSessionCookie(res, result.sessionToken, state.remember_me === true);
+      return res.redirect(302, result.redirect);
     } catch (error) {
       if (error instanceof OAuthProviderError) {
-        return res.redirect(302, oauthErrorRedirect(oauthService, intent, error.code));
+        return res.redirect(302, oauthErrorRedirect(oauthService, intent, error.code, provider));
       }
       if (error.code === '23505') {
-        return res.redirect(302, oauthErrorRedirect(oauthService, intent, 'account_conflict'));
+        return res.redirect(302, oauthErrorRedirect(oauthService, intent, 'account_conflict', provider));
       }
       return next(error);
     }
   };
   router.get('/:provider/callback', oauthLimiter, callbackHandler);
-  router.post('/apple/callback', oauthLimiter, express.urlencoded({ extended: false, limit: '10kb' }),
-    callbackHandler);
 
   router.get('/identities', async (req, res, next) => {
     try {
@@ -388,6 +532,81 @@ export function createPostgresOAuthRouter({
       );
       return res.json({ identities: result.rows });
     } catch (error) {
+      return next(error);
+    }
+  });
+
+  router.post('/admin-link', oauthLimiter, async (req, res, next) => {
+    const email = normalizeEmail(req.body?.email || '');
+    const password = req.body?.password;
+    const pendingToken = req.cookies?.admin_oauth_pending;
+    if (!pendingToken || !email || typeof password !== 'string' || password.length > 128) {
+      return res.status(400).json({ error: 'Enter your email and password to link this sign-in.' });
+    }
+    try {
+      const result = await query(
+        database,
+        `SELECT p.user_id, p.provider, p.provider_subject, p.provider_email, p.remember_me,
+                u.email, u.full_name, u.password_hash, u.status
+         FROM oauth_pending_admin_links p
+         JOIN users u ON u.id = p.user_id
+         WHERE p.token_hash = $1 AND p.expires_at > NOW()
+           AND LOWER(u.email) = $2
+         LIMIT 1`,
+        [hash(pendingToken), email],
+      );
+      const pending = result.rows[0];
+      const linkedUser = pending ? await getPrimaryRole(database, pending.user_id) : null;
+      if (!pending || pending.status !== 'active' || !linkedUser
+        || !await bcrypt.compare(password, pending.password_hash)) {
+        return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+
+      const completed = await withTransaction(database, async (tx) => {
+        const consumed = await tx.query(
+          `DELETE FROM oauth_pending_admin_links
+           WHERE token_hash = $1 AND expires_at > NOW()
+           RETURNING user_id, provider, provider_subject, provider_email, remember_me`,
+          [hash(pendingToken)],
+        );
+        const state = consumed.rows[0];
+        if (!state || String(state.user_id) !== String(pending.user_id)) {
+          throw new OAuthProviderError('invalid_state');
+        }
+        await tx.query(
+          `INSERT INTO oauth_identities
+             (user_id, provider, provider_subject, provider_email, email_verified)
+           VALUES ($1, $2, $3, $4, TRUE)`,
+          [state.user_id, state.provider, state.provider_subject, state.provider_email],
+        );
+        await tx.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [state.user_id]);
+        const sessionToken = await createSession(tx, state.user_id, state.remember_me);
+        await tx.query(
+          `INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, details, ip_address)
+           VALUES ($1, 'auth.oauth_link', 'user', $1, $2::jsonb, $3)`,
+          [state.user_id, JSON.stringify({ provider: state.provider }), req.ip || null],
+        );
+        return { sessionToken, rememberMe: state.remember_me };
+      });
+      setSessionCookie(res, completed.sessionToken, completed.rememberMe);
+      clearPendingAdminCookie(res);
+      return res.json({
+        user: {
+          id: pending.user_id,
+          name: pending.full_name,
+          email: pending.email,
+          role: linkedUser.role,
+        },
+      });
+    } catch (error) {
+      if (error instanceof OAuthProviderError) {
+        clearPendingAdminCookie(res);
+        return res.status(400).json({ error: 'This sign-in request expired or could not be verified.' });
+      }
+      if (error.code === '23505') {
+        clearPendingAdminCookie(res);
+        return res.status(409).json({ error: 'This provider is already linked to another account.' });
+      }
       return next(error);
     }
   });

@@ -41,7 +41,8 @@ function createDatabase() {
     if (sql.includes('FROM system_settings')) {
       return [[{ setting_key: 'public_registration_enabled', setting_value: 'true' }], []];
     }
-    if (sql.includes("AND r.is_admin = TRUE AND r.is_active = TRUE")) {
+    if (sql.includes("AND (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))")
+      && sql.includes('r.is_active = TRUE')) {
       return [sql.includes('FROM admin_sessions s') && values.includes(hashToken(adminToken)) ? [{ ...adminRow }] : [], []];
     }
     if (sql.startsWith('SELECT COUNT(*) AS total FROM users u')) {
@@ -71,7 +72,11 @@ function createDatabase() {
       };
       return [roles[Number(values[0])] ? [roles[Number(values[0])]] : [], []];
     }
-    if (sql.includes("LOWER(name) = 'customer'")) return [[{ id: 3 }], []];
+    if (sql.startsWith('SELECT id FROM roles WHERE LOWER(name) = ?')) {
+      const roleIds = { customer: 3, organizer: 4, vendor: 5 };
+      const id = roleIds[String(values[0]).toLowerCase()];
+      return [id ? [{ id }] : [], []];
+    }
     if (sql.includes('FROM users WHERE phone = ?')) {
       return [duplicatePhone ? [{ id: 9 }] : [], []];
     }
@@ -206,11 +211,14 @@ test('user management endpoints require an authenticated administrator', async (
   assert.equal(platformUser.status, 401);
 });
 
-test('public registration rejects organizer and vendor role requests', async () => {
-  for (const role of ['organizer', 'vendor']) {
+test('public registration allows supported non-admin roles and rejects administrator', async () => {
+  for (const [index, role] of ['organizer', 'vendor'].entries()) {
     const response = await fetch(`${baseUrl}/api/platform/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Forwarded-For': `198.51.100.${index + 30}`,
+      },
       body: JSON.stringify({
         name: 'New Account',
         email: `${role}@example.test`,
@@ -218,15 +226,34 @@ test('public registration rejects organizer and vendor role requests', async () 
         role,
       }),
     });
-    assert.equal(response.status, 403);
-    assert.deepEqual(await response.json(), { error: 'Public registration is limited to customer accounts.' });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).data.user.role, role);
   }
+
+  const administrator = await fetch(`${baseUrl}/api/platform/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-For': '198.51.100.32',
+    },
+    body: JSON.stringify({
+      name: 'Self Registered Admin',
+      email: 'self-admin@example.test',
+      password: 'StrongPass123',
+      role: 'admin',
+    }),
+  });
+  assert.equal(administrator.status, 403);
+  assert.deepEqual(await administrator.json(), { error: 'Choose a supported account type.' });
 });
 
-test('public registration creates an authenticated customer account only', async () => {
+test('public registration creates an authenticated customer account by default', async () => {
   const response = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-For': '198.51.100.33',
+    },
     body: JSON.stringify({
       name: 'Public Customer',
       email: 'public-customer@example.test',

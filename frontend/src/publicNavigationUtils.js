@@ -137,14 +137,6 @@ export function buildPublicNavigationMenu(categories = [], eventCategories = [],
     .map((item) => categoryLink(item, 'vendor', 'vendorCount'));
   const menu = [
     { key: 'home', label: 'Home', translationKey: 'nav.home', path: '/' },
-    { key: 'events', label: 'Events', translationKey: 'nav.events', path: '/events', children: [
-      { key: 'browse-events', label: 'Browse Events', translationKey: 'nav.events.browse', path: '/events', fixed: true },
-      { key: 'upcoming-events', label: 'Upcoming Events', translationKey: 'nav.events.upcoming', path: '/events?filter=upcoming' },
-      { key: 'free-events', label: 'Free Events', translationKey: 'nav.events.free', path: '/events?filter=free' },
-      { key: 'featured-events', label: 'Featured Events', translationKey: 'nav.events.featured', path: '/events?filter=featured' },
-      { key: 'popular-events', label: 'Popular Events', translationKey: 'nav.events.popular', path: '/events?sort=popular' },
-      { key: 'recent-events', label: 'Recently Added Events', translationKey: 'nav.events.recent', path: '/events?sort=newest' },
-    ] },
     { key: 'vendors', label: 'Find Vendors', translationKey: 'nav.vendors', path: '/vendors', children: [
       { key: 'browse-vendors', label: 'Browse All Vendors', translationKey: 'nav.vendors.browseAll', path: '/vendors', fixed: true },
       { key: 'verified-vendors', label: 'Verified Vendors', translationKey: 'nav.vendors.verified', path: '/vendors?verified=true' },
@@ -159,6 +151,14 @@ export function buildPublicNavigationMenu(categories = [], eventCategories = [],
         expandable: true,
         children: vendorItems.map((item) => ({ ...item, database: true })),
       },
+    ] },
+    { key: 'events', label: 'Events', translationKey: 'nav.events', path: '/events', children: [
+      { key: 'browse-events', label: 'Browse Events', translationKey: 'nav.events.browse', path: '/events', fixed: true },
+      { key: 'upcoming-events', label: 'Upcoming Events', translationKey: 'nav.events.upcoming', path: '/events?filter=upcoming' },
+      { key: 'free-events', label: 'Free Events', translationKey: 'nav.events.free', path: '/events?filter=free' },
+      { key: 'featured-events', label: 'Featured Events', translationKey: 'nav.events.featured', path: '/events?filter=featured' },
+      { key: 'popular-events', label: 'Popular Events', translationKey: 'nav.events.popular', path: '/events?sort=popular' },
+      { key: 'recent-events', label: 'Recently Added Events', translationKey: 'nav.events.recent', path: '/events?sort=newest' },
     ] },
     { key: 'services', label: 'Services', translationKey: 'nav.services', path: '/services', children: [
       ...serviceItems,

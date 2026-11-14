@@ -20,6 +20,7 @@ import {
   authenticateAdministrator,
   authenticatePlatformUser,
   dashboardPathForRole,
+  getAdministratorSessionExpiredRedirect,
 } from './adminAuthentication.js';
 import { withStableKeys } from './listKeys.js';
 import { getHomepageCategoryCounts, getHomepageCategoryTranslationKey, getHomepageLocationOptions, getHomepageStatistics, getHomepageTestimonials } from './homepageUtils.js';
@@ -45,7 +46,7 @@ import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { createDemoDataService } from './demoData.js';
-import { buildOAuthStartUrl, getConfiguredOAuthProviders, parseOAuthProviderStatuses } from './oauthProviders.js';
+import { buildOAuthStartUrl, getConfiguredOAuthProviders } from './oauthProviders.js';
 const EventCountdown = React.lazy(() => import('./EventsExperience.jsx').then(({ EventCountdown }) => ({ default: EventCountdown })));
 const EventDetailsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ EventDetailsPage }) => ({ default: EventDetailsPage })));
 const MyEventBookingsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ MyEventBookingsPage }) => ({ default: MyEventBookingsPage })));
@@ -360,14 +361,13 @@ function resolveApiAssetUrl(path) {
   return new URL(path, baseUrl).toString();
 }
 
-function oauthStartUrl(provider, intent = 'login') {
-  return buildOAuthStartUrl(apiClient.defaults.baseURL, provider, intent);
+function oauthStartUrl(provider, intent = 'login', rememberMe = false) {
+  return buildOAuthStartUrl(apiClient.defaults.baseURL, provider, intent, { rememberMe });
 }
 
 const oauthProviderDetails = {
-  google: { nameKey: 'oauthGoogle', labelKey: 'oauthContinueGoogle', unavailableKey: 'oauthGoogleNotConfigured' },
-  facebook: { nameKey: 'oauthFacebook', labelKey: 'oauthContinueFacebook', unavailableKey: 'oauthFacebookNotConfigured' },
-  apple: { nameKey: 'oauthApple', labelKey: 'oauthContinueApple', unavailableKey: 'oauthAppleNotConfigured' },
+  google: { nameKey: 'oauthGoogle', labelKey: 'oauthContinueGoogle' },
+  microsoft: { nameKey: 'oauthMicrosoft', labelKey: 'oauthContinueMicrosoft' },
 };
 
 function OAuthProviderIcon({ provider }) {
@@ -379,93 +379,60 @@ function OAuthProviderIcon({ provider }) {
       <path fill="#EA4335" d="M24 12c3 0 5.6 1 7.7 3l5.8-5.8C34 5.8 29.5 4 24 4A20 20 0 0 0 5.8 15.2l6.8 5.2C14.2 15.6 18.7 12 24 12Z"/>
     </svg>;
   }
-  if (provider === 'facebook') {
+  if (provider === 'microsoft') {
     return <svg className="oauth-provider-icon" viewBox="0 0 24 24" aria-hidden="true">
-      <path fill="#1877F2" d="M13.5 24v-8.7h2.9l.4-3.4h-3.3V9.7c0-1 .3-1.7 1.7-1.7H17V5c-.3 0-1.4-.1-2.7-.1-2.7 0-4.5 1.6-4.5 4.6v2.5H7v3.4h2.8V24h3.7Z"/>
+      <path fill="#F25022" d="M1 1h10v10H1z" />
+      <path fill="#7FBA00" d="M13 1h10v10H13z" />
+      <path fill="#00A4EF" d="M1 13h10v10H1z" />
+      <path fill="#FFB900" d="M13 13h10v10H13z" />
     </svg>;
   }
-  return <svg className="oauth-provider-icon oauth-apple-icon" viewBox="0 0 24 24" aria-hidden="true">
-    <path fill="currentColor" d="M16.37 12.22c.02 2.18 1.91 2.9 1.93 2.91-.02.05-.3 1.04-.99 2.06-.6.89-1.22 1.78-2.2 1.8-.96.02-1.27-.58-2.37-.58s-1.45.56-2.36.6c-.95.03-1.67-.97-2.27-1.86-1.24-1.8-2.19-5.08-.92-7.3.63-1.1 1.76-1.8 2.99-1.82.93-.02 1.8.63 2.37.63.57 0 1.63-.78 2.75-.67.47.02 1.8.19 2.65 1.43-.07.04-1.58.92-1.56 2.8ZM14.57 5.93c.5-.6.83-1.43.74-2.26-.72.03-1.59.48-2.11 1.08-.46.53-.87 1.37-.76 2.17.8.06 1.63-.4 2.13-.99Z"/>
-  </svg>;
+  return null;
 }
 
-function OAuthButtons({ intent = 'login' }) {
+function OAuthButtons({
+  intent = 'login',
+  allowedProviders = ['google', 'microsoft'],
+  labelMode = 'continue',
+  rememberMe = false,
+}) {
   const language = useLanguage();
-  const [providerStatuses, setProviderStatuses] = useState({});
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
   const [busyProvider, setBusyProvider] = useState('');
-  const [retryCount, setRetryCount] = useState(0);
-  useEffect(() => {
-    const controller = new AbortController();
-    setLoading(true);
-    setError('');
-    api('/platform/oauth/providers', { signal: controller.signal })
-      .then((response) => {
-        setProviderStatuses(parseOAuthProviderStatuses(response));
-        setError('');
-      })
-      .catch((issue) => {
-        if (issue.name !== 'AbortError') {
-          setProviderStatuses({});
-          const messageKey = issue.code === 'INVALID_OAUTH_PROVIDER_RESPONSE'
-            ? 'oauthProviderResponseInvalid'
-            : issue.status
-              ? 'oauthDiscoveryFailed'
-              : 'oauthServiceUnreachable';
-          setError(translate(messageKey, language));
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [language, retryCount]);
 
   function startSignIn(event, provider) {
-    if (busyProvider || loading || error || providerStatuses[provider] !== 'configured') {
+    if (busyProvider) {
       event.preventDefault();
       return;
     }
     setBusyProvider(provider);
-    setError('');
   }
+
+  const visibleProviders = allowedProviders.filter((provider) => Object.hasOwn(oauthProviderDetails, provider));
+  const buttonLabelKey = (provider) => {
+    const details = oauthProviderDetails[provider];
+    if (labelMode === 'provider') return details.nameKey;
+    return details.labelKey;
+  };
 
   return <div className="oauth-options">
     <div className="oauth-divider"><span>{translate('oauthOrContinue', language)}</span></div>
-    {loading && <p className="oauth-status" role="status">{translate('oauthCheckingAvailability', language)}</p>}
-    {error && <div className="oauth-error" role="alert">
-      <p>{error}</p>
-      <button className="oauth-retry-button" type="button" onClick={() => setRetryCount((count) => count + 1)}>
-        {translate('oauthRetry', language)}
-      </button>
-    </div>}
-    {Object.keys(oauthProviderDetails).map((provider) => {
-      const details = oauthProviderDetails[provider];
-      const enabled = providerStatuses[provider] === 'configured';
+    {visibleProviders.map((provider) => {
       const busy = busyProvider === provider;
       return <a
-        className={`oauth-provider-button${!enabled || busyProvider || loading || error ? ' is-disabled' : ''}`}
-        href={enabled ? oauthStartUrl(provider, intent) : undefined}
+        className={`oauth-provider-button${busyProvider && !busy ? ' is-disabled' : ''}`}
+        href={oauthStartUrl(provider, intent, rememberMe)}
         key={provider}
-        aria-disabled={!enabled || Boolean(busyProvider) || loading || Boolean(error)}
+        aria-disabled={Boolean(busyProvider && !busy)}
         aria-busy={busy}
-        aria-label={busy ? `${translate(details.labelKey, language)} — ${translate('oauthConnecting', language)}` : undefined}
-        tabIndex={!enabled || busyProvider || loading || error ? -1 : undefined}
+        aria-label={`${translate(buttonLabelKey(provider), language)}${busy ? ` — ${translate('oauthConnecting', language)}` : ''}`}
+        tabIndex={busyProvider && !busy ? -1 : undefined}
         onClick={(event) => startSignIn(event, provider)}
       >
         {busy
           ? <><span className="oauth-loading-spinner" aria-hidden="true" />{translate('oauthConnecting', language)}</>
-          : <><OAuthProviderIcon provider={provider} />{translate(details.labelKey, language)}</>}
+          : <><OAuthProviderIcon provider={provider} />{translate(buttonLabelKey(provider), language)}</>}
       </a>;
     })}
-    {!loading && !error && Object.keys(oauthProviderDetails).map((provider) => (
-      providerStatuses[provider] !== 'configured'
-        ? <p className="oauth-status" key={`${provider}-status`} role="status">
-            {translate(oauthProviderDetails[provider].unavailableKey, language)}
-          </p>
-        : null
-    ))}
   </div>;
 }
 
@@ -474,6 +441,12 @@ function oauthNoticeFromPath(path, language) {
   const status = params.get('oauth');
   if (status === 'success') return translate('oauthSignInSuccess', language);
   if (status === 'linked') return translate('oauthLinkSuccess', language);
+  if (status === 'link_required') {
+    return translate(String(path).split('?')[0] === '/admin/login'
+      ? 'oauthAdminLinkRequired'
+      : 'oauthAccountLinkRequired', language);
+  }
+  if (status === 'registration_required') return translate('oauthRegistrationRequired', language);
   if (status !== 'error') return '';
   const messages = {
     cancelled: 'oauthCancelled',
@@ -483,9 +456,19 @@ function oauthNoticeFromPath(path, language) {
     account_conflict: 'oauthAccountConflict',
     registration_disabled: 'oauthRegistrationDisabled',
     provider_unavailable: 'oauthProviderUnavailable',
+    admin_account_not_found: 'oauthAdminAccountNotFound',
     frontend_unavailable: 'oauthProviderUnavailable',
     session_expired: 'oauthSessionExpired',
+    account_unavailable: 'oauthAccountUnavailable',
   };
+  if (params.get('reason') === 'provider_not_configured') {
+    const key = params.get('provider') === 'google'
+      ? 'oauthGoogleUnavailableOnClick'
+      : params.get('provider') === 'microsoft'
+        ? 'oauthMicrosoftUnavailableOnClick'
+        : 'oauthProviderUnavailable';
+    return translate(key, language);
+  }
   return translate(messages[params.get('reason')] || 'oauthTryAgain', language);
 }
 
@@ -687,6 +670,8 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   const [searchError, setSearchError] = useState('');
   const [searchRetry, setSearchRetry] = useState(0);
   const [activeSearchSuggestion, setActiveSearchSuggestion] = useState(-1);
+  const [siteContactInfo, setSiteContactInfo] = useState({});
+  const [contactInfoError, setContactInfoError] = useState(false);
   const isAuthenticated = Boolean(user);
   const routePath = currentPath.split('?')[0];
   const accountMenuRef = useRef(null);
@@ -702,7 +687,26 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   const profilePath = role === 'admin'
     ? '/admin/profile'
     : `${dashboardPath}?view=${role === 'vendor' ? 'account' : 'profile'}`;
+  const accountSettingsPath = role === 'admin' ? adminPathForSlug('account-settings') : profilePath;
   const displayName = user?.name || user?.full_name || user?.email || 'EventHub User';
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api('/contact', { signal: controller.signal })
+      .then((response) => {
+        if (!response?.data?.contact || typeof response.data.contact !== 'object') {
+          throw new Error('Public contact settings returned an invalid response.');
+        }
+        setSiteContactInfo(buildContactInfo(response.data.contact));
+        setContactInfoError(false);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setContactInfoError(true);
+        console.error('Public contact settings could not be loaded:', error.message);
+      });
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     if (!notificationEndpoint) {
@@ -887,78 +891,123 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
     onNavigate(role === 'admin' ? '/admin/notifications' : `${dashboardPath}?view=notifications`);
   }
 
-  return <><ContactTopBar/><header className="site-header"><div className="site-header-inner">
-    <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}><img className="site-brand-logo" src={platformLogo || '/eventhub-logo.png'} alt={platformName} /></a>
-    <button type="button" className="mobile-nav-toggle" aria-label={translate(mobileMenuOpen ? 'closeMenu' : 'openMenu', language)} aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <X size={20}/> : <Menu size={20}/>}</button>
-    <PublicNavigation currentPath={currentPath} mobileOpen={mobileMenuOpen} onCloseMobile={closeMobileMenu} onNavigate={onNavigate} api={api} user={user} />
-    <div className="header-actions public-header-actions">
-      <div className="public-header-tools" ref={headerToolsRef}>
-        <div className="public-search-anchor">
-          <button type="button" className="public-header-icon-button public-global-search" aria-label={translate('search', language)} title={translate('search', language)} aria-expanded={searchOpen} aria-controls="header-search-panel" onClick={() => { setNotificationsOpen(false); setSearchOpen((open) => !open); }}><Search size={19} aria-hidden="true"/></button>
-          {searchOpen && <section id="header-search-panel" className="public-search-panel" aria-label={translate('search', language)}>
-            <form role="search" onSubmit={submitHeaderSearch}>
-              <label className="visually-hidden" htmlFor="header-search-input">{translate('searchAll', language)}</label>
-              <div className="public-search-input-row">
-                <Search size={18} aria-hidden="true"/>
-                <input
-                  id="header-search-input"
-                  ref={searchInputRef}
-                  type="search"
-                  value={searchQuery}
-                  maxLength="120"
-                  placeholder={translate('searchAll', language)}
-                  aria-label={translate('searchAll', language)}
-                  role="combobox"
-                  aria-autocomplete="list"
-                  aria-expanded={searchLoading || searchError !== '' || searchSuggestions.length > 0}
-                  aria-controls="header-search-suggestions"
-                  aria-activedescendant={activeSearchSuggestion >= 0 ? `header-search-option-${activeSearchSuggestion}` : undefined}
-                  onChange={(event) => { setSearchQuery(event.target.value); setSearchError(''); setActiveSearchSuggestion(-1); }}
-                  onKeyDown={handleHeaderSearchKeyDown}
-                />
-                <button type="submit" className="public-search-submit" aria-label={translate('search', language)} title={translate('search', language)}><Search size={17} aria-hidden="true"/></button>
-              </div>
-              {(searchLoading || searchError || searchSuggestions.length > 0 || searchQuery.trim().length >= 2) && <ul id="header-search-suggestions" className="public-search-suggestions" role="listbox">
-                {searchLoading ? <li className="public-search-state" role="option" aria-selected="false">{translate('searchLoading', language)}</li>
-                  : searchError ? <li className="public-search-state public-search-error" role="none"><span>{translate('searchFailed', language)}</span><button type="button" onClick={() => setSearchRetry((retry) => retry + 1)}>{translate('retry', language)}</button></li>
-                    : searchSuggestions.length ? searchSuggestions.map((suggestion, index) => <li role="none" key={suggestion.id}>
-                      <button id={`header-search-option-${index}`} type="button" role="option" aria-selected={activeSearchSuggestion === index} onClick={() => chooseHeaderSearchSuggestion(suggestion)}>
-                        <span>{suggestion.name}</span>{suggestion.detail && <small>{suggestion.detail}</small>}
-                      </button>
-                    </li>)
-                      : <li className="public-search-state" role="option" aria-selected="false">{translate('searchNoResults', language)}</li>}
-              </ul>}
-            </form>
-          </section>}
-        </div>
-        {notificationEndpoint && <div className="public-notification-anchor">
-          <button type="button" className="public-header-icon-button public-notification-toggle" aria-label={`${translate('notifications', language)}${unreadCount ? `, ${unreadCount} ${translate('unread', language)}` : ''}`} title={translate('notifications', language)} aria-expanded={notificationsOpen} aria-controls="header-notifications-panel" onClick={() => { setSearchOpen(false); setNotificationsOpen((open) => !open); }}><Bell size={19} aria-hidden="true"/>{unreadCount > 0 && <span className="notification-count" aria-label={`${unreadCount} ${translate('unread', language)}`}>{formatNotificationBadgeCount(unreadCount)}</span>}</button>
-          {notificationsOpen && <section id="header-notifications-panel" className="public-notification-panel" aria-label={translate('notifications', language)} aria-live="polite">
-            <div className="public-notification-heading">
-              <div><strong>{translate('notifications', language)}</strong><span>{unreadCount ? `${unreadCount} ${translate('unread', language)}` : translate('allCaughtUp', language)}</span></div>
-              {unreadCount > 0 && <button type="button" onClick={markAllNotificationsRead} disabled={notificationBusy}>{translate('markAllAsRead', language)}</button>}
-            </div>
-            {notificationLoading ? <div className="public-notification-empty" role="status">{translate('notificationsLoading', language)}</div>
-              : notificationError ? <div className="public-notification-error"><span>{notificationError}</span><button type="button" onClick={() => setNotificationRetry((retry) => retry + 1)}>{translate('retry', language)}</button></div>
-                : notificationItems.length ? <ul>{notificationItems.slice(0, 8).map((item) => <li key={item.id} className={isUnreadNotification(item) ? 'unread' : ''}>
-                  <strong>{item.title}</strong><p>{item.message}</p>
-                  {(item.createdAt || item.created_at) && <time dateTime={item.createdAt || item.created_at}>{new Date(item.createdAt || item.created_at).toLocaleString()}</time>}
-                  {isUnreadNotification(item) && <button type="button" onClick={() => markNotificationRead(item)} disabled={notificationBusy}>{translate('markAsRead', language)}</button>}
-                </li>)}</ul> : <div className="public-notification-empty">{translate('allCaughtUp', language)}</div>}
-            {notificationActionError && <div className="public-notification-error" role="alert">{translate('notificationUpdateFailed', language)} {notificationActionError}</div>}
-            <div className="public-notification-footer"><button type="button" onClick={viewAllNotifications}>{translate('viewAllNotifications', language)}</button></div>
-          </section>}
-        </div>}
-      </div>
-      <LanguageSelector user={user}/><ThemeToggle/>
+  return <>
+    <a className="skip-to-content" href="#main-content">{translate('skipToContent', language)}</a>
+    <ContactTopBar contactInfo={siteContactInfo} contactError={contactInfoError}>
+      <LanguageSelector user={user} showIcon={false} />
+      <span className="utility-divider" aria-hidden="true" />
+      <ThemeToggle />
+      <span className="utility-divider" aria-hidden="true" />
       {isAuthenticated ? <details className="public-account" ref={accountMenuRef}>
-      <summary className="public-account-trigger" aria-label={translate('accountControl', language)}><span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span><span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span><ChevronDown size={15}/></summary>
-      <div className="public-account-menu">{role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/ai-chat'); }}>{translate('aiChatAssistant', language)}</button>}{role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/account/connections'); }}>{translate('oauthConnectedAccounts', language)}</button>}<button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button><button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('logout', language)}</button></div>
-    </details> : <div className="public-auth-actions"><button type="button" className="button secondary small" onClick={onOpenLogin}>{translate('login', language)}</button><button type="button" className="button small" onClick={onOpenRegister}>{translate('register', language)}</button></div>}</div>
-  </div></header>{['error', 'rate-limited', 'waking'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState}/>}</>;
+        <summary className="public-account-trigger" aria-label={`${displayName}, ${translate(`${role}Dashboard`, language)}. ${translate('accountControl', language)}`}>
+          <span className="public-account-avatar" aria-hidden="true">{displayName.trim().charAt(0).toUpperCase()}</span>
+          <span className="public-account-copy"><strong>{displayName}</strong><small>{translate(`${role}Dashboard`, language)}</small></span>
+          <ChevronDown size={15} aria-hidden="true" />
+        </summary>
+        <div className="public-account-menu">
+          {role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/ai-chat'); }}>{translate('aiChatAssistant', language)}</button>}
+          {role !== 'admin' && !DEMO_AUTH_ENABLED && <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate('/account/connections'); }}>{translate('oauthConnectedAccounts', language)}</button>}
+          <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(dashboardPath); }}>{translate('goToDashboard', language)}</button>
+          <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(accountSettingsPath); }}>{translate('accountSettings', language)}</button>
+          <button type="button" onClick={() => { accountMenuRef.current.open = false; onNavigate(profilePath); }}>{translate('profile', language)}</button>
+          <button type="button" onClick={() => { accountMenuRef.current.open = false; onLogout(); }}>{translate('signOut', language)}</button>
+        </div>
+      </details> : <div className="public-auth-actions">
+        <button type="button" className="public-login-button" onClick={onOpenLogin}>{translate('login', language)}</button>
+        <button type="button" className="public-register-button" onClick={onOpenRegister}>{translate('register', language)}</button>
+      </div>}
+    </ContactTopBar>
+    <header className="site-header">
+      <div className="site-header-inner">
+        <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}>
+          <img className="site-brand-logo" src={platformLogo || '/eventhub-logo.png'} alt={`${platformName} logo`} />
+          <span className="site-brand-tagline">Plan. Book. Celebrate.</span>
+        </a>
+        <PublicNavigation
+          currentPath={currentPath}
+          mobileOpen={mobileMenuOpen}
+          onCloseMobile={closeMobileMenu}
+          onNavigate={onNavigate}
+          api={api}
+          user={user}
+          contactInfo={siteContactInfo}
+          contactSettingsError={contactInfoError}
+        />
+        <div className="header-actions public-header-actions">
+          <div className="public-header-tools" ref={headerToolsRef}>
+            <div className="public-search-anchor">
+              <button type="button" className="public-header-icon-button public-global-search" aria-label={translate('search', language)} title={translate('search', language)} aria-expanded={searchOpen} aria-controls="header-search-panel" onClick={() => { setNotificationsOpen(false); setSearchOpen((open) => !open); }}><Search size={19} aria-hidden="true"/></button>
+              {searchOpen && <section id="header-search-panel" className="public-search-panel" aria-label={translate('search', language)}>
+                <form role="search" onSubmit={submitHeaderSearch}>
+                  <label className="visually-hidden" htmlFor="header-search-input">{translate('searchAll', language)}</label>
+                  <div className="public-search-input-row">
+                    <Search size={18} aria-hidden="true"/>
+                    <input
+                      id="header-search-input"
+                      ref={searchInputRef}
+                      type="search"
+                      value={searchQuery}
+                      maxLength="120"
+                      placeholder={translate('searchAll', language)}
+                      aria-label={translate('searchAll', language)}
+                      role="combobox"
+                      aria-autocomplete="list"
+                      aria-expanded={searchLoading || searchError !== '' || searchSuggestions.length > 0}
+                      aria-controls="header-search-suggestions"
+                      aria-activedescendant={activeSearchSuggestion >= 0 ? `header-search-option-${activeSearchSuggestion}` : undefined}
+                      onChange={(event) => { setSearchQuery(event.target.value); setSearchError(''); setActiveSearchSuggestion(-1); }}
+                      onKeyDown={handleHeaderSearchKeyDown}
+                    />
+                    <button type="submit" className="public-search-submit" aria-label={translate('search', language)} title={translate('search', language)}><Search size={17} aria-hidden="true"/></button>
+                  </div>
+                  {(searchLoading || searchError || searchSuggestions.length > 0 || searchQuery.trim().length >= 2) && <ul id="header-search-suggestions" className="public-search-suggestions" role="listbox">
+                    {searchLoading ? <li className="public-search-state" role="option" aria-selected="false">{translate('searchLoading', language)}</li>
+                      : searchError ? <li className="public-search-state public-search-error" role="none"><span>{translate('searchFailed', language)}</span><button type="button" onClick={() => setSearchRetry((retry) => retry + 1)}>{translate('retry', language)}</button></li>
+                        : searchSuggestions.length ? searchSuggestions.map((suggestion, index) => <li role="none" key={suggestion.id}>
+                          <button id={`header-search-option-${index}`} type="button" role="option" aria-selected={activeSearchSuggestion === index} onClick={() => chooseHeaderSearchSuggestion(suggestion)}>
+                            <span>{suggestion.name}</span>{suggestion.detail && <small>{suggestion.detail}</small>}
+                          </button>
+                        </li>)
+                          : <li className="public-search-state" role="option" aria-selected="false">{translate('searchNoResults', language)}</li>}
+                  </ul>}
+                </form>
+              </section>}
+            </div>
+            {notificationEndpoint && <div className="public-notification-anchor">
+              <button type="button" className="public-header-icon-button public-notification-toggle" aria-label={`${translate('notifications', language)}${unreadCount ? `, ${unreadCount} ${translate('unread', language)}` : ''}`} title={translate('notifications', language)} aria-expanded={notificationsOpen} aria-controls="header-notifications-panel" onClick={() => { setSearchOpen(false); setNotificationsOpen((open) => !open); }}><Bell size={19} aria-hidden="true"/>{unreadCount > 0 && <span className="notification-count" aria-label={`${unreadCount} ${translate('unread', language)}`}>{formatNotificationBadgeCount(unreadCount)}</span>}</button>
+              {notificationsOpen && <section id="header-notifications-panel" className="public-notification-panel" aria-label={translate('notifications', language)} aria-live="polite">
+                <div className="public-notification-heading">
+                  <div><strong>{translate('notifications', language)}</strong><span>{unreadCount ? `${unreadCount} ${translate('unread', language)}` : translate('allCaughtUp', language)}</span></div>
+                  {unreadCount > 0 && <button type="button" onClick={markAllNotificationsRead} disabled={notificationBusy}>{translate('markAllAsRead', language)}</button>}
+                </div>
+                {notificationLoading ? <div className="public-notification-empty" role="status">{translate('notificationsLoading', language)}</div>
+                  : notificationError ? <div className="public-notification-error"><span>{notificationError}</span><button type="button" onClick={() => setNotificationRetry((retry) => retry + 1)}>{translate('retry', language)}</button></div>
+                    : notificationItems.length ? <ul>{notificationItems.slice(0, 8).map((item) => <li key={item.id} className={isUnreadNotification(item) ? 'unread' : ''}>
+                      <strong>{item.title}</strong><p>{item.message}</p>
+                      {(item.createdAt || item.created_at) && <time dateTime={item.createdAt || item.created_at}>{new Date(item.createdAt || item.created_at).toLocaleString()}</time>}
+                      {isUnreadNotification(item) && <button type="button" onClick={() => markNotificationRead(item)} disabled={notificationBusy}>{translate('markAsRead', language)}</button>}
+                    </li>)}</ul> : <div className="public-notification-empty">{translate('allCaughtUp', language)}</div>}
+                {notificationActionError && <div className="public-notification-error" role="alert">{translate('notificationUpdateFailed', language)} {notificationActionError}</div>}
+                <div className="public-notification-footer"><button type="button" onClick={viewAllNotifications}>{translate('viewAllNotifications', language)}</button></div>
+              </section>}
+            </div>}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="mobile-nav-toggle"
+          aria-label={translate(mobileMenuOpen ? 'closeMenu' : 'openMenu', language)}
+          aria-expanded={mobileMenuOpen}
+          aria-controls="public-primary-navigation"
+          onClick={() => setMobileMenuOpen((open) => !open)}
+        >{mobileMenuOpen ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}</button>
+      </div>
+    </header>
+    {['error', 'rate-limited', 'waking'].includes(authSessionState.status) && <SessionStatusNotice sessionState={authSessionState} />}
+  </>;
 }
 
-function LanguageSelector({ user, isAdmin = false }) {
+function LanguageSelector({ user, isAdmin = false, showIcon = true }) {
   const language = useLanguage();
   const [preferenceError, setPreferenceError] = useState('');
   const [savingPreference, setSavingPreference] = useState(false);
@@ -986,10 +1035,13 @@ function LanguageSelector({ user, isAdmin = false }) {
   return <span className="language-picker-wrap">
     <label className="language-picker">
       <span className="visually-hidden">{translate('languageLabel', language)}</span>
+      {showIcon && <Languages size={16} aria-hidden="true" />}
+      <span className="language-picker-flag" aria-hidden="true">{language === 'am' ? '🇪🇹' : '🇺🇸'}</span>
       <select value={language} aria-label={translate('languageLabel', language)} onChange={changeLanguage} disabled={savingPreference}>
         <option value="en">English</option>
         <option value="am">አማርኛ</option>
       </select>
+      <ChevronDown size={14} aria-hidden="true" />
     </label>
     {preferenceError && <span className="language-preference-error" role="alert">{preferenceError}</span>}
   </span>;
@@ -999,8 +1051,8 @@ function ThemeToggle() {
   const language = useLanguage();
   const theme = useTheme();
   const nextTheme = theme === 'light' ? 'dark' : 'light';
-  return <button type="button" className="theme-toggle" aria-label={translate(theme === 'light' ? 'switchToDarkMode' : 'switchToLightMode', language)} title={translate(theme === 'light' ? 'switchToDarkMode' : 'switchToLightMode', language)} onClick={() => setTheme(nextTheme)}>
-    {theme === 'light' ? <Moon size={16}/> : <Sun size={16}/>}<span>{translate(theme === 'light' ? 'lightMode' : 'darkMode', language)}</span>
+  return <button type="button" className="theme-toggle" aria-label={translate(theme === 'light' ? 'switchToDarkMode' : 'switchToLightMode', language)} title={translate(theme === 'light' ? 'switchToDarkMode' : 'switchToLightMode', language)} aria-pressed={theme === 'dark'} onClick={() => setTheme(nextTheme)}>
+    {theme === 'light' ? <Moon size={17} aria-hidden="true" /> : <Sun size={17} aria-hidden="true" />}
   </button>;
 }
 
@@ -1899,7 +1951,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
 
   return <>
     <AppHeader user={user} currentPath={currentPath || '/'} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />
-    <main className="platform-landing">
+    <main className="platform-landing" id="main-content" tabIndex="-1">
       <section className="homepage-hero">
         <HomeHeroSlider onNavigate={onNavigate} />
         <div className="homepage-hero-content">
@@ -2194,7 +2246,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
 }
 
 function PublicPageLayout({ currentPath, user, onNavigate, onLogout, children }) {
-  return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} />{children}<AppFooter /><AIChatWidget user={user} onNavigate={onNavigate}/></>;
+  return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} /><div id="main-content" className="public-main-content" tabIndex="-1">{children}</div><AppFooter /><AIChatWidget user={user} onNavigate={onNavigate}/></>;
 }
 
 function getBrowseEventStatus(event) {
@@ -4067,20 +4119,47 @@ function AuthHomeLink() {
 
 function LoginPage({
   onLogin,
+  onOAuthLink,
   showForgotPassword = true,
   administrator = false,
   oauthNotice = '',
-  showSocialLogin = !DEMO_AUTH_ENABLED,
+  showSocialLogin = true,
 }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [email, setEmail] = useState('');
+  const queryParams = new URLSearchParams(window.location.search);
+  const pendingLink = queryParams.get('oauth') === 'link_required';
+  const [callbackError, setCallbackError] = useState(() => {
+    if (queryParams.get('oauth') !== 'error') return null;
+    return {
+      reason: queryParams.get('reason') || '',
+      provider: queryParams.get('provider') || '',
+    };
+  });
+  const [callbackErrorDismissed, setCallbackErrorDismissed] = useState(false);
+  const [email, setEmail] = useState(() => queryParams.get('email') || '');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [accountNotFound, setAccountNotFound] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
+  const registrationSucceeded = queryParams.get('registered') === '1';
+  const sessionExpired = queryParams.get('sessionExpired') === '1';
+  useEffect(() => {
+    if (!callbackError) return;
+    const currentUrl = new URL(window.location.href);
+    if (currentUrl.searchParams.get('oauth') !== 'error') return;
+    currentUrl.searchParams.delete('oauth');
+    currentUrl.searchParams.delete('reason');
+    currentUrl.searchParams.delete('provider');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+    );
+  }, [callbackError]);
   async function submit(event) {
     event.preventDefault();
     const nextFieldErrors = {};
@@ -4090,15 +4169,20 @@ function LoginPage({
     if (Object.keys(nextFieldErrors).length) {
       setFieldErrors(nextFieldErrors);
       setError('');
+      setAccountNotFound(false);
       return;
     }
     setFieldErrors({});
     setBusy(true);
     setError('');
+    setAccountNotFound(false);
     try {
-      await onLogin(email, password, rememberMe);
+      if (pendingLink && onOAuthLink) await onOAuthLink(email, password);
+      else await onLogin(email, password, rememberMe);
     } catch (issue) {
-      setError(translateText(issue.message, language));
+      setError(issue.message);
+      setAccountNotFound(issue.status === 404
+        || issue.message === 'No account found. Please create an account first.');
     } finally {
       setBusy(false);
     }
@@ -4107,8 +4191,16 @@ function LoginPage({
   return <AuthLayout languageSelector={<LanguageSelector/>}><section className="login-card">
     <h1>{t('loginHeading')}</h1>
     <p className="muted">{administrator ? t('useAdminAccount') : t('loginSubtitle')}</p>
-    {oauthNotice && <div className={`alert ${new URLSearchParams(window.location.search).get('oauth') === 'error' ? 'error' : 'success'}`} role={new URLSearchParams(window.location.search).get('oauth') === 'error' ? 'alert' : 'status'}>{oauthNotice}</div>}
-    {error && <div className="alert error" role="alert">{error}</div>}
+    {!callbackError && !callbackErrorDismissed && oauthNotice
+      && <div className={`alert ${queryParams.get('oauth') === 'link_required' ? 'error' : 'success'}`} role={queryParams.get('oauth') === 'link_required' ? 'alert' : 'status'}>{oauthNotice}</div>}
+    {registrationSucceeded && <div className="alert success" role="status">{t('registrationSuccess')}</div>}
+    {sessionExpired && <div className="alert error" role="alert">{t('runtimeSessionExpired')}</div>}
+    {pendingLink && <p className="oauth-link-note">{t(administrator ? 'oauthAdminLinkPasswordNote' : 'oauthAccountLinkPasswordNote')}</p>}
+    {error && <div className="alert error" role="alert">{translateText(error, language)}{accountNotFound
+      && <> <a className="text-link" href="/register" onClick={(event) => {
+        event.preventDefault();
+        navigateBrowserPath('/register');
+      }}>{t('createAccountAction')}</a></>}</div>}
     <form className="login-form" noValidate onSubmit={submit}>
       <label className="auth-field" htmlFor="login-email">
         <span>{t('emailAddress')}</span>
@@ -4134,13 +4226,35 @@ function LoginPage({
         </label>
         {showForgotPassword && <button type="button" className="text-link auth-forgot-link" onClick={() => navigateBrowserPath('/forgot-password')}>{t('forgotPassword')}</button>}
       </div>
-      <button type="submit" className="button login-button" disabled={busy}>{busy ? <><span className="login-loading-spinner" aria-hidden="true" />{t('signingIn')}</> : t('signIn')}</button>
+      <button type="submit" className="button login-button" disabled={busy}>{busy ? <><span className="login-loading-spinner" aria-hidden="true" />{pendingLink ? t('oauthLinking') : t('signingIn')}</> : pendingLink ? t('oauthLinkAndSignIn') : t('signIn')}</button>
     </form>
 
-    {!administrator && showSocialLogin && <OAuthButtons />}
+    {showSocialLogin && <>
+      {callbackError && <div className="oauth-callback-notice" role="alert">
+        <span>{oauthNoticeFromPath(
+          `?oauth=error&reason=${encodeURIComponent(callbackError.reason)}&provider=${encodeURIComponent(callbackError.provider)}`,
+          language,
+        )}</span>
+        <button type="button" aria-label={t('dismiss')} onClick={() => {
+          setCallbackError(null);
+          setCallbackErrorDismissed(true);
+        }}>
+          <X size={16} aria-hidden="true" />
+        </button>
+      </div>}
+      <OAuthButtons
+        intent={administrator ? 'admin-login' : 'login'}
+        labelMode={administrator ? 'provider' : 'continue'}
+        rememberMe={rememberMe}
+      />
+    </>}
     {!administrator && <div className="login-account-links">
       <span>{t('noAccount')}</span>
       <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createOne')}</button>
+    </div>}
+    {administrator && <div className="login-account-links">
+      <span>{t('noAccount')}</span>
+      <button type="button" className="text-link" onClick={() => navigateBrowserPath('/register')}>{t('createAccountAction')}</button>
     </div>}
     <div className="auth-home-footer"><AuthHomeLink /></div>
   </section></AuthLayout>;
@@ -4149,22 +4263,45 @@ function LoginPage({
 function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled = true }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
+  const searchParams = new URLSearchParams(window.location.search);
+  const [form, setForm] = useState({
+    name: searchParams.get('name') || '',
+    email: searchParams.get('email') || '',
+    password: '',
+    confirmPassword: '',
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [duplicateEmail, setDuplicateEmail] = useState(false);
   const [validationAttempted, setValidationAttempted] = useState(false);
-  const redirectTimer = useRef(null);
-  useEffect(() => () => window.clearTimeout(redirectTimer.current), []);
+  const [callbackError, setCallbackError] = useState(() => searchParams.get('oauth') === 'error'
+    ? { reason: searchParams.get('reason') || '', provider: searchParams.get('provider') || '' }
+    : null);
+  useEffect(() => {
+    if (!callbackError) return undefined;
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.delete('oauth');
+    currentUrl.searchParams.delete('reason');
+    currentUrl.searchParams.delete('provider');
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+    );
+    return undefined;
+  }, [callbackError]);
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
   const validationErrors = {
-    name: form.name.trim() ? '' : t('fullNameRequired'),
+    name: form.name.trim().length >= 2 ? '' : t('fullNameMinimum'),
     email: !form.email.trim()
       ? t('registrationEmailRequired')
       : emailValid ? '' : t('validEmailRequired'),
     password: !form.password
       ? t('registrationPasswordRequired')
-      : form.password.length < 8 ? t('passwordInvalid') : '',
+      : form.password.length < 8
+        ? t('registrationPasswordMinimum')
+        : new TextEncoder().encode(form.password).length > 72
+          ? t('registrationPasswordTooLong') : '',
     confirmPassword: !form.confirmPassword
       ? t('registrationConfirmPasswordRequired')
       : form.confirmPassword !== form.password ? t('passwordMismatch') : '',
@@ -4173,16 +4310,16 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
   async function submit(event) {
     event.preventDefault();
     setError('');
-    setSuccess('');
+    setDuplicateEmail(false);
     setValidationAttempted(true);
     if (Object.values(validationErrors).some(Boolean)) return;
     setBusy(true);
     try {
       const result = await onRegister(form.name.trim(), form.email.trim(), form.password);
-      setSuccess(translateText(result?.message, language) || t('registrationSuccess'));
-      redirectTimer.current = window.setTimeout(() => onRegistrationComplete(result), 1200);
+      onRegistrationComplete(result);
     } catch (issue) {
       setError(translateText(issue.message, language));
+      setDuplicateEmail(issue.status === 409 && /email|ኢሜይል/i.test(issue.message || ''));
     } finally {
       setBusy(false);
     }
@@ -4191,8 +4328,20 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     <h1>{t('createAccountHeading')}</h1>
     <p className="muted">{t('registerAsRole')}</p>
     {!registrationEnabled && <div className="alert warning" role="status">{t('publicRegistrationDisabled')}</div>}
-    {error && <div className="alert error" role="alert">{error}</div>}
-    {success && <div className="alert success" role="status">{success}</div>}
+    {callbackError && <div className="oauth-callback-notice" role="alert">
+      <span>{oauthNoticeFromPath(
+        `?oauth=error&reason=${encodeURIComponent(callbackError.reason)}&provider=${encodeURIComponent(callbackError.provider)}`,
+        language,
+      )}</span>
+      <button type="button" aria-label={t('dismiss')} onClick={() => setCallbackError(null)}>
+        <X size={16} aria-hidden="true" />
+      </button>
+    </div>}
+    {!callbackError && oauthNoticeFromPath(window.location.search, language)
+      && <div className="alert error" role="alert">{oauthNoticeFromPath(window.location.search, language)}</div>}
+    {error && <div className="alert error" role="alert">{duplicateEmail
+      ? <>{t('registrationDuplicateEmail')} <a className="text-link" href={`/login?email=${encodeURIComponent(form.email.trim())}`}>{t('login')}</a></>
+      : error}</div>}
     <form onSubmit={submit} noValidate>
       <label className="field">
         <span>{t('fullName')}</span>
@@ -4213,7 +4362,7 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
           language={language}
           placeholder={t('passwordPlaceholder')}
           minLength={8}
-          maxLength={16}
+          maxLength={72}
           describedBy={validationAttempted && validationErrors.password ? 'registration-password-error' : undefined}
           invalid={Boolean(validationAttempted && validationErrors.password)}
           onChange={(e) => setForm({ ...form, password: e.target.value })}
@@ -4228,16 +4377,16 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
           autoComplete="new-password"
           language={language}
           minLength={8}
-          maxLength={16}
+          maxLength={72}
           describedBy={validationAttempted && validationErrors.confirmPassword ? 'registration-confirm-feedback' : undefined}
           invalid={Boolean(validationAttempted && validationErrors.confirmPassword)}
           onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
         />
         {validationAttempted && validationErrors.confirmPassword && <p id="registration-confirm-feedback" className="field-error" role="alert">{validationErrors.confirmPassword}</p>}
       </div>
-      <button className="button login-button" disabled={busy || Boolean(success) || !registrationEnabled}>{busy ? t('creatingAccount') : t('registerNow')}</button>
+      <button className="button login-button" disabled={busy || !registrationEnabled}>{busy ? t('creatingAccount') : t('registerNow')}</button>
     </form>
-    <div className="registration-login-link"><span>{t('alreadyHaveAccount')}</span><button type="button" onClick={() => { window.clearTimeout(redirectTimer.current); navigateBrowserPath('/login'); }}>{t('loginHere')}</button></div>
+    <div className="registration-login-link"><span>{t('alreadyHaveAccount')}</span><button type="button" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div>
     <div className="auth-home-footer"><AuthHomeLink /></div>
   </section></AuthLayout>;
 }
@@ -4411,6 +4560,62 @@ function ResetPasswordPage({ onSubmit }) {
           <div className="registration-password-field"><PasswordField name="reset-new-password" label={t('newPassword')} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" language={language} minLength={12} maxLength={16} invalid={Boolean(password && !passwordValid)} /></div>
           <div className="registration-confirm-field"><PasswordField name="reset-confirm-password" label={t('confirmPassword')} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" language={language} minLength={12} maxLength={16} invalid={Boolean(confirmPassword && confirmPassword !== password)} /></div>
           <button className="button login-button" type="submit" disabled={busy}>{busy ? t('updatingPassword') : t('resetPassword')}</button>
+        </form>}
+    {!completed && <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>}
+  </section></main>;
+}
+
+function SetPasswordPage({ onSubmit }) {
+  const language = useLanguage();
+  const t = (key) => translate(key, language);
+  const token = new URLSearchParams(window.location.search).get('token') || '';
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [completed, setCompleted] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    setError('');
+    if (!token) {
+      setError(t('invitationLinkInvalid'));
+      return;
+    }
+    if (password.length < 8 || new TextEncoder().encode(password).length > 72) {
+      setError(t('registrationPasswordMinimum'));
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError(t('passwordMismatch'));
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSubmit(token, password);
+      setCompleted(true);
+      setPassword('');
+      setConfirmPassword('');
+    } catch (issue) {
+      setError(issue.status === 400 ? t('invitationLinkExpired') : issue.status === 429
+        ? t('resetRateLimited') : translateText(issue.message, language));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <main className="login-wrap"><section className="login-card reset-card">
+    <div className="auth-language-row auth-language-visible"><LanguageSelector/></div>
+    <AuthBrand />
+    <p className="eyebrow">{t('setPasswordEyebrow')}</p>
+    <h1>{completed ? t('setPasswordCompleteTitle') : t('setPasswordTitle')}</h1>
+    <p className="muted">{completed ? t('setPasswordCompleteCopy') : t('setPasswordCopy')}</p>
+    {error && <div className="alert error" role="alert">{error}</div>}
+    {completed ? <button className="button login-button" type="button" onClick={() => navigateBrowserPath('/login')}>{t('backToSignIn')}</button>
+      : <form onSubmit={submit}>
+          <div className="registration-password-field"><PasswordField name="invite-new-password" label={t('newPassword')} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" language={language} minLength={8} maxLength={72} /></div>
+          <div className="registration-confirm-field"><PasswordField name="invite-confirm-password" label={t('confirmPassword')} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" language={language} minLength={8} maxLength={72} /></div>
+          <button className="button login-button" type="submit" disabled={busy}>{busy ? t('updatingPassword') : t('setPasswordAction')}</button>
         </form>}
     {!completed && <div className="auth-home-footer"><a className="auth-home-link" href="/login" onClick={(event) => { event.preventDefault(); navigateBrowserPath('/login'); }}><ArrowLeft size={16} aria-hidden="true"/><span>{t('backToSignIn')}</span></a></div>}
   </section></main>;
@@ -6620,6 +6825,11 @@ export default function App(){
 
   useEffect(() => {
     function handleAuthInvalidated() {
+      const loginPath = getAdministratorSessionExpiredRedirect(window.location.pathname);
+      if (loginPath) {
+        window.history.replaceState({}, '', loginPath);
+        setCurrentPath(loginPath);
+      }
       authSessionLoader.setUnauthenticated();
       setUser(null);
       setPortal('admin');
@@ -6634,10 +6844,10 @@ export default function App(){
     if (preferredLanguage === 'en' || preferredLanguage === 'am') setLanguage(preferredLanguage);
   }, [portal, user?.id, user?.preferred_language, user?.role, user?.roles]);
 
-  async function loginPublic(email,password){
+  async function loginPublic(email,password,rememberMe=false){
     let platformUser;
     try {
-      platformUser = await authenticatePlatformUser(api, email, password);
+      platformUser = await authenticatePlatformUser(api, email, password, rememberMe);
     } catch (issue) {
       if (issue?.code === 'ADMIN_LOGIN_REQUIRED') {
         navigatePublic('/admin/login');
@@ -6663,8 +6873,8 @@ export default function App(){
     );
     navigatePublic(canContinue ? continuation : dashboardPathForRole(role));
   }
-  async function loginAdministrator(email, password) {
-    const administrator = await authenticateAdministrator(api, email, password);
+  async function loginAdministrator(email, password, rememberMe=false) {
+    const administrator = await authenticateAdministrator(api, email, password, rememberMe);
     authSessionLoader.setAuthenticated(administrator, 'admin');
     setUser(administrator);
     setPortal('admin');
@@ -6672,30 +6882,70 @@ export default function App(){
     setShowLogin(false);
     navigatePublic('/admin');
   }
+  async function linkAdministratorOAuth(email, password) {
+    await api('/platform/oauth/admin-link', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    const response = await api('/auth/me');
+    const administrator = response?.user;
+    const roles = typeof administrator?.roles === 'string'
+      ? administrator.roles.split(',').map((role) => role.trim())
+      : administrator?.roles;
+    if (!administrator || String(administrator.role).toLowerCase() !== 'admin'
+      || !Array.isArray(roles)
+      || !roles.some((role) => String(role).toLowerCase() === 'admin')) {
+      throw new Error('The administrator session could not be verified.');
+    }
+    authSessionLoader.setAuthenticated(administrator, 'admin');
+    setUser(administrator);
+    setPortal('admin');
+    setGlobalError('');
+    setShowLogin(false);
+    navigatePublic('/admin');
+  }
+  async function linkPublicOAuth(email, password) {
+    const response = await api('/platform/oauth/admin-link', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    const linkedUser = response?.user;
+    const role = String(linkedUser?.role || '').toLowerCase();
+    if (!linkedUser || !['admin', 'organizer', 'vendor', 'customer'].includes(role)) {
+      throw new Error('The account session could not be verified.');
+    }
+    authSessionLoader.setAuthenticated(linkedUser, role);
+    setUser(linkedUser);
+    setPortal(role);
+    setGlobalError('');
+    setShowLogin(false);
+    navigatePublic(dashboardPathForRole(role));
+  }
   function completeRegistration(result) {
-    const registeredUser = result?.demo ? toDemoUser(result.profile) : result?.data?.user;
-    if (!registeredUser || registeredUser.role !== 'customer') {
-      setGlobalError('Registration completed, but customer sign-in could not be confirmed. Please sign in.');
+    const registeredUser = result?.demo ? result.profile : result?.data?.user;
+    if (!registeredUser?.email) {
+      setGlobalError('Account created, but the sign-in email could not be confirmed. Please sign in.');
       navigatePublic('/login');
       return;
     }
-    authSessionLoader.setAuthenticated(registeredUser, 'customer');
-    setUser(registeredUser);setPortal('customer');setGlobalError('');setShowLogin(false);
-    navigatePublic('/customer/dashboard');
+    setGlobalError('');
+    navigatePublic(`/login?registered=1&email=${encodeURIComponent(registeredUser.email)}`);
   }
   async function registerPublic(name,email,password){
     if (DEMO_AUTH_ENABLED) {
       if (!name || name.trim().length < 2) throw new Error('Enter your full name (at least 2 characters).');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) throw new Error('Enter a valid email address.');
-      if (!isValidDemoPassword(password)) throw new Error('Password must contain 12–16 characters, uppercase, lowercase, and a number.');
+      if (!isValidDemoPassword(password)) throw new Error('Password must be at least 8 characters and no more than 72 UTF-8 bytes.');
       const profile = saveDemoAccount({ name, email, role: 'customer' });
-      saveDemoSession(profile);
-      return { demo: true, profile, message: 'Demo registration successful', dashboardPath: dashboardPathForRole('customer') };
+      return { demo: true, profile };
     }
     const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,email,password})});
     const registeredUser = response?.data?.user;
-    if (!registeredUser || registeredUser.role !== 'customer') throw new Error('The server did not confirm a customer account.');
-    return response.data;
+    if (!registeredUser || registeredUser.role !== 'customer') throw new Error('The server did not confirm the customer account.');
+    return response;
+  }
+  async function setPassword(token, password) {
+    return api('/platform/set-password', { method: 'POST', body: JSON.stringify({ token, password }) });
   }
   async function requestPasswordResetOtp(email){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); const response=await api('/auth/forgot-password/otp',{method:'POST',body:JSON.stringify({email})}); setPasswordResetEmail(email); return response; }
   async function resendPasswordResetOtp(email){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/auth/resend-reset-otp',{method:'POST',body:JSON.stringify({email})}); }
@@ -6749,6 +6999,7 @@ export default function App(){
     '/forgot-password': <ForgotPasswordPage onSubmit={requestPasswordResetOtp} />,
     '/verify-reset-otp': <VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} />,
     '/reset-password': <ResetPasswordPage onSubmit={resetPassword} />,
+    '/set-password': <SetPasswordPage onSubmit={setPassword} />,
     '/help': <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>,
   };
 
@@ -6770,7 +7021,7 @@ export default function App(){
         ? <Navigate to="/admin" replace />
         : <AccessDeniedPage onNavigate={navigatePublic} />;
     }
-    return <LoginPage onLogin={loginAdministrator} administrator />;
+    return <LoginPage onLogin={loginAdministrator} onOAuthLink={linkAdministratorOAuth} administrator />;
   }
   if (routePath === '/account/connections') {
     if (!user || user.role === 'admin') {
@@ -6857,11 +7108,12 @@ export default function App(){
     return <PublicPageLayout currentPath={currentPath} user={user} onNavigate={navigatePublic} onLogout={logout}><MyEventBookingsPage api={api} onNavigate={navigatePublic} /></PublicPageLayout>;
   }
   if(!user){
-    if (routePath === '/login') return <><LoginPage onLogin={loginPublic} showForgotPassword oauthNotice={oauthNoticeFromPath(currentPath, language)} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/login') return <><LoginPage onLogin={loginPublic} onOAuthLink={linkPublicOAuth} showForgotPassword oauthNotice={oauthNoticeFromPath(currentPath, language)} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/register') return <><RegisterPage onRegister={registerPublic} onRegistrationComplete={completeRegistration} registrationEnabled={platformAvailability?.publicRegistrationEnabled ?? true}/><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/forgot-password') return <><ForgotPasswordPage onSubmit={requestPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/verify-reset-otp') return <><VerifyResetOtpPage email={passwordResetEmail} onEmailChange={setPasswordResetEmail} onVerify={verifyPasswordResetOtp} onResend={resendPasswordResetOtp} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (routePath === '/reset-password') return <><ResetPasswordPage onSubmit={resetPassword} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
+    if (routePath === '/set-password') return <><SetPasswordPage onSubmit={setPassword} /><AIChatWidget user={null} onNavigate={navigatePublic}/></>;
     if (currentPath === '/help') return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><HelpPage /></PublicPageLayout>;
     if (['/events', '/events/upcoming'].includes(currentPath.split('?')[0])) return <PublicPageLayout currentPath={currentPath} user={null} onNavigate={navigatePublic} onLogout={logout}><EventsPage onNavigate={navigatePublic} user={null} currentPath={currentPath} /></PublicPageLayout>;
     if (publicRoutes[routePath]) return publicRoutes[routePath];
@@ -6871,6 +7123,6 @@ export default function App(){
   if (portal === 'customer') return <><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser} onNavigatePublic={navigatePublic}/></>;
   if (portal === 'organizer') return <><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
   if (portal === 'vendor') return <><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
-  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={navigate} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={navigate} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?<AdminUserManagement/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translate('securePlatform',language)}</footer></main></div></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?  <AdminUserManagement currentAdminId={user.id}/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={navigate} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={navigate} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?  <AdminUserManagement currentAdminId={user.id}/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translate('securePlatform',language)}</footer></main></div></>;
 }

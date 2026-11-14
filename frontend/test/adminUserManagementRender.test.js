@@ -36,7 +36,7 @@ test('AdminUserManagement renders a user row and all action icons without throwi
     assert.match(html, /View Test User/);
     assert.match(html, /Edit Test User/);
     assert.match(html, /Change role for Test User/);
-    assert.match(html, /Deactivate Test User/);
+    assert.match(html, /Deactivate account Test User/);
     assert.match(html, /Reset password for Test User/);
   } finally {
     globalThis.window = previousWindow;

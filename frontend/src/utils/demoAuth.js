@@ -13,11 +13,8 @@ const DEMO_ROLES = new Set(['admin', 'customer', 'organizer', 'vendor']);
 
 export function isValidDemoPassword(password) {
   return typeof password === 'string'
-    && password.length >= 12
-    && password.length <= 16
-    && /[A-Z]/.test(password)
-    && /[a-z]/.test(password)
-    && /\d/.test(password);
+    && password.length >= 8
+    && new TextEncoder().encode(password).length <= 72;
 }
 
 export function normalizeDemoProfile(profile) {

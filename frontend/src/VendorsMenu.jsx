@@ -68,12 +68,12 @@ export default function VendorsMenu({
   return <li className={`public-nav-item has-children ${isOpen ? 'is-open' : ''}`}
     onMouseEnter={(event) => {
       window.clearTimeout(closeTimer.current);
-      if (window.matchMedia('(min-width: 1121px)').matches) {
+      if (window.matchMedia('(min-width: 1100px)').matches) {
         setOpenPath(itemKey, event.currentTarget.getBoundingClientRect());
       }
     }}
     onMouseLeave={() => {
-      if (window.matchMedia('(min-width: 1121px)').matches) {
+      if (window.matchMedia('(min-width: 1100px)').matches) {
         closeTimer.current = window.setTimeout(() => setOpenPath(''), 150);
       }
     }}>
@@ -82,7 +82,7 @@ export default function VendorsMenu({
       aria-haspopup="menu" aria-expanded={isOpen} aria-current={active ? 'page' : undefined}
       aria-controls="public-menu-vendors"
       onClick={(event) => {
-        const shouldOpen = window.matchMedia('(min-width: 1121px)').matches || !isOpen;
+        const shouldOpen = window.matchMedia('(min-width: 1100px)').matches || !isOpen;
         setOpenPath(shouldOpen ? itemKey : '', event.currentTarget.getBoundingClientRect());
       }}
       onKeyDown={(event) => {
@@ -136,12 +136,12 @@ export default function VendorsMenu({
         className={`public-nav-item has-children ${categoriesOpen ? 'is-open' : ''}`}
         onMouseEnter={(event) => {
           window.clearTimeout(closeTimer.current);
-          if (window.matchMedia('(min-width: 1121px)').matches) {
+          if (window.matchMedia('(min-width: 1100px)').matches) {
             setOpenPath(categoryKey, event.currentTarget.getBoundingClientRect());
           }
         }}
         onMouseLeave={() => {
-          if (window.matchMedia('(min-width: 1121px)').matches) {
+          if (window.matchMedia('(min-width: 1100px)').matches) {
             closeTimer.current = window.setTimeout(() => setOpenPath('parent'), 150);
           }
         }}>

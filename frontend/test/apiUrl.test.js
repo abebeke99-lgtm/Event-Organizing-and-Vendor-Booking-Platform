@@ -13,6 +13,21 @@ test('development defaults to the local API', () => {
   assert.equal(resolveApiBaseUrl('', false), 'http://127.0.0.1:4000/api');
 });
 
+test('development API host follows the browser hostname for loopback addresses', () => {
+  assert.equal(
+    resolveApiBaseUrl('', false, 'localhost'),
+    'http://localhost:4000/api',
+  );
+  assert.equal(
+    resolveApiBaseUrl('http://127.0.0.1:4000/api', false, 'localhost'),
+    'http://localhost:4000/api',
+  );
+  assert.equal(
+    resolveApiBaseUrl('http://localhost:4000/api', false, '127.0.0.1'),
+    'http://127.0.0.1:4000/api',
+  );
+});
+
 test('API origins and /api paths normalize to one /api suffix', () => {
   assert.equal(resolveApiBaseUrl('https://api.example.test', true), 'https://api.example.test/api');
   assert.equal(resolveApiBaseUrl('https://api.example.test/api/', true), 'https://api.example.test/api');

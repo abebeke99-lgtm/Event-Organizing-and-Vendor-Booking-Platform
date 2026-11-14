@@ -36,7 +36,9 @@ async function findAdministrator(req) {
        FROM users u
        JOIN user_roles ur ON ur.user_id = u.id
        JOIN roles r ON r.id = ur.role_id
-       WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE
+       WHERE u.status = 'active'
+         AND (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
+         AND r.is_active = TRUE
          AND (${clauses.join(' OR ')})
        GROUP BY u.id
        LIMIT 1`,
@@ -51,7 +53,9 @@ async function findAdministrator(req) {
      FROM users u
      JOIN user_roles ur ON ur.user_id = u.id
      JOIN roles r ON r.id = ur.role_id
-     WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE
+     WHERE u.status = 'active'
+       AND (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
+       AND r.is_active = TRUE
        AND (${clauses.join(' OR ')})
      GROUP BY u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status
      LIMIT 1`,
@@ -114,7 +118,8 @@ export async function requireAdmin(req, res, next) {
              JOIN users u ON u.id = s.user_id AND u.status = 'active'
              JOIN user_roles ur ON ur.user_id = u.id
              JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
-             WHERE s.token_hash = $1 AND s.expires_at > NOW() AND r.is_admin = FALSE
+             WHERE s.token_hash = $1 AND s.expires_at > NOW()
+               AND NOT (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
              LIMIT 1`,
             [hashToken(req.cookies.platform_session)],
           );
@@ -125,7 +130,8 @@ export async function requireAdmin(req, res, next) {
                JOIN users u ON u.id = s.user_id AND u.status = 'active'
                JOIN user_roles ur ON ur.user_id = u.id
                JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
-               WHERE s.token_hash = ? AND s.expires_at > NOW() AND r.is_admin = FALSE
+               WHERE s.token_hash = ? AND s.expires_at > NOW()
+                 AND NOT (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
                LIMIT 1`,
               [hashToken(req.cookies.platform_session)],
             );
@@ -140,7 +146,8 @@ export async function requireAdmin(req, res, next) {
            JOIN users u ON u.id = s.user_id AND u.status = 'active'
            JOIN user_roles ur ON ur.user_id = u.id
            JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
-           WHERE s.token_hash = ? AND s.expires_at > NOW() AND r.is_admin = FALSE
+           WHERE s.token_hash = ? AND s.expires_at > NOW()
+             AND NOT (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
            LIMIT 1`,
           [hashToken(req.cookies.platform_session)],
         );

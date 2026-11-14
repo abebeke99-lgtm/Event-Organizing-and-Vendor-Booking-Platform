@@ -32,6 +32,10 @@ const users = new Map([
     id: 26, full_name: 'Synthetic Vendor', email: 'vendor@example.test',
     password_hash: passwordHash, status: 'active', role: 'vendor', is_admin: 0, role_is_active: 1,
   }],
+  ['administrator-role@example.test', {
+    id: 27, full_name: 'Synthetic Named Administrator', email: 'administrator-role@example.test',
+    password_hash: passwordHash, status: 'active', role: 'administrator', is_admin: 0, role_is_active: 1,
+  }],
 ]);
 const sessions = new Map();
 let loginRequestId = 0;
@@ -42,6 +46,14 @@ function findUserById(id) {
 
 function findSession(tokenHash) {
   return sessions.get(tokenHash);
+}
+
+function isAdministrator(user) {
+  return Boolean(user && (user.is_admin || ['admin', 'administrator'].includes(user.role.toLowerCase())));
+}
+
+function isSessionActive(session) {
+  return Boolean(session && new Date(session.expires_at).getTime() > Date.now());
 }
 
 const database = {
@@ -57,9 +69,10 @@ const database = {
       const user = findUserById(session?.user_id);
       return [user?.is_admin ? [{ ...user, roles: 'Admin' }] : [], []];
     }
-    if (statement.includes('FROM user_sessions s') && statement.includes('r.is_admin = FALSE')) {
-      const user = findUserById(findSession(values[0])?.user_id);
-      return [user && user.status === 'active' && !user.is_admin ? [{ 1: 1 }] : [], []];
+    if (statement.includes('FROM user_sessions s') && statement.includes('NOT (r.is_admin = TRUE')) {
+      const session = findSession(values[0]);
+      const user = findUserById(session?.user_id);
+      return [isSessionActive(session) && user?.status === 'active' && !isAdministrator(user) ? [{ 1: 1 }] : [], []];
     }
     if (statement.includes('FROM user_sessions s') && statement.includes('GROUP_CONCAT(DISTINCT p.permission_key')) {
       const user = findUserById(findSession(values[0])?.user_id);
@@ -119,20 +132,26 @@ const database = {
     throw new Error(`Unexpected authentication query: ${statement.slice(0, 60)}`);
   },
   async query(statement, values = []) {
-    if (statement.includes('FROM users u') && statement.includes('r.is_admin = TRUE')) {
+    if (statement.includes('FROM users u') && statement.includes('LOWER(u.email) = $1')) {
+      const user = users.get(values[0]);
+      return { rows: user ? [user] : [] };
+    }
+    if (statement.includes('FROM users u') && statement.includes('STRING_AGG(DISTINCT r.name')) {
       const session = findSession(values[0]);
       const user = findUserById(session?.user_id);
       return {
-        rows: user && user.status === 'active' && user.is_admin && user.role_is_active
-          ? [{ ...user, roles: 'Admin' }]
+        rows: isSessionActive(session) && user?.status === 'active' && isAdministrator(user) && user.role_is_active
+          ? [{ ...user, roles: 'Administrator' }]
           : [],
       };
     }
     if (statement.includes('FROM user_sessions s') && statement.includes('s.token_hash = $1')) {
       const session = findSession(values[0]);
       const user = findUserById(session?.user_id);
+      const hasNonAdminRoleFilter = statement.includes('NOT (r.is_admin = TRUE');
       return {
-        rows: user && user.status === 'active' && user.role_is_active
+        rows: isSessionActive(session) && user?.status === 'active' && user.role_is_active
+          && (!hasNonAdminRoleFilter || !isAdministrator(user))
           ? [{ ...user, preferred_language: 'en', permission_keys: [] }]
           : [],
       };
@@ -157,22 +176,29 @@ const database = {
 
 const app = createApp({ database });
 const server = app.listen(0, '127.0.0.1');
+const postgresApp = createApp({
+  database: { ...database, dialect: 'postgres' },
+  databaseDialect: 'postgres',
+});
+const postgresServer = postgresApp.listen(0, '127.0.0.1');
 let baseUrl;
+let postgresBaseUrl;
 
 before(async () => {
-  await once(server, 'listening');
+  await Promise.all([once(server, 'listening'), once(postgresServer, 'listening')]);
   baseUrl = `http://127.0.0.1:${server.address().port}`;
+  postgresBaseUrl = `http://127.0.0.1:${postgresServer.address().port}`;
 });
 
 after(async () => {
-  await new Promise((resolve, reject) => {
-    server.close((error) => error ? reject(error) : resolve());
-    server.closeAllConnections();
-  });
+  await Promise.all([server, postgresServer].map((currentServer) => new Promise((resolve, reject) => {
+    currentServer.close((error) => error ? reject(error) : resolve());
+    currentServer.closeAllConnections();
+  })));
 });
 
-async function login(email, password = syntheticPassword, endpoint = '/api/platform/login') {
-  return fetch(`${baseUrl}${endpoint}`, {
+async function login(email, password = syntheticPassword, endpoint = '/api/platform/login', apiBaseUrl = baseUrl) {
+  return fetch(`${apiBaseUrl}${endpoint}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -263,4 +289,58 @@ test('admin API rejects unauthenticated and non-admin platform sessions', async 
   const body = await deniedResponse.json();
   assert.equal(deniedResponse.status, 403, JSON.stringify(body));
   assert.deepEqual(body, { error: 'Access denied.' });
+});
+
+test('active administrators can use admin APIs with the shared platform session', async () => {
+  const loginResponse = await login('active-admin@example.test', syntheticPassword, '/api/platform/login', postgresBaseUrl);
+  const cookie = loginResponse.headers.get('set-cookie') || '';
+  const token = cookie.match(/platform_session=([^;]+)/)?.[1];
+  assert.ok(token);
+
+  const response = await fetch(`${postgresBaseUrl}/api/admin/notifications?page=1&pageSize=5`, {
+    headers: { Cookie: `platform_session=${token}` },
+    credentials: 'omit',
+  });
+  assert.equal(response.status, 200);
+});
+
+test('administrator role names are consistent between sign-in and admin authorization', async () => {
+  const loginResponse = await login('administrator-role@example.test', syntheticPassword, '/api/platform/login', postgresBaseUrl);
+  assert.equal(loginResponse.status, 200);
+  assert.equal((await loginResponse.json()).user.role, 'admin');
+  const token = (loginResponse.headers.get('set-cookie') || '').match(/platform_session=([^;]+)/)?.[1];
+  assert.ok(token);
+
+  const response = await fetch(`${postgresBaseUrl}/api/admin/notifications?page=1&pageSize=5`, {
+    headers: { Cookie: `platform_session=${token}` },
+    credentials: 'omit',
+  });
+  assert.equal(response.status, 200);
+});
+
+test('expired and revoked platform sessions cannot access admin APIs', async () => {
+  const expiredLogin = await login('active-admin@example.test', syntheticPassword, '/api/platform/login', postgresBaseUrl);
+  const expiredToken = (expiredLogin.headers.get('set-cookie') || '').match(/platform_session=([^;]+)/)?.[1];
+  assert.ok(expiredToken);
+  sessions.set(hashToken(decodeURIComponent(expiredToken)), {
+    user_id: 21,
+    expires_at: new Date(Date.now() - 1000),
+  });
+
+  const expiredResponse = await fetch(`${postgresBaseUrl}/api/admin/notifications`, {
+    headers: { Cookie: `platform_session=${expiredToken}` },
+    credentials: 'omit',
+  });
+  assert.equal(expiredResponse.status, 401);
+
+  const revokedLogin = await login('active-admin@example.test', syntheticPassword, '/api/platform/login', postgresBaseUrl);
+  const revokedToken = (revokedLogin.headers.get('set-cookie') || '').match(/platform_session=([^;]+)/)?.[1];
+  assert.ok(revokedToken);
+  sessions.delete(hashToken(decodeURIComponent(revokedToken)));
+
+  const revokedResponse = await fetch(`${postgresBaseUrl}/api/admin/notifications`, {
+    headers: { Cookie: `platform_session=${revokedToken}` },
+    credentials: 'omit',
+  });
+  assert.equal(revokedResponse.status, 401);
 });
