@@ -18,6 +18,8 @@ try {
   if (runtime.database_name !== 'eventhub' || migration.database_name !== 'eventhub') {
     throw new Error('Both Neon test connections must target the isolated eventhub database.');
   }
+  console.log('Neon test pooled connection: PASS (PostgreSQL 18).');
+  console.log('Neon test direct connection: PASS (PostgreSQL 18).');
   const schema = await database.runtimeAdapter.query(
     `SELECT
        (SELECT COUNT(*) FROM information_schema.tables
@@ -34,19 +36,25 @@ try {
   );
   const actualTables = new Set(tables.rows.map((row) => row.tablename));
   const missingTables = postgresApplicationTables.filter((tableName) => !actualTables.has(tableName));
-  if (missingTables.length) {
-    throw new Error(`The isolated Neon test database is missing application tables: ${missingTables.join(', ')}.`);
-  }
-  console.log('Neon test pooled connection: PASS (PostgreSQL 18).');
-  console.log('Neon test direct connection: PASS (PostgreSQL 18).');
   console.log(
-    `Neon test schema: ${postgresApplicationTables.length} application tables present; `
+    `Neon test schema: ${postgresApplicationTables.length - missingTables.length} of `
+      + `${postgresApplicationTables.length} application tables present; `
       + `${schema.rows[0].table_count} public tables, ${schema.rows[0].foreign_key_count} foreign keys, `
       + `${schema.rows[0].index_count} indexes.`,
   );
+  if (missingTables.length) {
+    const error = new Error(
+      `The isolated Neon test database is missing application tables: ${missingTables.join(', ')}.`,
+    );
+    error.code = 'DB_SCHEMA_INCOMPLETE';
+    throw error;
+  }
   console.log(`Applied Neon test migrations: ${appliedMigrations.rows.map((row) => row.migration_name).join(', ')}.`);
 } catch (error) {
-  console.error(`Neon test database check failed [${getPostgresFailureCode(error)}]: ${formatPostgresError(error)}`);
+  const isIncompleteSchema = error.code === 'DB_SCHEMA_INCOMPLETE';
+  const failureCode = isIncompleteSchema ? error.code : getPostgresFailureCode(error);
+  const message = isIncompleteSchema ? error.message : formatPostgresError(error);
+  console.error(`Neon test database check failed [${failureCode}]: ${message}`);
   process.exitCode = 1;
 } finally {
   if (database) {

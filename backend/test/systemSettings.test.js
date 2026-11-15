@@ -164,3 +164,19 @@ test('maintenance middleware leaves platform availability reachable', async () =
   await requirePlatformAvailable(req, createMiddlewareResponse(), () => { continued = true; });
   assert.equal(continued, true);
 });
+
+test('maintenance middleware allows mounted platform availability and logout routes', async () => {
+  for (const [baseUrl, path] of [
+    ['/api', '/platform/availability'],
+    ['/api/platform', '/availability'],
+    ['/api', '/platform/logout'],
+  ]) {
+    let continued = false;
+    await requirePlatformAvailable(
+      { baseUrl, path, app: { locals: {} } },
+      createMiddlewareResponse(),
+      () => { continued = true; },
+    );
+    assert.equal(continued, true, `${baseUrl}${path} should remain reachable`);
+  }
+});

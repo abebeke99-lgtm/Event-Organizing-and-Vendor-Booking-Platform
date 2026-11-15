@@ -1,5 +1,7 @@
 # PostgreSQL Migration Progress
 
+> Historical snapshot. The MySQL runtime and legacy schema references below describe an earlier repository state. See [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current repository and test status.
+
 Updated: 2026-11-11. Work is incremental; the overall PostgreSQL migration is incomplete. Production was not accessed.
 
 ## Post-Runtime Validation (Node 20.x)

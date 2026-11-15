@@ -38,7 +38,8 @@ function createDatabase() {
           rowCount: 3,
         };
       }
-      if (sql.includes("setting_key = 'public_registration_enabled'")) {
+      if (sql.includes('SELECT setting_key, setting_value FROM system_settings')
+        && sql.includes('setting_key = ANY')) {
         return { rows: [], rowCount: 0 };
       }
       if (sql.includes("setting_key = 'notify_admin_user_registrations'")) {
@@ -211,8 +212,8 @@ test('PostgreSQL application auth persists registration, login, and session oper
     body: JSON.stringify({ name: 'Platform Organizer', email: organizerEmail, password: 'Pass1234', role: 'organizer' }),
   });
   assert.equal(organizerRegistration.status, 201);
-  assert.equal((await organizerRegistration.json()).data.user.role, 'customer');
-  assert.equal(database.roleAssignments.at(-1).roleId, 2);
+  assert.equal((await organizerRegistration.json()).data.user.role, 'organizer');
+  assert.equal(database.roleAssignments.at(-1).roleId, 3);
 
   const vendorEmail = `vendor-${Date.now()}@example.test`;
   const vendorRegistration = await fetch(`${baseUrl}/api/platform/register`, {
@@ -221,17 +222,19 @@ test('PostgreSQL application auth persists registration, login, and session oper
     body: JSON.stringify({ name: 'Platform Vendor', email: vendorEmail, password: 'Pass1234', role: 'vendor' }),
   });
   assert.equal(vendorRegistration.status, 201);
-  assert.equal((await vendorRegistration.json()).data.user.role, 'customer');
-  assert.equal(database.roleAssignments.at(-1).roleId, 2);
+  assert.equal((await vendorRegistration.json()).data.user.role, 'vendor');
+  assert.equal(database.roleAssignments.at(-1).roleId, 4);
 
+  const adminEmail = `admin-${Date.now()}@example.test`;
+  const previousAssignmentCount = database.roleAssignments.length;
   const adminRegistration = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.15' },
-    body: JSON.stringify({ name: 'Self Registered Admin', email: `admin-${Date.now()}@example.test`, password: 'Pass1234', role: 'admin' }),
+    body: JSON.stringify({ name: 'Self Registered Admin', email: adminEmail, password: 'Pass1234', role: 'admin' }),
   });
-  assert.equal(adminRegistration.status, 201);
-  assert.equal((await adminRegistration.json()).data.user.role, 'customer');
-  assert.equal(database.roleAssignments.at(-1).roleId, 2);
+  assert.equal(adminRegistration.status, 403);
+  assert.equal(database.roleAssignments.length, previousAssignmentCount);
+  assert.equal(database.users.has(adminEmail), false);
 
   const duplicateRegistration = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',

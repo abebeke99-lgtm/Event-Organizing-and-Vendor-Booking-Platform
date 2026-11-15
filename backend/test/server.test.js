@@ -2,10 +2,6 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { after, before, test } from 'node:test';
 import { once } from 'node:events';
-import { rootCertificates } from 'node:tls';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createApp } from '../src/app.js';
 import {
@@ -26,85 +22,49 @@ const databaseCredentials = {
   DB_SSL: 'true',
 };
 
-test('database TLS verifies certificates and normalizes escaped CA newlines', () => {
-  const certificateAuthority = rootCertificates[0];
-  const config = createDatabaseConfig({
-    ...databaseCredentials,
-    DB_SSL_CA: certificateAuthority.replace(/\n/g, '\\n'),
-  });
-  assert.equal(config.database, 'eventhub');
-  assert.equal(config.port, 5432);
-  assert.deepEqual(config.ssl, {
-    rejectUnauthorized: true,
-    ca: certificateAuthority.trim(),
-  });
-});
-
-test('database TLS loads and verifies CA certificates from a file path', () => {
-  const certificateAuthority = rootCertificates[0];
-  const directory = mkdtempSync(join(tmpdir(), 'event-platform-ca-'));
-  const certificatePath = join(directory, 'ca.pem');
-  try {
-    writeFileSync(certificatePath, certificateAuthority);
-    const config = createDatabaseConfig({
-      ...databaseCredentials,
-      DB_SSL_CA: certificatePath,
-    });
-    assert.equal(config.ssl.ca, certificateAuthority.trim());
-    assert.equal(config.ssl.rejectUnauthorized, true);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test('database TLS uses system certificate authorities when no custom CA is supplied', () => {
+test('database pool uses the Neon URL with verified TLS and bounded connections', () => {
   const config = createDatabaseConfig({ ...databaseCredentials, DB_SSL: 'true' });
+  const connectionUrl = new URL(config.connectionString);
+  assert.equal(connectionUrl.hostname, 'ep-eventhub-pooler.us-east-2.aws.neon.tech');
+  assert.equal(connectionUrl.pathname, '/eventhub');
+  assert.equal(connectionUrl.searchParams.get('sslmode'), 'verify-full');
   assert.deepEqual(config.ssl, { rejectUnauthorized: true });
+  assert.equal(config.max, 4);
+  assert.equal(config.connectionTimeoutMillis, 15000);
 });
 
-test('database TLS rejects an invalid custom CA certificate', () => {
-  assert.throws(
-    () => createDatabaseConfig({
-      ...databaseCredentials,
-      DB_SSL_CA: '-----BEGIN CERTIFICATE-----invalid-----END CERTIFICATE-----',
-    }),
-    /DB_SSL_CA or DB_SSL_CA_BASE64/,
-  );
+test('database configuration rejects obsolete host and credential variables', () => {
+  assert.throws(() => createDatabaseConfig({
+    ...databaseCredentials,
+    DB_HOST: 'db.example.test',
+  }), /DB_HOST is obsolete/);
 });
 
-test('production database configuration requires a Neon DATABASE_URL and TLS but not a custom CA', () => {
-  assert.deepEqual(getDatabaseConfigurationErrors({}, { requireTls: true })
-    .map((error) => error.split(/[ (]/)[0]), [
-    'DATABASE_URL',
-    'DB_SSL',
-  ]);
+test('production database configuration requires a Neon runtime URL', () => {
+  assert.deepEqual(getDatabaseConfigurationErrors({ NODE_ENV: 'production' })
+    .map((error) => error.split(/[ (]/)[0]), ['DATABASE_URL']);
 });
 
-test('DATABASE_URL supplies the PostgreSQL connection credentials', () => {
+test('DATABASE_URL is used as the PostgreSQL runtime connection string', () => {
   const config = createDatabaseConfig({
     DATABASE_URL: 'postgresql://db-user:pass%40word@ep-eventhub-pooler.us-east-2.aws.neon.tech/events?sslmode=require',
     DB_SSL: 'true',
   });
-  assert.equal(config.host, 'ep-eventhub-pooler.us-east-2.aws.neon.tech');
-  assert.equal(config.port, 5432);
-  assert.equal(config.database, 'events');
-  assert.equal(config.user, 'db-user');
-  assert.equal(config.password, 'pass@word');
+  const connectionUrl = new URL(config.connectionString);
+  assert.equal(connectionUrl.hostname, 'ep-eventhub-pooler.us-east-2.aws.neon.tech');
+  assert.equal(connectionUrl.pathname, '/events');
+  assert.equal(decodeURIComponent(connectionUrl.username), 'db-user');
+  assert.equal(decodeURIComponent(connectionUrl.password), 'pass@word');
   assert.deepEqual(config.ssl, { rejectUnauthorized: true });
 });
 
 test('production database configuration rejects loopback database hosts', () => {
-  const productionDatabaseSettings = { NODE_ENV: 'production', DB_SSL: 'true', DB_DIALECT: 'postgres' };
   const errors = getDatabaseConfigurationErrors({
-    ...databaseCredentials,
-    ...productionDatabaseSettings,
+    NODE_ENV: 'production',
+    DB_SSL: 'true',
     DATABASE_URL: 'postgresql://validation-user:placeholder-only@127.0.0.1/eventhub?sslmode=require',
   });
   assert.ok(errors.some((error) => error.startsWith('DATABASE_URL ')));
-  assert.equal(getDatabaseConfigurationErrors({
-    ...databaseCredentials,
-    ...productionDatabaseSettings,
-  }).length, 0);
 });
 
 test('production configuration accepts DATABASE_URL with verified TLS and secure cross-site cookies', () => {
@@ -119,15 +79,6 @@ test('production configuration accepts DATABASE_URL with verified TLS and secure
   };
 
   assert.deepEqual(getStartupConfigurationErrors(configuration), []);
-});
-
-test('database TLS accepts a base64-encoded custom CA', () => {
-  const certificateAuthority = rootCertificates[0];
-  const config = createDatabaseConfig({
-    ...databaseCredentials,
-    DB_SSL_CA_BASE64: Buffer.from(certificateAuthority).toString('base64'),
-  });
-  assert.equal(config.ssl.ca, certificateAuthority.trim());
 });
 
 test('database configuration rejects local PostgreSQL endpoints when Neon is required', () => {
@@ -175,7 +126,7 @@ test('database verifier rejects a connection to a different database', async () 
         return { rows: [{ server_version: 'PostgreSQL 16', database_name: 'unexpected' }] };
       },
     }, 'defaultdb'),
-    { message: 'Connected database does not match DB_NAME.' },
+    { message: 'Connected database does not match the expected database.' },
   );
 });
 
@@ -195,7 +146,7 @@ test('database failure diagnostics map to safe reason codes', () => {
   assert.equal(getDatabaseFailureCode({ code: '28P01' }), 'DB_AUTH_FAILED');
   assert.equal(getDatabaseFailureCode({ code: 'CERT_HAS_EXPIRED' }), 'DB_TLS_FAILED');
   assert.equal(getDatabaseFailureCode({ code: 'ECONNREFUSED' }), 'DB_CONNECT_FAILED');
-  assert.equal(getDatabaseFailureCode(new Error('Connected database does not match DB_NAME.')), 'DB_NAME_MISMATCH');
+  assert.equal(getDatabaseFailureCode(new Error('Connected database does not match the expected database.')), 'DB_NAME_MISMATCH');
 });
 
 test('startup configuration validation reports missing environment variable names only', () => {
@@ -292,14 +243,9 @@ test('PostgreSQL startup exits without listening when its database URL is not Ne
 
 test('production startup requires HTTPS origin and cross-site secure cookies', () => {
   const configuration = {
-    DB_DIALECT: 'mysql',
-    DB_HOST: 'db.example.test',
-    DB_PORT: '3306',
-    DB_NAME: 'events',
-    DB_USER: 'events',
-    DB_PASSWORD: 'test-only',
+    DB_DIALECT: 'postgres',
+    DATABASE_URL: 'postgresql://test-user:test-password@ep-eventhub-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
     DB_SSL: 'true',
-    DB_SSL_CA: rootCertificates[0],
     WEB_ORIGIN: 'http://example.test',
     COOKIE_SECURE: 'false',
     COOKIE_SAME_SITE: 'lax',
@@ -307,7 +253,6 @@ test('production startup requires HTTPS origin and cross-site secure cookies', (
   };
   assert.deepEqual(getStartupConfigurationErrors(configuration)
     .map((error) => error.split(/[ (]/)[0]), [
-    'DB_DIALECT',
     'WEB_ORIGIN',
     'COOKIE_SECURE',
     'COOKIE_SAME_SITE',

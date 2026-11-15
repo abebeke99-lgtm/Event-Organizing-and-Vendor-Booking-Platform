@@ -1,73 +1,45 @@
 import 'dotenv/config';
-import { getDatabaseConfigurationErrors } from '../src/lib/databaseConfig.js';
 import { getPostgresConfigurationErrors } from '../src/lib/postgresConfig.js';
-import { getDatabaseDialect } from '../src/lib/startupConfig.js';
 
-const requireTls = process.env.NODE_ENV === 'production';
-const tlsEnabled = process.env.DB_SSL === 'true';
-const dialect = getDatabaseDialect();
-const configurationErrors = dialect === 'postgres'
-  ? getPostgresConfigurationErrors(process.env, { purpose: 'runtime' })
-  : getDatabaseConfigurationErrors(process.env, { requireTls });
-const missingVariables = configurationErrors
-  .map((error) => error.split(/[ (]/)[0].split('=')[0]);
-
-if (missingVariables.length) {
-  console.error(`FAIL Configuration: set valid values for ${[...new Set(missingVariables)].join(', ')}`);
+const configurationErrors = getPostgresConfigurationErrors(process.env, { purpose: 'runtime' });
+if (configurationErrors.length) {
+  console.error(`FAIL PostgreSQL configuration: ${configurationErrors.join(' ')}`);
   process.exitCode = 1;
-} else if (dialect === 'postgres') {
-  const { formatPostgresError, getPostgresFailureCode } = await import('../src/postgresDb.js');
-  const { createPostgresRuntimePool } = await import('../src/postgresPool.js');
-  await checkPostgresDatabase({ createPostgresRuntimePool, formatPostgresError, getPostgresFailureCode });
 } else {
-  const { createDatabaseConfig, formatDatabaseError, getDatabaseFailureCode, pool } = await import('../src/db.js');
-  await checkDatabase({
-    expectedDatabase: createDatabaseConfig().database,
-    formatDatabaseError,
-    getDatabaseFailureCode,
-    pool,
-  });
-}
-
-async function checkPostgresDatabase({ createPostgresRuntimePool, formatPostgresError, getPostgresFailureCode }) {
+  const { createPostgresRuntimePool } = await import('../src/postgresPool.js');
+  const { formatPostgresError, getPostgresFailureCode } = await import('../src/postgresDb.js');
   let pool;
+
   try {
     pool = createPostgresRuntimePool();
     const identity = await pool.query(
-      'SELECT version() AS server_version, current_database() AS database_name',
+      'SELECT version() AS server_version, current_database() AS database_name, current_schema() AS schema_name',
     );
-    if (!identity.rows[0]?.server_version || !identity.rows[0]?.database_name) {
-      throw new Error('PostgreSQL runtime connection did not return database identity information.');
+    if (!identity.rows[0]?.server_version || !identity.rows[0]?.database_name || !identity.rows[0]?.schema_name) {
+      throw new Error('PostgreSQL connection did not return server, database, and schema identity.');
     }
-    await pool.query('SELECT 1');
-    console.log('PASS PostgreSQL runtime connection and SELECT 1');
+
+    const probe = await pool.query('SELECT 1 AS result');
+    if (Number(probe.rows[0]?.result) !== 1) {
+      throw new Error('PostgreSQL SELECT 1 returned an unexpected result.');
+    }
+
+    const schema = await pool.query(
+      `SELECT COUNT(*)::integer AS table_count
+       FROM information_schema.tables
+       WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'`,
+    );
+    const tableCount = Number(schema.rows[0]?.table_count);
+    if (!Number.isInteger(tableCount) || tableCount < 1) {
+      throw new Error('The configured PostgreSQL schema contains no application tables.');
+    }
+
+    console.log('PASS Neon PostgreSQL runtime connection and SELECT 1');
+    console.log(`PASS PostgreSQL schema is available (${tableCount} tables)`);
   } catch (error) {
-    console.error(`FAIL PostgreSQL connection [${getPostgresFailureCode(error)}]: ${formatPostgresError(error)}`);
+    console.error(`FAIL PostgreSQL check [${getPostgresFailureCode(error)}]: ${formatPostgresError(error)}`);
     process.exitCode = 1;
   } finally {
     if (pool) await pool.end();
-  }
-}
-
-async function checkDatabase({ expectedDatabase, formatDatabaseError, getDatabaseFailureCode, pool }) {
-  let step = tlsEnabled ? 'TLS-verified connection and SELECT 1' : 'MySQL connection and SELECT 1';
-  try {
-    const [result] = await pool.query('SELECT 1 AS result');
-    if (Number(result[0]?.result) !== 1) throw new Error('SELECT 1 returned an unexpected result.');
-    console.log(tlsEnabled ? 'PASS TLS-verified MySQL connection' : 'PASS local MySQL connection');
-    console.log('PASS SELECT 1');
-    step = 'SELECT DATABASE()';
-    const [rows] = await pool.query('SELECT DATABASE() AS database_name');
-    if (rows[0]?.database_name !== expectedDatabase) {
-      const error = new Error('Connected database does not match DB_NAME.');
-      error.code = 'DB_NAME_MISMATCH';
-      throw error;
-    }
-    console.log('PASS SELECT DATABASE() matches configured database');
-  } catch (error) {
-    console.error(`FAIL ${step} [${getDatabaseFailureCode(error)}]: ${formatDatabaseError(error)}`);
-    process.exitCode = 1;
-  } finally {
-    await pool.end();
   }
 }

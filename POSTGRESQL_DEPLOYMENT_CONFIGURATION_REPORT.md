@@ -1,5 +1,7 @@
 # PostgreSQL Deployment Configuration Report
 
+> Historical snapshot. Repository-side MySQL configuration findings below were superseded by the EventHub cleanup; production hosting values remain unverified. See [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current status.
+
 Updated: 2026-11-11  
 Status: Production deployment is not configured or verified for PostgreSQL. No live Render, Netlify, or production Neon settings were accessed or changed.
 

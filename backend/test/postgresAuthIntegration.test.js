@@ -46,10 +46,11 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
   const vendorEmail = `pg-auth-vendor-${suffix}@example.invalid`;
   const organizerSignupEmail = `pg-auth-organizer-signup-${suffix}@example.invalid`;
   const vendorSignupEmail = `pg-auth-vendor-signup-${suffix}@example.invalid`;
+  const invalidRoleEmail = `pg-auth-invalid-${suffix}@example.invalid`;
   const adminEmail = `pg-auth-admin-${suffix}@example.invalid`;
   const adminToken = randomBytes(32).toString('hex');
   const fixtureEmails = [
-    customerEmail, rollbackEmail, vendorEmail, organizerSignupEmail, vendorSignupEmail, adminEmail,
+    customerEmail, rollbackEmail, vendorEmail, organizerSignupEmail, vendorSignupEmail, invalidRoleEmail, adminEmail,
   ];
   const servers = [];
   let injectedRoleLinkErrorCode;
@@ -216,10 +217,10 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
 
     const invalidRole = await fetch(`${baseUrl}/api/platform/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.21' },
       body: JSON.stringify({
         name: 'Invalid Role Fixture',
-        email: `pg-auth-invalid-${suffix}@example.invalid`,
+        email: invalidRoleEmail,
         password,
         role: 'admin',
       }),
@@ -228,7 +229,11 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
 
     const registration = await fetch(`${baseUrl}/api/platform/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept-Language': 'am' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept-Language': 'am',
+        'X-Forwarded-For': '198.51.100.22',
+      },
       body: JSON.stringify({ name: 'Neon Customer Fixture', email: customerEmail.toUpperCase(), password }),
     });
     assert.equal(registration.status, 201);
@@ -250,18 +255,21 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
 
     const duplicate = await fetch(`${baseUrl}/api/platform/register`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.23' },
       body: JSON.stringify({ name: 'Duplicate Fixture', email: customerEmail, password }),
     });
     assert.equal(duplicate.status, 409);
 
-    for (const [email, role] of [
+    for (const [index, [email, role]] of [
       [organizerSignupEmail, 'organizer'],
       [vendorSignupEmail, 'vendor'],
-    ]) {
+    ].entries()) {
       const roleRegistration = await fetch(`${baseUrl}/api/platform/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': `198.51.100.${24 + index}`,
+        },
         body: JSON.stringify({ name: `Neon ${role} signup`, email, password, role }),
       });
       assert.equal(roleRegistration.status, 201);

@@ -1,5 +1,7 @@
 # PostgreSQL Application Compatibility Report
 
+> Historical snapshot. Dependency and migration-file claims below predate the EventHub cleanup; full PostgreSQL application compatibility remains unverified. See [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current findings.
+
 Updated: 2026-11-12
 Scope: Current source and isolated Neon payment/refund verification. This is not a full-application certification.
 

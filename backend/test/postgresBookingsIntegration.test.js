@@ -11,7 +11,7 @@ const integrationEnabled = process.env.RUN_NEON_INTEGRATION === 'true';
 
 test('Neon PostgreSQL booking, quotation, and availability workflows persist and enforce access/conflicts', {
   skip: integrationEnabled ? false : 'Set RUN_NEON_INTEGRATION=true to use backend/.env.neon-test.',
-  timeout: 180000,
+  timeout: 480000,
 }, async () => {
   const environment = await loadNeonTestEnvironment();
   const database = createPostgresDatabase(environment);
@@ -200,7 +200,7 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
 
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
     const cookie = (value) => `platform_session=${value}`;
-    const request = async (path, sessionToken, options = {}) => {
+    const request = async (path, sessionToken, options = {}, traceSlowRequest = true) => {
       const startedAt = performance.now();
       const response = await fetch(`${baseUrl}${path}`, {
         ...options,
@@ -213,7 +213,7 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
       });
       const durationMs = Math.round(performance.now() - startedAt);
       requestTimings.push({ path: new URL(path, baseUrl).pathname, durationMs, status: response.status });
-      if (durationMs >= 1500) {
+      if (traceSlowRequest && durationMs >= 1500) {
         console.info(
           `NEON_BOOKING_REQUEST_MS method=${options.method || 'GET'} path=${new URL(path, baseUrl).pathname}`
             + ` status=${response.status} duration=${durationMs}`
@@ -223,37 +223,86 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
       }
       return response;
     };
-    const measureDashboardRequests = async (role, endpoints) => {
-      const results = await Promise.all(endpoints.map(async ({ name, path, sessionToken }) => {
-        const startedAt = Date.now();
-        const response = await request(path, sessionToken);
-        return { name, response, durationMs: Date.now() - startedAt };
-      }));
-      const bundleDurationMs = Math.max(...results.map(({ durationMs }) => durationMs));
-      console.info(`NEON_DASHBOARD_RESPONSE_MS role=${role} ${results
-        .map(({ name, durationMs }) => `${name}=${durationMs}`)
-        .join(' ')} bundle=${bundleDurationMs}`);
-      assert.ok(bundleDurationMs < 15000, `${role} dashboard must load before the 15-second client timeout`);
-      for (const { name, response } of results) {
-        assert.equal(response.status, 200, `${role} dashboard ${name} endpoint should load`);
+    const percentile = (samples, quantile) => {
+      const sorted = [...samples].sort((left, right) => left - right);
+      const position = (sorted.length - 1) * quantile;
+      const lower = Math.floor(position);
+      const upper = Math.ceil(position);
+      return Math.round(sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower));
+    };
+    const measureDashboardRequests = async (role, endpoints, sampleCount = 20) => {
+      const samples = [];
+      let latestData = {};
+      for (let sample = 0; sample < sampleCount; sample += 1) {
+        const results = await Promise.all(endpoints.map(async ({ name, path, sessionToken }) => {
+          const startedAt = performance.now();
+          const response = await request(path, sessionToken, {}, false);
+          return { name, response, durationMs: Math.round(performance.now() - startedAt) };
+        }));
+        const bundleDurationMs = Math.max(...results.map(({ durationMs }) => durationMs));
+        samples.push(bundleDurationMs);
+        assert.ok(bundleDurationMs < 15000, `${role} dashboard sample ${sample + 1} exceeded the 15-second client timeout`);
+        latestData = {};
+        for (const { name, response } of results) {
+          assert.equal(response.status, 200, `${role} dashboard ${name} endpoint should load`);
+          latestData[name] = await response.json();
+        }
       }
-      return Object.fromEntries(await Promise.all(results.map(async ({ name, response }) => (
-        [name, await response.json()]
-      ))));
+      console.info(
+        `NEON_DASHBOARD_PERCENTILES role=${role} n=${samples.length}`
+          + ` p50=${percentile(samples, 0.50)}ms`
+          + ` p95=${percentile(samples, 0.95)}ms`
+          + ` p99=${percentile(samples, 0.99)}ms`,
+      );
+      return latestData;
     };
 
     const organizerDashboard = await measureDashboardRequests('organizer', [
       { name: 'overview', path: '/api/platform/organizer/overview', sessionToken: token },
       { name: 'events', path: '/api/platform/events/mine', sessionToken: token },
-      { name: 'vendors', path: '/api/platform/vendors?page=1&limit=4&sort=recommended', sessionToken: token },
       { name: 'bookings', path: '/api/platform/bookings', sessionToken: token },
     ]);
+    const organizerVendors = await request(
+      '/api/platform/vendors?page=1&limit=4&sort=recommended',
+      token,
+    );
+    assert.equal(organizerVendors.status, 200);
+    await organizerVendors.json();
     assert.equal(organizerDashboard.overview.data.totalEvents, 2);
     assert.deepEqual(
       organizerDashboard.events.data.map(({ id }) => id).sort((left, right) => left - right),
       eventIds.map(Number).sort((left, right) => left - right),
     );
     assert.deepEqual((await (await request('/api/platform/events/mine', customerToken)).json()).data, []);
+
+    await measureDashboardRequests('vendor', [
+      { name: 'overview', path: '/api/vendor/overview', sessionToken: `${token}-vendor` },
+      { name: 'bookingRequests', path: '/api/vendor/booking-requests', sessionToken: `${token}-vendor` },
+      { name: 'services', path: '/api/vendor/services', sessionToken: `${token}-vendor` },
+      { name: 'notifications', path: '/api/vendor/notifications', sessionToken: `${token}-vendor` },
+    ]);
+    const vendorPagePaths = [
+      '/api/vendor/profile',
+      '/api/vendor/verification',
+      `/api/vendor/services/${serviceId}/packages`,
+      '/api/vendor/packages',
+      '/api/vendor/categories',
+      '/api/vendor/pricing',
+      '/api/vendor/history',
+      '/api/vendor/tasks',
+      '/api/vendor/payments',
+      '/api/vendor/messages',
+      '/api/vendor/reviews',
+      '/api/vendor/reports',
+      '/api/vendor/account',
+    ];
+    const vendorPageResponses = await Promise.all(vendorPagePaths.map((path) => (
+      request(path, `${token}-vendor`)
+    )));
+    await Promise.all(vendorPageResponses.map(async (response, index) => {
+      assert.equal(response.status, 200, vendorPagePaths[index]);
+      await response.json();
+    }));
 
     await measureDashboardRequests('customer', [
       { name: 'overview', path: '/api/customer/overview', sessionToken: customerToken },

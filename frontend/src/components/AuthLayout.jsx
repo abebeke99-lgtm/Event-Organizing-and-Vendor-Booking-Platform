@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import authBackground from '../assets/auth-bg.jpg';
 import { translate, useLanguage } from '../language.js';
-import Logo from './Logo.js';
+import BrandLogo from './common/BrandLogo.jsx';
 
 export default function AuthLayout({ children, languageSelector }) {
   const language = useLanguage();
@@ -22,7 +22,7 @@ export default function AuthLayout({ children, languageSelector }) {
           />
         )}
         <div className="auth-panel-logo">
-          <Logo size="lg" variant="mono-white" />
+          <BrandLogo size="clamp(48px, 8vw, 112px)" />
         </div>
         <div className="auth-panel-copy">
           <h2>{t('authHeroTitle')}</h2>

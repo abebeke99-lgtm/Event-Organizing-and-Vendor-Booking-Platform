@@ -1,5 +1,7 @@
 # PostgreSQL Migration Inventory
 
+> Historical snapshot. The migration counts and legacy-file inventory below predate removal of the EventHub MySQL schema. See [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current repository status.
+
 Updated: 2026-11-11. This inventory reports the current source scan and isolated Neon test database only; it is not production evidence.
 
 ## Query Call Sites

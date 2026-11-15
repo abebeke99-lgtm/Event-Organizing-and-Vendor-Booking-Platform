@@ -28,6 +28,7 @@ import {
 } from '../lib/passwordResetSecurity.js';
 
 const emailSchema = z.string().trim().email().max(254).transform(normalizeEmail);
+const publicRegistrationRoles = new Set(['customer', 'organizer', 'vendor']);
 const registrationLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
   limit: 5,
@@ -212,18 +213,23 @@ export function createPostgresAuthRouter({
     try {
       const registrationSetting = await query(
         database,
-        `SELECT setting_value FROM system_settings
-         WHERE setting_key = 'public_registration_enabled'`,
+        `SELECT setting_key, setting_value FROM system_settings
+         WHERE setting_key = ANY($1::varchar[])`,
+        [['public_registration_enabled', 'default_registration_role']],
       );
-      if (registrationSetting.rows[0]
-        && !['true', '1'].includes(String(registrationSetting.rows[0].setting_value).toLowerCase())) {
+      const registrationSettings = mergeSystemSettings(registrationSetting.rows);
+      if (!registrationSettings.public_registration_enabled) {
         return res.status(403).json({ error: 'Public registration is currently disabled.' });
+      }
+      const requestedRole = parsed.data.role?.trim().toLowerCase();
+      if (requestedRole && !publicRegistrationRoles.has(requestedRole)) {
+        return res.status(403).json({ error: 'The selected account type is unavailable.' });
       }
 
       const passwordHash = await bcrypt.hash(parsed.data.password, 12);
       const preferredLanguage = req.language === 'am' ? 'am' : 'en';
       const normalizedEmail = parsed.data.email;
-      const roleName = 'customer';
+      const roleName = requestedRole || registrationSettings.default_registration_role;
       const created = await inTransaction(database, async (tx) => {
         const role = await tx.query(
           `SELECT id FROM roles
@@ -420,12 +426,12 @@ export function createPostgresAuthRouter({
             const inserted = await tx.query(
               `INSERT INTO password_reset_otps
                  (user_id, otp_hash, expires_at, ip, user_agent)
-               SELECT $1, $2, NOW() + ($3 * INTERVAL '1 minute'), $4, $5
-               WHERE $1 <> 0
-                 AND EXISTS (SELECT 1 FROM users WHERE id = $1 AND status = 'active')
+               SELECT $1::bigint, $2, NOW() + ($3 * INTERVAL '1 minute'), $4, $5
+               WHERE $1::bigint <> 0
+                 AND EXISTS (SELECT 1 FROM users WHERE id = $1::bigint AND status = 'active')
                  AND NOT EXISTS (
                    SELECT 1 FROM password_reset_otps
-                   WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+                   WHERE user_id = $1::bigint AND created_at > NOW() - INTERVAL '60 seconds'
                  )
                RETURNING id`,
               [

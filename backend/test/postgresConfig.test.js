@@ -303,6 +303,13 @@ test('PostgreSQL error helpers return sanitized messages and stable categories',
   ], 'transaction rollback failed');
   assert.equal(formatPostgresError(connectionFailure), 'PostgreSQL operation failed (ECONNRESET).');
   assert.equal(getPostgresFailureCode(connectionFailure), 'DB_CONNECT_FAILED');
+
+  const schemaFailure = Object.assign(
+    new Error('The isolated Neon test database is missing application tables: password_reset_otps.'),
+    { code: 'DB_SCHEMA_INCOMPLETE' },
+  );
+  assert.equal(getPostgresFailureCode(schemaFailure), 'DB_SCHEMA_INCOMPLETE');
+  assert.equal(formatPostgresError(schemaFailure), schemaFailure.message);
 });
 
 test('PostgreSQL transactions commit, roll back, release clients, and close pools', async () => {
@@ -341,6 +348,7 @@ test('PostgreSQL transactions commit, roll back, release clients, and close pool
   };
   const database = createPostgresDatabase(neonTestEnvironment, { poolFactory: fakePoolFactory });
 
+  assert.equal(poolCalls.length, 1, 'runtime construction must not create a direct-connection pool');
   assert.equal(await database.inTransaction(async () => 'committed'), 'committed');
   await assert.rejects(
     database.inTransaction(async () => {
@@ -351,7 +359,9 @@ test('PostgreSQL transactions commit, roll back, release clients, and close pool
   assert.deepEqual(clientCalls, ['BEGIN', 'COMMIT', 'BEGIN', 'ROLLBACK']);
   assert.equal(releases.length, 2);
   assert.equal(await database.verifyRuntimeConnection().then((result) => result.server_version), '18.0');
+  assert.equal(poolCalls.length, 1, 'runtime checks must not create a direct-connection pool');
   assert.equal(await database.verifyMigrationConnection().then((result) => result.server_version), '18.0');
+  assert.equal(poolCalls.length, 2, 'direct pool is created when a migration operation requires it');
 
   const closing = database.close();
   assert.equal(database.close(), closing);
@@ -360,6 +370,34 @@ test('PostgreSQL transactions commit, roll back, release clients, and close pool
   assert.ok(poolCalls.every(({ calls }) => calls.filter((call) => call === 'END').length === 1));
   assert.equal(poolCalls[0].config.connectionString, neonTestEnvironment.DATABASE_URL);
   assert.equal(poolCalls[1].config.connectionString, neonTestEnvironment.DIRECT_URL);
+});
+
+test('PostgreSQL runtime can start without DIRECT_URL and requires it only for migration operations', async () => {
+  const poolCalls = [];
+  const fakePoolFactory = (config) => {
+    poolCalls.push(config);
+    return {
+      async connect() {
+        return {
+          async query() {
+            return { rows: [{ database_name: 'eventhub', server_version: '18.0' }], rowCount: 1 };
+          },
+          release() {},
+        };
+      },
+      async end() {},
+    };
+  };
+  const database = createPostgresDatabase(
+    { NODE_ENV: 'production', DATABASE_URL: neonTestEnvironment.DATABASE_URL },
+    { poolFactory: fakePoolFactory },
+  );
+
+  assert.equal(poolCalls.length, 1);
+  assert.equal(await database.verifyRuntimeConnection().then((result) => result.server_version), '18.0');
+  assert.throws(() => database.verifyMigrationConnection(), /DIRECT_URL is required/);
+  assert.equal(poolCalls.length, 1);
+  await database.close();
 });
 
 test('PostgreSQL check errors distinguish missing configuration without exposing URLs', () => {

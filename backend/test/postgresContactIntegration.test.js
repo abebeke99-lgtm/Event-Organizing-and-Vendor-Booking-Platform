@@ -27,6 +27,10 @@ test('Neon public contact endpoints read settings and persist submitted messages
     await once(server, 'listening');
     const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
+    const healthResponse = await fetch(`${baseUrl}/api/health`);
+    assert.equal(healthResponse.status, 200);
+    assert.deepEqual(await healthResponse.json(), { status: 'ok', db: true });
+
     const contactResponse = await fetch(`${baseUrl}/api/contact`);
     assert.equal(contactResponse.status, 200);
     const contactData = await contactResponse.json();

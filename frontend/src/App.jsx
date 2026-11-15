@@ -30,6 +30,7 @@ import HomepageEventsSection from './HomepageEventsSection.jsx';
 import HomepageImage from './HomepageImage.jsx';
 import HomepageVenueCarousel from './HomepageVenueCarousel.jsx';
 import HomepageTrustStrip from './HomepageTrustStrip.jsx';
+import BrandLogo from './components/common/BrandLogo.jsx';
 import AuthLayout from './components/AuthLayout.jsx';
 import AuthCard from './components/AuthCard.jsx';
 import Logo from './components/Logo.js';
@@ -48,7 +49,6 @@ import { getComparedServiceIds, getComparedVendorIds, toggleComparedService, tog
 import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
-import { createDemoDataService } from './demoData.js';
 import { buildOAuthStartUrl, getConfiguredOAuthProviders } from './oauthProviders.js';
 const EventCountdown = React.lazy(() => import('./EventsExperience.jsx').then(({ EventCountdown }) => ({ default: EventCountdown })));
 const EventDetailsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ EventDetailsPage }) => ({ default: EventDetailsPage })));
@@ -63,7 +63,10 @@ const AIChat = React.lazy(() => import('./AIChat.jsx'));
 import AIChatWidget from './AIChatWidget.jsx';
 import ErrorBoundary from './ErrorBoundary.jsx';
 import { formatCustomerMoney } from './customerMoney.js';
-import { getCustomerDashboardEndpoints } from './customerDashboardData.js';
+import {
+  createCustomerDashboardOverviewRequests,
+  getCustomerDashboardEndpoints,
+} from './customerDashboardData.js';
 import { getVendorDashboardEndpoints } from './vendorDashboardData.js';
 import { requestDashboardData } from './dashboardRequests.js';
 const AdminUserManagement = React.lazy(() => import('./AdminUserManagement.jsx'));
@@ -81,8 +84,7 @@ const AdminHeroImages = React.lazy(() => import('./AdminHeroImages.jsx'));
 import HomeHeroSlider from './HomeHeroSlider.jsx';
 import './vendorDirectory.css';
 
-const DEMO_AUTH_ENABLED = import.meta.env.DEV && import.meta.env.VITE_DEMO_AUTH === 'true';
-const demoDataService = createDemoDataService({ getSession: readDemoSession });
+const DEMO_AUTH_ENABLED = false;
 const menu = [
   ['overview','nav.dashboard.overview',LayoutDashboard], ['users','nav.dashboard.userManagement',Users], ['roles','nav.dashboard.rolesPermissions',Shield],
   ['vendors','nav.dashboard.vendorVerification',BadgeCheck], ['categories','nav.dashboard.serviceCategoryManagement',Tags], ['events','nav.dashboard.eventManagement',CalendarDays],
@@ -225,94 +227,12 @@ function Sidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileO
   </aside>;
 }
 const DashboardSidebar = Sidebar;
-const toDemoUser = (profile) => {
-  const savedProfile = readDemoProfile(profile.email);
-  const name = savedProfile?.name || profile.name;
-  return {
-    ...profile,
-    ...savedProfile,
-    name,
-    full_name: name,
-    id: `demo-${profile.email}`,
-  };
-};
 function navigateBrowserPath(path) {
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
 }
 
 async function api(path, options={}) {
-  const liveAdministratorRoutes = ['/auth/login', '/auth/me', '/auth/logout', '/platform/login', '/platform/me', '/platform/logout'];
-  if (DEMO_AUTH_ENABLED && !path.startsWith('/contact') && !liveAdministratorRoutes.includes(path)) {
-    if (options.signal?.aborted) throw Object.assign(new Error('The request was cancelled.'), { name: 'AbortError' });
-    const route = path.split('?')[0];
-    const method = options.method || 'GET';
-    const profilePhotoRoute = /^\/(?:admin|platform)\/profile\/photo$/.test(route);
-    if (profilePhotoRoute) {
-      const session = readDemoSession();
-      if (!session) throw new Error('Please sign in to update your profile.');
-      if (route.startsWith('/admin/') && session.role !== 'admin') {
-        throw new Error('Administrator access required.');
-      }
-      if (route.startsWith('/platform/') && session.role === 'admin') {
-        throw new Error('Platform account access required.');
-      }
-
-      if (method === 'GET') return readDemoProfilePhoto(session.email);
-      if (method === 'DELETE') {
-        await removeDemoProfilePhoto(session.email);
-        return null;
-      }
-      if (method === 'PUT') {
-        const photo = options.body;
-        const mimeType = options.headers?.['Content-Type']?.toLowerCase();
-        if (!(photo instanceof Blob) || !['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
-          throw new Error('Choose a JPG, PNG, or WebP image.');
-        }
-        if (photo.size === 0) throw new Error('Choose an image to upload.');
-        if (photo.size > 5 * 1024 * 1024) throw new Error('Profile photos must be 5 MB or smaller.');
-        const bytes = new Uint8Array(await photo.slice(0, 12).arrayBuffer());
-        const jpeg = mimeType === 'image/jpeg' && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-        const png = mimeType === 'image/png' && bytes.length >= 8
-          && bytes.slice(0, 8).join(',') === '137,80,78,71,13,10,26,10';
-        const webp = mimeType === 'image/webp' && bytes.length >= 12
-          && String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF'
-          && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP';
-        if (!jpeg && !png && !webp) throw new Error('The selected file does not match its image format.');
-        await saveDemoProfilePhoto(session.email, photo);
-        return { message: 'Profile photo saved in this browser’s demo storage.' };
-      }
-      throw new Error('This profile photo action is not supported.');
-    }
-    if (route === '/admin/profile' && method === 'PATCH') {
-      const session = readDemoSession();
-      if (!session) throw new Error('Please sign in to update your profile.');
-      if (session.role !== 'admin') throw new Error('Administrator access required.');
-      let data = {};
-      try {
-        data = JSON.parse(options.body || '{}');
-      } catch {
-        throw new Error('Invalid profile update data.');
-      }
-      const keys = Object.keys(data);
-      if (!keys.length || keys.some((key) => !['full_name', 'phone'].includes(key))
-        || typeof data.full_name !== 'string' || !data.full_name.trim() || data.full_name.trim().length > 160
-        || !(typeof data.phone === 'string' || data.phone === null) || (data.phone || '').length > 40) {
-        throw new Error('Enter a valid name and phone number.');
-      }
-      const savedProfile = saveDemoProfile(session.email, data);
-      return {
-        user: {
-          id: `demo-${session.email}`,
-          full_name: savedProfile.name,
-          email: session.email,
-          phone: savedProfile.phone,
-          role: session.role,
-        },
-      };
-    }
-    return demoDataService.request(path, options);
-  }
   try {
     const response = await apiClient.request({
       url: path,
@@ -659,7 +579,6 @@ function SessionRecoveryPage({ sessionState }) {
 function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpenRegister }) {
   const language = useLanguage();
   const authSessionState = useAuthSessionSnapshot();
-  const platformName = document.documentElement.dataset.platformName || 'EventHub';
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -926,11 +845,12 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
     </ContactTopBar>
     <header className="site-header">
       <div className="site-header-inner">
-        <a className="site-brand" href="/" aria-label={translate('goHome', language)} onClick={(event) => { event.preventDefault(); onNavigate('/'); }}>
-          <Logo className="site-brand-logo site-brand-logo-full" size="sm" variant="full" />
-          <Logo className="site-brand-logo site-brand-logo-icon" size="xs" variant="icon" />
-          <span className="site-brand-copy"><strong>{platformName}</strong><small className="site-brand-tagline">Plan. Book. Celebrate.</small></span>
-        </a>
+        <BrandLogo
+          className="site-brand"
+          size="clamp(76px, 7vw, 96px)"
+          linkTo="/"
+          onClick={(event) => { event.preventDefault(); onNavigate('/'); }}
+        />
         <PublicNavigation
           currentPath={currentPath}
           mobileOpen={mobileMenuOpen}
@@ -5026,15 +4946,19 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
         const endpoints = getCustomerDashboardEndpoints(slug);
         const owner = user.id == null ? null : `customer:${user.id}`;
         if (slug === 'overview') {
-          const overviewResponse = await requestDashboardData(api, owner, '/customer/overview', controller.signal);
+          const overviewRequests = createCustomerDashboardOverviewRequests(
+            api,
+            owner,
+            controller.signal,
+            requestDashboardData,
+          );
+          const overviewResponse = await overviewRequests.overview;
           if (controller.signal.aborted) return;
           setData({ overview: overviewResponse.data });
           setLoading(false);
 
-          const secondaryEndpoints = endpoints.filter((endpoint) => endpoint !== 'overview');
-          const secondaryResults = await Promise.allSettled(secondaryEndpoints.map((endpoint) => (
-            requestDashboardData(api, owner, `/customer/${endpoint}`, controller.signal)
-          )));
+          const { secondaryEndpoints } = overviewRequests;
+          const secondaryResults = await overviewRequests.secondary;
           if (controller.signal.aborted) return;
           const next = {};
           const objectEndpoints = new Set(['profile']);

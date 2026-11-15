@@ -21,6 +21,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     phaseStartedAt = Date.now();
   };
   const suffix = randomUUID();
+  const phoneSuffix = suffix.replace(/\D/g, '').padEnd(10, '0').slice(0, 10);
   const adminEmail = `pg-admin-${suffix}@example.invalid`;
   const adminRoleName = `integration-admin-${suffix}`;
   const testRoleName = `integration-role-${suffix}`;
@@ -312,12 +313,13 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       body: {
         full_name: 'Postgres Admin Created User',
         email: `pg-user-${suffix}@example.invalid`,
-        phone: `+1555${suffix.replaceAll('-', '').slice(0, 10)}`,
+        phone: `+1555${phoneSuffix}`,
         role_id: organizerRole.id,
       },
     });
-    assert.equal(createdResponse.status, 201);
-    userId = (await createdResponse.json()).data.id;
+    const createdUser = await createdResponse.json();
+    assert.equal(createdResponse.status, 201, JSON.stringify(createdUser));
+    userId = createdUser.data.id;
     assert.equal(invitationMessages.length, 1);
     const invitationToken = new URL(invitationMessages[0].setupUrl).searchParams.get('token');
     const storedInvitation = await database.runtimeAdapter.query(

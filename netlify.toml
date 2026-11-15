@@ -3,6 +3,4 @@ base = "."
 command = "npm ci && npm run build"
 publish = "frontend/dist"
 
-[build.environment]
-VITE_DEMO_AUTH = "false"
 # The single SPA fallback is maintained in frontend/public/_redirects.

@@ -1,4 +1,4 @@
-function normalizeCategoryKey(value = '') {
+export function normalizeCategoryKey(value = '') {
   return String(value ?? '')
     .trim()
     .toLowerCase()

@@ -45,6 +45,23 @@ test('PostgreSQL adapter passes parameterized query results through without MySQ
   );
 });
 
+test('PostgreSQL adapter converts positional placeholders without changing quoted text or comments', async () => {
+  const pool = createPool();
+  const database = createPostgresAdapter(pool);
+  const sql = `SELECT ?::text AS value, '?'::text AS literal, "?" AS identifier,
+    $$?$$::text AS dollar_quoted /* ? */ -- ?
+    , /* outer /* nested ? */ comment */ ?::integer AS count`;
+
+  await database.query(sql, ['EventHub', 7]);
+
+  assert.deepEqual(pool.statements[0], {
+    text: `SELECT $1::text AS value, '?'::text AS literal, "?" AS identifier,
+    $$?$$::text AS dollar_quoted /* ? */ -- ?
+    , /* outer /* nested ? */ comment */ $2::integer AS count`,
+    values: ['EventHub', 7],
+  });
+});
+
 test('database normalization wraps frozen PostgreSQL adapters without mutating them', async () => {
   const rawAdapter = Object.freeze(createPostgresAdapter(createPool()));
   const database = normalizeDatabaseAdapter(rawAdapter);

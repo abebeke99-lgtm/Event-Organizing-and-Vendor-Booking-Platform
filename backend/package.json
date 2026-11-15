@@ -15,9 +15,7 @@
     "audit": "npm run audit:postgres-queries",
     "audit:postgres-queries": "node scripts/audit-postgres-query-inventory.js",
     "smtp:check": "node scripts/check-smtp.js",
-    "seed:users": "node scripts/seed-users.js",
     "seed": "node scripts/seed.js",
-    "seed:vendor-menu": "node scripts/seed-vendor-menu.js",
     "bootstrap:admin": "node scripts/bootstrap-admin.js",
     "test": "node scripts/run-tests.js"
   },
@@ -34,7 +32,6 @@
     "helmet": "^8.0.0",
     "jose": "^6.2.17",
     "multer": "^2.5.0",
-    "mysql2": "^3.12.0",
     "nodemailer": "^10.3.1",
     "openai": "^6.49.0",
     "pg": "^8.23.1",

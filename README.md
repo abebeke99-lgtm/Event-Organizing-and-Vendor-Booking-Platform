@@ -88,7 +88,7 @@ Configure these backend environment variables to enable AI responses:
 - `OPENAI_MODEL`: default model identifier (defaults to `gpt-4o-mini`).
 - `OPENAI_CHAT_MODELS`: comma-separated server-approved model IDs exposed in the model selector (defaults to `gpt-4o-mini`).
 
-Set the key manually in the backend environment (for local development, replace the placeholder in the ignored `backend/.env`; in production, use the backend hosting provider's secret settings), then restart/redeploy the API. A nonblank process environment key takes precedence over `.env`. Never put it in frontend `.env` or a `VITE_` variable. The status API reports whether a placeholder was detected, whether a non-placeholder key is configured or has been rejected, whether a recent real provider probe succeeded, and whether a real chat has succeeded since the API started; it never returns the key. Without a usable key, health returns offline and `NOT_VERIFIED`, while response endpoints return HTTP 503 with setup guidance; no mock answer is returned. With a key, health runs a bounded real Chat Completions request and reports `VERIFIED` only for a non-empty response. Model access and pricing depend on the OpenAI account. If an existing database has not applied the pre-existing additive `backend/migrations/038_ai_chat.sql` migration, review it and back up the database before running `npm run migrate`; this chatbot enhancement adds no database tables or migrations.
+Set the key manually in the backend environment (for local development, replace the placeholder in the ignored `backend/.env`; in production, use the backend hosting provider's secret settings), then restart/redeploy the API. A nonblank process environment key takes precedence over `.env`. Never put it in frontend `.env` or a `VITE_` variable. The status API reports whether a placeholder was detected, whether a non-placeholder key is configured or has been rejected, whether a recent real provider probe succeeded, and whether a real chat has succeeded since the API started; it never returns the key. Without a usable key, health returns offline and `NOT_VERIFIED`, while response endpoints return HTTP 503 with setup guidance; no mock answer is returned. With a key, health runs a bounded real Chat Completions request and reports `VERIFIED` only for a non-empty response. Model access and pricing depend on the OpenAI account. Persistent AI tables are included in PostgreSQL migration `backend/postgres/migrations/002_full_feature_schema.sql`; do not run the removed MySQL migration files.
 
 AI chat also blocks common requests to disclose credentials, hidden instructions, private configuration, or other users' data before calling the provider. Credential-shaped values are redacted from chat input, stored titles/messages, model context, streamed output, and rendered message text; the model receives a fixed security policy that treats conversation content as untrusted. These checks are defense in depth and pattern-based, not a substitute for keeping secrets out of user messages or for access controls.
 
@@ -98,7 +98,7 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 
 - Blueprint: the existing GitHub repository's `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
 - Required Render variables: `NODE_ENV=production`, `WEB_ORIGIN` (exact HTTPS frontend origin), `DB_DIALECT=postgres`, Neon pooled `DATABASE_URL`, `DB_SSL=true`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Set secrets only in the Render Dashboard.
-- Optional Render variables: `DB_SSL_CA` or `DB_SSL_CA_BASE64` only if a provider CA is needed; `FRONTEND_URL` for email links; `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_SECURE` for password-reset email; `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS` for AI Assistant; `PAYMENT_PROVIDER_ADAPTER` only when a real payment adapter is configured; `PLATFORM_STATUS` and `MAINTENANCE_MODE` for explicit platform status overrides. Do not set `SESSION_SECRET`; it is reserved and unused. Do not create fake administrator accounts or run database initialization, migration, or seed commands against production.
+- Optional Render variables: `FRONTEND_URL` for email links; `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_SECURE` for password-reset email; `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS` for AI Assistant; `PAYMENT_PROVIDER_ADAPTER` only when a real payment adapter is configured; `PLATFORM_STATUS` and `MAINTENANCE_MODE` for explicit platform status overrides. Do not set `SESSION_SECRET`; it is reserved and unused. Do not create fake administrator accounts or run database initialization, migration, or seed commands against production.
 - To enable AI, configure the secret `OPENAI_API_KEY` in Render's **Environment** settings, then save and redeploy. Verify provider access with `GET /api/ai/health` and configuration with `GET /api/ai/status`. TLS certificate verification remains enabled, with Node's system CA store or the optional provider CA.
 - Hero slide files are stored under `backend/uploads/hero-slides`. Configure persistent shared storage for this directory in production (especially across deploys or multiple API instances); the database stores only generated filenames and the API serves the image bytes.
 - `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and returns HTTP 200 with `db: true` when Neon PostgreSQL is available, or HTTP 503 with `db: false` and a safe `reason` code when it is unavailable. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
@@ -108,7 +108,7 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 ### Netlify frontend
 
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
-- Required: `VITE_API_URL` set in Netlify to the actual Render service HTTPS URL confirmed in the Render Dashboard, ending in `/api`, and `VITE_DEMO_AUTH=false`. These are public build-time settings, not secrets. No unverified Render hostname is baked into the repository. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
+- Required: `VITE_API_URL` set in Netlify to the actual Render service HTTPS URL confirmed in the Render Dashboard, ending in `/api`. This is a public build-time setting, not a secret. No unverified Render hostname is baked into the repository. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
 - Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
 - The public header's phone and email are configured centrally in `frontend/src/siteSettings.js`; social profile links remain build-time settings. For local development, set the social profile URLs in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
@@ -194,14 +194,7 @@ The public menu reuses existing tables; it does not add category or vendor table
 - `users`: `id` and `status`; public vendor counts include only `active` users with `verified` profiles.
 - `services`: active service records provide the existing service count shown to other marketplace consumers.
 
-The idempotent development seed adds any missing defaults—Photography and Videography, Catering, Decoration and Flowers, Venues and Halls, Music and DJ, Sound and Lighting, Makeup and Beauty, Wedding Cars and Transport, Event Planners, Tents and Furniture Rental, Cake and Bakery, and Security Services—and two uniquely named active, verified sample vendor profiles per active default category. It preserves existing category IDs, vendor records, and relationships. Sample login emails use the reserved `example.invalid` domain; the seed is restricted to the configured local XAMPP `event_platform` development database. The database enum values are checked before inserts (`users.status = active`; `vendor_profiles.verification_status = verified`).
-
-Run from the repository root in PowerShell:
-
-```powershell
-$env:NODE_ENV = 'development'
-npm --prefix backend run seed:vendor-menu
-```
+Vendor categories, profiles, and services shown in the menu are read from PostgreSQL through the API. The removed XAMPP seed command is not part of the current application. For isolated automated development fixtures, use only the guarded `backend` seed command after verifying its Neon test-database configuration; never seed sample records into production.
 
 ### Frontend files
 
@@ -255,9 +248,9 @@ The platform includes the requested features for:
 ## 9. Local Setup
 
 1. Use Node.js 20 and install dependencies from the repository root with `npm install`.
-2. API-backed authentication is the development default (`VITE_DEMO_AUTH=false`). To run the self-contained frontend demo, set `VITE_DEMO_AUTH=true` in `frontend/.env.development` or the frontend process environment. Demo registration and four predefined role logins need no API or database; the login page lists their mock credentials. Demo profiles and sample application records are stored in browser localStorage, while passwords and tokens are never stored there. Demo mode is limited to Vite development and is for UI testing only, not authorization or real data access.
-3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173`. For API-backed authentication, keep `VITE_DEMO_AUTH=false`, configure `VITE_API_URL`, and start the backend with `backend/.env.neon-test` configured for the isolated Neon test database (or use production Neon secrets only in the production environment).
-4. For a real backend, apply migrations with `npm run migrate` after configuring the database. Never enable demo authentication in production.
+2. The frontend always uses the Express API; browser-only demo authentication and sample API data are disabled. Configure `VITE_API_URL` for the API, and configure the backend with the isolated Neon test database in `backend/.env.neon-test` for local development. Use production Neon secrets only in the production environment.
+3. Run `npm run dev` to start the frontend at `http://127.0.0.1:5173` and the backend API.
+4. Apply only reviewed migrations to the intended Neon database with `npm run migrate`; startup does not reset or seed the database.
 
 ### Open the isolated Neon PostgreSQL database in VS Code
 
@@ -289,7 +282,6 @@ For a real local reset flow, configure the isolated Neon test database and SMTP 
 
 ```powershell
 npm run migrate --prefix backend
-$env:VITE_DEMO_AUTH = 'false'
 $env:VITE_API_URL = 'http://127.0.0.1:4000'
 npm run dev --prefix backend
 ```
@@ -297,23 +289,13 @@ npm run dev --prefix backend
 In a second PowerShell terminal from the repository root, start the frontend:
 
 ```powershell
-$env:VITE_DEMO_AUTH = 'false'
 $env:VITE_API_URL = 'http://127.0.0.1:4000'
 npm run dev --prefix frontend
 ```
 
-The browser-only demo mode intentionally cannot send email or change real account passwords.
-
 ## 10. Test Access
 
-The predefined demo credentials are mock-only and are not valid for production or backend access:
-
-| Role | Email | Password |
-|---|---|---|
-| Admin | `admin@demo.eventhub` | `AdminDemo123` |
-| Customer | `customer@demo.eventhub` | `CustomerDemo12` |
-| Organizer | `organizer@demo.eventhub` | `Organizer12Ab` |
-| Vendor | `vendor@demo.eventhub` | `VendorDemo12` |
+Sign in with an account that already exists in the configured Neon database. The application does not provide demo credentials or create sample users automatically.
 
 Create the initial administrator only after database migrations have run. Set `ADMIN_BOOTSTRAP_EMAIL`, `ADMIN_BOOTSTRAP_NAME`, and `ADMIN_BOOTSTRAP_PASSWORD` privately in `backend/.env` or the backend process environment, then run `npm run bootstrap:admin` from the repository root. The password must be 12–16 characters; any characters are allowed. Provisioning hashes it with bcrypt and refuses an email that already exists without modifying that account. Never publish the environment values.
 
@@ -389,7 +371,7 @@ Set `platform_currency` to the platform's three-letter ISO 4217 currency code an
 
 ### Administrator system settings
 
-In the opt-in browser demo (`VITE_DEMO_AUTH=true`), Administrator > System Settings provides the 19-section frontend demonstration module. Its settings and sample logs are stored only in that browser's localStorage; file previews, email tests, payment options, maintenance mode, backups, and logs do not call the backend or affect live platform services. API-backed mode retains the existing server-managed settings behavior described below.
+Administrator > System Settings reads and writes settings through the Express API; values are validated and persisted in Neon PostgreSQL.
 
 Apply `023_system_settings_module.sql` with `npm run migrate`. Administrator > System Settings reads and writes allowlisted values in `system_settings`; changes are backend-validated and audited. Consequential changes require confirmation, and reset-to-default requires an explicit confirmation. Logo URLs must use HTTPS. The configured currency and reporting timezone feed platform availability and reports. Booking cancellation/rescheduling limits and confirmation workflow, vendor application requirements, administrator notification preferences, and the refund request window are enforced by the corresponding server workflows. Settings do not rewrite existing transactions, bookings, or applications.
 

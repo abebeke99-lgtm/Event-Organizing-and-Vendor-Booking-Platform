@@ -89,10 +89,10 @@ export function normalizeDatabaseAdapter(database) {
   const originalQuery = typeof database.query === 'function' ? database.query.bind(database) : null;
   const originalExecute = typeof database.execute === 'function' ? database.execute.bind(database) : null;
   const rewriteLegacyPlaceholders = (sql) => (typeof sql === 'string' ? sql.replace(/\$\d+/g, '?') : sql);
-  const callLegacyExecute = async (args, fallback = false) => {
+  const callLegacyExecute = async (args) => {
     if (!originalExecute) return null;
     const [sql, ...rest] = args;
-    const candidates = fallback ? [args, [rewriteLegacyPlaceholders(sql), ...rest]] : [args, [rewriteLegacyPlaceholders(sql), ...rest]];
+    const candidates = [args, [rewriteLegacyPlaceholders(sql), ...rest]];
     for (const candidate of candidates) {
       try {
         return await originalExecute(...candidate);
@@ -103,9 +103,7 @@ export function normalizeDatabaseAdapter(database) {
     return null;
   };
   if (typeof database.query !== 'function' && typeof database.execute === 'function') {
-    adapter.query = async (...args) => {
-      return normalizeQueryResult(await callLegacyExecute(args));
-    };
+    adapter.query = async (...args) => normalizeQueryResult(await callLegacyExecute(args));
   } else if (originalQuery) {
     const currentQuery = originalQuery;
     adapter.query = async (...args) => {
@@ -132,9 +130,7 @@ export function normalizeDatabaseAdapter(database) {
   }
 
   if (typeof database.execute !== 'function' && typeof adapter.query === 'function') {
-    adapter.execute = async (...args) => {
-      return normalizeExecuteResult(await adapter.query(...args));
-    };
+    adapter.execute = async (...args) => normalizeExecuteResult(await adapter.query(...args));
   } else if (originalExecute) {
     const currentExecute = originalExecute;
     adapter.execute = async (...args) => {
@@ -192,7 +188,7 @@ export {
   validateDatabaseEnvironment,
 } from './lib/databaseConfig.js';
 
-export function formatDatabaseError(error, password = process.env.DB_PASSWORD) {
+export function formatDatabaseError(error, password) {
   return formatPostgresError(error, password);
 }
 
@@ -230,7 +226,7 @@ export async function verifyDatabaseConnection(database = pool, expectedDatabase
   const client = database ?? getDatabasePool();
   const result = await client.query('SELECT version() AS server_version, current_database() AS database_name');
   if (expectedDatabase && result.rows[0]?.database_name !== expectedDatabase) {
-    throw new Error('Connected database does not match DB_NAME.');
+    throw new Error('Connected database does not match the expected database.');
   }
 }
 

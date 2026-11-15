@@ -110,7 +110,7 @@ test('database health check validates PostgreSQL configuration without trying My
   });
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /FAIL Configuration: set valid values for DATABASE_URL/);
+  assert.match(result.stderr, /FAIL PostgreSQL configuration: DATABASE_URL is required/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /ECONNREFUSED|MySQL/);
 });
 

@@ -18,11 +18,10 @@ Set these **required** Render environment variables:
 
 Render supplies `PORT`; Express listens on that port and `0.0.0.0`. Put all database credentials in Render's environment settings, not in Git or chat. `DIRECT_URL` is only needed when running reviewed PostgreSQL migrations manually; it must target the same Neon project using the direct endpoint.
 
-In the Render Dashboard, open the service's **Environment** page. Confirm the fixed production settings above are present (they are supplied by the Blueprint). Set the pooled Neon `DATABASE_URL` secret. Add `DIRECT_URL` only if a reviewed migration will be run manually. Add `DB_SSL_CA` or `DB_SSL_CA_BASE64` only if required; certificate verification remains enabled. Save changes and deploy. Never paste credentials into chat or source files.
+In the Render Dashboard, open the service's **Environment** page. Confirm the fixed production settings above are present (they are supplied by the Blueprint). Set the pooled Neon `DATABASE_URL` secret. Add `DIRECT_URL` only if a reviewed migration will be run manually. TLS certificate verification remains enabled. Save changes and deploy. Never paste credentials into chat or source files.
 
 These settings are **optional**:
 
-- `DB_SSL_CA` or `DB_SSL_CA_BASE64`: provider CA certificate when it is not trusted by Node's system CA store. Certificate verification remains enabled.
 - `FRONTEND_URL`: public frontend URL used in email links. Set to `https://infobekele.netlify.app`.
 - Google and Microsoft sign-in are optional. Configure these server-only variables after creating an OAuth/OIDC app in each provider console:
   - Google: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`
@@ -52,7 +51,6 @@ Use the repository root as the base directory, `npm ci && npm run build` as the 
 Set these **required** Netlify build environment variables:
 
 - `VITE_API_URL`: the actual Render service HTTPS URL ending in `/api`, for example `https://<your-render-service>.onrender.com/api`. Replace the example with the URL shown in the Render dashboard. The frontend accepts either the API origin or an origin ending in `/api` and appends exactly one `/api`.
-- `VITE_DEMO_AUTH=false`: production uses real API authentication; demo authentication is development-only.
 
 Set `VITE_API_URL` in the Netlify Dashboard to the HTTPS URL confirmed in the Render Dashboard, ending in `/api`. No unverified Render hostname is baked into the repository. Redeploy after setting or changing it; a Vite build embeds this public URL.
 

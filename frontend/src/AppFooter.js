@@ -2,7 +2,7 @@ import React, { createElement as h } from 'react';
 import { translate, useLanguage } from './language.js';
 import { getFooterSocialLinks } from './socialLinks.js';
 import SocialMediaLink from './SocialMediaLink.js';
-import Logo from './components/Logo.js';
+import BrandLogo from './components/common/BrandLogo.js';
 
 const SHOW_FOOTER_CONTACT = false;
 
@@ -19,7 +19,7 @@ export default function AppFooter({ socialEnvironment }) {
 
   const columns = [
     h('div', { className: 'footer-column', key: 'brand' },
-      h('div', { className: 'brand-pill' }, h(Logo, { className: 'footer-brand-logo', size: 'xs', variant: 'mono-white' }), h('strong', { className: 'footer-brand-name' }, platformName)),
+      h(BrandLogo, { className: 'footer-brand-logo-link', size: '160px', linkTo: '/' }),
       h('p', null, platformDescription || translate('footerDescription', language))),
     h('div', { className: 'footer-column', key: 'explore' },
       h('h4', null, translate('explore', language)),

@@ -47,7 +47,18 @@ export function requireModuleUnlocked(moduleKey) {
 }
 
 export async function requirePlatformAvailable(req, res, next) {
-  if (['/logout', '/availability', '/providers'].includes(req.path)) return next();
+  const routePath = `${req.baseUrl || ''}${req.path || ''}`
+    .split('?')[0]
+    .replace(/^\/api(?=\/|$)/, '');
+  if ([
+    '/logout',
+    '/availability',
+    '/providers',
+    '/platform/logout',
+    '/platform/availability',
+    '/platform/providers',
+    '/platform/oauth/providers',
+  ].includes(routePath)) return next();
   try {
     const now = Date.now();
     let settings = req.app.locals?.platformSettingsCache;

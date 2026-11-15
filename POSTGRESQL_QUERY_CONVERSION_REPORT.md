@@ -1,5 +1,7 @@
 # PostgreSQL Query Conversion Report
 
+> Historical snapshot. Call-site counts and runtime claims below predate recent EventHub cleanup; use [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current counts and outstanding gaps.
+
 Updated: 2026-11-11  
 Environment: authorized isolated Neon test database `eventhub`; production was not accessed.
 

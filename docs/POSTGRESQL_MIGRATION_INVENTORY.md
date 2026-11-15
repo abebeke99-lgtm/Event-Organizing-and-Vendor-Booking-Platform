@@ -1,5 +1,7 @@
 # PostgreSQL Migration Inventory
 
+> Historical evidence archive. The dated checkpoints below include earlier MySQL/XAMPP configuration and test results; they are not current repository instructions. See the root [MYSQL_REMOVAL_REPORT.md](../MYSQL_REMOVAL_REPORT.md) for current status.
+
 ## Current Continuation Status (2026-11-11)
 
 The current query inventory and payment/refund evidence are recorded in the root [POSTGRESQL_MIGRATION_INVENTORY.md](../POSTGRESQL_MIGRATION_INVENTORY.md), [POSTGRESQL_MIGRATION_PROGRESS.md](../POSTGRESQL_MIGRATION_PROGRESS.md), and [POSTGRESQL_PAYMENT_REFUND_MIGRATION_REPORT.md](../POSTGRESQL_PAYMENT_REFUND_MIGRATION_REPORT.md). The latest AST scan is 1074 call sites across 92 source files: 18 infrastructure calls, 18 application calls explicitly verified on isolated Neon, and 1038 application calls not certified. The isolated Neon `eventhub` test database has 51 application table names, 82 FKs, 151 indexes, and migrations 001–010. The latest authentication/customer-account integration passed 1/1; the focused customer/auth regression set passed 34/34. Earlier full-backend results in this file are historical and are not evidence of full PostgreSQL runtime parity. Production remains untouched.

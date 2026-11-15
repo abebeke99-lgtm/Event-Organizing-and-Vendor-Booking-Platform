@@ -113,7 +113,7 @@ export async function requireAdmin(req, res, next) {
       if (req.cookies?.platform_session) {
         const database = req.app?.locals?.database || pool;
         if (req.app?.locals?.databaseDialect === 'postgres') {
-          let accounts = await database.query(
+          const accounts = await database.query(
             `SELECT 1 FROM user_sessions s
              JOIN users u ON u.id = s.user_id AND u.status = 'active'
              JOIN user_roles ur ON ur.user_id = u.id
@@ -123,20 +123,7 @@ export async function requireAdmin(req, res, next) {
              LIMIT 1`,
             [hashToken(req.cookies.platform_session)],
           );
-          let accountRows = Array.isArray(accounts) ? (accounts[0] || []) : (accounts?.rows || []);
-          if (!accountRows.length && typeof database.execute === 'function') {
-            const [legacyRows] = await database.execute(
-              `SELECT 1 FROM user_sessions s
-               JOIN users u ON u.id = s.user_id AND u.status = 'active'
-               JOIN user_roles ur ON ur.user_id = u.id
-               JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
-               WHERE s.token_hash = ? AND s.expires_at > NOW()
-                 AND NOT (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))
-               LIMIT 1`,
-              [hashToken(req.cookies.platform_session)],
-            );
-            accountRows = Array.isArray(legacyRows) ? legacyRows : [];
-          }
+          const accountRows = Array.isArray(accounts) ? (accounts[0] || []) : (accounts?.rows || []);
           if (accountRows.length) return res.status(403).json({ error: 'Access denied.' });
           clearPlatformCookie(res);
           return res.status(401).json({ error: 'Authentication required.' });

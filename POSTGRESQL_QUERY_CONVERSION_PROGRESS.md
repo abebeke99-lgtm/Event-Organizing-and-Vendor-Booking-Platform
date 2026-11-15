@@ -1,5 +1,7 @@
 # PostgreSQL Query Conversion Progress
 
+> Historical snapshot. The query inventory and MySQL-runtime statements below are superseded by later repository changes. See [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current verification and limitations.
+
 Updated: 2026-11-11  
 Database used: isolated Neon test database `eventhub` only. Production was not accessed.
 

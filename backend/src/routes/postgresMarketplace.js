@@ -2,11 +2,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { normalizeDatabaseAdapter } from '../db.js';
 import { getPublicServiceById } from '../lib/serviceCatalog.js';
-import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js';
+import { getPublicVendorById } from '../lib/vendorCatalog.js';
 import { listPublicServices } from '../lib/serviceCatalog.js';
 import { mapDatabaseEvent } from '../lib/eventCatalog.js';
 import { categorySlug } from '../lib/marketplace.js';
-import { loadPostgresPublicMarketplace } from '../lib/postgresMarketplace.js';
+import { loadPostgresPublicMarketplace, loadPostgresPublicVendorPage } from '../lib/postgresMarketplace.js';
 import { isPublicCategoryName } from '../lib/categoryName.js';
 
 const vendorSortValue = z.preprocess((value) => {
@@ -198,28 +198,7 @@ export function createPostgresMarketplaceRouter({ database }) {
     const parsed = vendorFiltersSchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ error: 'Invalid vendor filters.' });
     try {
-      const marketplace = await loadPostgresPublicMarketplace(database);
-      let vendors = marketplace.vendors;
-      if (parsed.data.availableDate) {
-        const available = await database.query(
-          `SELECT va.vendor_id
-           FROM vendor_availability va
-           WHERE va.available_date = $1::date AND va.status = 'available'
-             AND NOT EXISTS (
-               SELECT 1 FROM bookings b
-               JOIN events e ON e.id = b.event_id
-               WHERE b.vendor_id = va.vendor_id
-                 AND b.status IN ('accepted', 'confirmed', 'in_progress')
-                 AND COALESCE(b.scheduled_date::date, e.start_date::date) = va.available_date
-             )`,
-          [parsed.data.availableDate],
-        );
-        const availableVendorIds = new Set(available.rows.map((row) => Number(row.vendor_id)));
-        vendors = vendors
-          .filter((vendor) => availableVendorIds.has(Number(vendor.id)))
-          .map((vendor) => ({ ...vendor, available: true }));
-      }
-      const result = listPublicVendors(vendors, parsed.data);
+      const result = await loadPostgresPublicVendorPage(database, parsed.data);
       return res.json({
         data: result.vendors,
         pagination: { total: result.total, page: result.page, limit: result.limit, totalPages: result.totalPages },

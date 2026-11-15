@@ -1,5 +1,7 @@
 # PostgreSQL Payment and Refund Migration Report
 
+> Historical snapshot. Deployment and dependency statements, if any, reflect the earlier migration phase. See [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current EventHub repository status.
+
 Updated: 2026-11-12
 Database scope: verified isolated Neon PostgreSQL test project/database `eventhub` only. No production Neon, Render, or Netlify settings were accessed or changed.
 

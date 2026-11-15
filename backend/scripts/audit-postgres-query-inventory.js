@@ -7,7 +7,6 @@ const backendDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sourceDirectory = resolve(backendDirectory, 'src');
 const outputPath = resolve(backendDirectory, '..', 'docs', 'POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv');
 const mysqlPatterns = [
-  ['question-mark placeholders', /\?/],
   ['ON DUPLICATE KEY UPDATE', /ON\s+DUPLICATE\s+KEY\s+UPDATE/i],
   ['INSERT IGNORE', /INSERT\s+IGNORE/i],
   ['VALUES(column)', /\bVALUES\s*\(\s*[a-z_]\w*\s*\)/i],
@@ -16,28 +15,189 @@ const mysqlPatterns = [
   ['MySQL date functions', /\b(?:CURDATE|DATE_ADD|DATE_SUB|WEEKDAY|LAST_DAY)\s*\(/i],
   ['IFNULL', /\bIFNULL\s*\(/i],
   ['LAST_INSERT_ID', /\bLAST_INSERT_ID\s*\(/i],
-  ['CONCAT_WS', /\bCONCAT_WS\s*\(/i],
   ['MySQL interval syntax', /\bINTERVAL\s+\d+\s+(?:SECOND|MINUTE|HOUR|DAY|MONTH|YEAR)\b/i],
 ];
 const neonVerifiedCallsites = new Map([
-  ['backend/src/routes/postgresAuth.js:39:10', 'PostgreSQL auth API query adapter; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:50:9', 'PostgreSQL auth audit insert; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:60:9', 'PostgreSQL auth session insert; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:71:25', 'PostgreSQL registration notification setting lookup; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:78:24', 'PostgreSQL admin recipient lookup; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:86:32', 'PostgreSQL registration notification insert; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:102:13', 'PostgreSQL notification history insert; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:170:28', 'PostgreSQL customer role lookup; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:180:32', 'PostgreSQL user insert with RETURNING; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:187:15', 'PostgreSQL user-role insert; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:270:15', 'PostgreSQL login timestamp update; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresAuth.js:273:17', 'PostgreSQL vendor profile ON CONFLICT insert; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresCustomerAccount.js:47:29', 'PostgreSQL customer profile update; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresCustomerAccount.js:52:13', 'PostgreSQL customer profile audit insert; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresCustomerAccount.js:90:31', 'PostgreSQL current-password row lock and lookup; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresCustomerAccount.js:98:15', 'PostgreSQL password update; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresCustomerAccount.js:102:15', 'PostgreSQL other-session invalidation; verified by backend/test/postgresAuthIntegration.test.js'],
-  ['backend/src/routes/postgresCustomerAccount.js:106:15', 'PostgreSQL critical password-change audit insert; verified by backend/test/postgresAuthIntegration.test.js'],
+  ['backend/src/app.js:146:13', {
+    description: 'API health SELECT 1',
+    test: 'backend/test/postgresContactIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:76:14', {
+    description: 'Contact settings lookup',
+    test: 'backend/test/postgresContactIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:188:11', {
+    description: 'Persist public contact message',
+    test: 'backend/test/postgresContactIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:81:10', {
+    description: 'PostgreSQL auth API query adapter',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:92:9', {
+    description: 'PostgreSQL auth audit insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:102:9', {
+    description: 'PostgreSQL auth session insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:114:25', {
+    description: 'PostgreSQL registration notification setting lookup',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:121:24', {
+    description: 'PostgreSQL admin recipient lookup',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:129:32', {
+    description: 'PostgreSQL registration notification insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:145:13', {
+    description: 'PostgreSQL notification history insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:234:28', {
+    description: 'PostgreSQL customer role lookup',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:245:32', {
+    description: 'PostgreSQL user insert with RETURNING',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:252:15', {
+    description: 'PostgreSQL user-role insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:383:33', {
+    description: 'Password-reset account lookup',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:391:36', {
+    description: 'Password-reset OTP cooldown lookup',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:397:19', {
+    description: 'Password-reset OTP invalidation',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:406:19', {
+    description: 'Password-reset session invalidation',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:415:19', {
+    description: 'Legacy password-reset challenge invalidation',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:426:36', {
+    description: 'Password-reset OTP insert with typed PostgreSQL parameter',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:485:33', {
+    description: 'Password-reset OTP verification lookup',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:514:19', {
+    description: 'Password-reset OTP consumption',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:516:19', {
+    description: 'Password-reset session insert',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:545:33', {
+    description: 'Password-reset session validation',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:566:19', {
+    description: 'Password-reset password update',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:567:19', {
+    description: 'Password-reset session invalidation after password change',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:571:19', {
+    description: 'Password-reset OTP invalidation after password change',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:575:19', {
+    description: 'Legacy password-reset challenge cleanup',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:576:19', {
+    description: 'Legacy password-reset token cleanup',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:577:19', {
+    description: 'Session invalidation after password reset',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:578:19', {
+    description: 'Administrator-session invalidation after password reset',
+    test: 'backend/test/postgresPasswordResetIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:654:15', {
+    description: 'PostgreSQL login timestamp update',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAuth.js:660:17', {
+    description: 'PostgreSQL vendor profile ON CONFLICT insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresCustomerAccount.js:52:29', {
+    description: 'PostgreSQL customer profile update',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresCustomerAccount.js:57:13', {
+    description: 'PostgreSQL customer profile audit insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresCustomerAccount.js:95:31', {
+    description: 'PostgreSQL current-password row lock and lookup',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresCustomerAccount.js:103:15', {
+    description: 'PostgreSQL password update',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresCustomerAccount.js:107:15', {
+    description: 'PostgreSQL other-session invalidation',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresCustomerAccount.js:111:15', {
+    description: 'PostgreSQL critical password-change audit insert',
+    test: 'backend/test/postgresAuthIntegration.test.js',
+  }],
+  ['backend/src/lib/postgresMarketplace.js:18:24', {
+    description: 'Load active services for the requested vendor page',
+    test: 'backend/test/vendorPublicApi.test.js',
+  }],
+  ['backend/src/lib/postgresMarketplace.js:50:5', {
+    description: 'Hydrate public packages for paged vendor services',
+    test: 'backend/test/vendorPublicApi.test.js',
+  }],
+  ['backend/src/lib/postgresMarketplace.js:63:5', {
+    description: 'Hydrate media for paged vendor services',
+    test: 'backend/test/vendorPublicApi.test.js',
+  }],
+  ['backend/src/lib/postgresMarketplace.js:69:5', {
+    description: 'Hydrate availability for paged vendor services',
+    test: 'backend/test/vendorPublicApi.test.js',
+  }],
+  ['backend/src/lib/postgresMarketplace.js:118:5', {
+    description: 'Hydrate media for paged public vendors',
+    test: 'backend/test/vendorPublicApi.test.js',
+  }],
+  ['backend/src/lib/postgresMarketplace.js:220:30', {
+    description: 'Resolve a public vendor category filter',
+    test: 'backend/test/vendorPublicApi.test.js',
+  }],
+  ['backend/src/lib/postgresMarketplace.js:268:24', {
+    description: 'Filter, count, sort, and paginate vendors in PostgreSQL',
+    test: 'backend/test/vendorPublicApi.test.js',
+  }],
 ]);
 
 async function listJavaScriptFiles(directory) {
@@ -104,7 +264,7 @@ function inspectCallsites(ast, filePath, testFiles) {
         const dialect = isPostgresInfrastructure || /(?:^|\/)postgres[^/]*\.js$/i.test(relativeFilePath)
           ? 'PostgreSQL-specific source'
           : property === 'execute'
-            ? 'MySQL execute interface'
+            ? 'Database adapter execute method; result handling requires review'
             : 'Dual-dialect or unknown; requires review';
         rows.push({
           callSiteId: `${relativeFilePath}:L${line}:C${column}:${property}`,
@@ -119,26 +279,28 @@ function inspectCallsites(ast, filePath, testFiles) {
           conversionStatus: isPostgresInfrastructure
             ? 'PostgreSQL infrastructure; not an application query'
             : neonVerification
-              ? `PostgreSQL verified on isolated Neon; ${neonVerification}`
-            : property === 'execute'
-              ? 'Not converted; execute/result handling requires MySQL semantics'
-              : markers.length
-                ? 'Not converted; MySQL-specific SQL detected'
-                : 'Not certified; inspect SQL, parameters, and result handling',
+              ? `PostgreSQL verified on isolated Neon; ${neonVerification.description}`
+              : property === 'execute'
+                ? markers.length
+                  ? 'Not converted; MySQL-specific SQL detected'
+                  : 'Not certified; inspect SQL, parameters, and adapter result handling'
+                : markers.length
+                  ? 'Not converted; MySQL-specific SQL detected'
+                  : 'Not certified; inspect SQL, parameters, and result handling',
           postgresTestStatus: isPostgresInfrastructure
             ? 'Infrastructure; application-query certification not applicable'
             : neonVerification
-                ? 'Neon integration tested'
+                ? `Neon integration tested by ${neonVerification.test}`
                 : 'No call-site-specific PostgreSQL test evidence recorded',
           neonVerification: neonVerification
-            ? `Verified on isolated Neon; ${neonVerification}`
+            ? `Verified on isolated Neon; ${neonVerification.description}`
             : 'Not verified on Neon',
           remainingIssues: isPostgresInfrastructure
             ? 'Infrastructure verification is tracked by database configuration and adapter tests'
             : neonVerification
                 ? 'Only behavior exercised by the linked integration is certified; other route paths remain outside this call-site record'
                 : 'PostgreSQL compatibility, parameter/result semantics, and runtime behavior remain unverified',
-          linkedTest: neonVerification ? 'backend/test/postgresAuthIntegration.test.js' : 'None',
+          linkedTest: neonVerification ? neonVerification.test : 'None',
           staticTestCandidates: neighboringTests.join('; ') || 'None',
         });
       }

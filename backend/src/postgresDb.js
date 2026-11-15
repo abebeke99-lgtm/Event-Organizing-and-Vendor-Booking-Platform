@@ -17,6 +17,9 @@ const POSTGRES_ERROR_MESSAGES = new Map([
 ]);
 
 export function formatPostgresError(error) {
+  if (error?.code === 'DB_SCHEMA_INCOMPLETE') {
+    return error.message;
+  }
   if (/^(PostgreSQL configuration|Neon test configuration|Neon test configuration is unavailable)/.test(error?.message || '')) {
     return error.message;
   }
@@ -33,10 +36,11 @@ export function formatPostgresError(error) {
 }
 
 export function getPostgresFailureCode(error) {
+  if (error?.code === 'DB_SCHEMA_INCOMPLETE') return 'DB_SCHEMA_INCOMPLETE';
   if (/^(PostgreSQL configuration|Neon test configuration|Neon test configuration is unavailable)/.test(error?.message || '')) {
     return 'DB_CONFIG_INVALID';
   }
-  if (error?.message === 'Connected database does not match DB_NAME.') return 'DB_NAME_MISMATCH';
+  if (error?.message === 'Connected database does not match the expected database.') return 'DB_NAME_MISMATCH';
   const cause = getPostgresErrorCause(error);
   if (cause?.code === '28P01' || cause?.code === '28000') return 'DB_AUTH_FAILED';
   if (cause?.code === '3D000') return 'DB_NAME_MISSING';
@@ -49,14 +53,22 @@ export function getPostgresFailureCode(error) {
 
 export function createPostgresDatabase(environment = process.env, { poolFactory = (config) => new Pool(config) } = {}) {
   const runtimePool = poolFactory(createPostgresPoolConfig(environment, { purpose: 'runtime' }));
-  const migrationPool = poolFactory(createPostgresPoolConfig(environment, { purpose: 'migration' }));
   const runtimeAdapter = createPostgresAdapter(runtimePool, {
     connect: () => connectWithRetry(() => runtimePool.connect()),
   });
-  const migrationAdapter = createPostgresAdapter(migrationPool, {
-    connect: () => connectWithRetry(() => migrationPool.connect()),
-  });
+  let migrationPool;
+  let migrationAdapter;
   let closePromise;
+
+  function getMigrationAdapter() {
+    if (!migrationAdapter) {
+      migrationPool = poolFactory(createPostgresPoolConfig(environment, { purpose: 'migration' }));
+      migrationAdapter = createPostgresAdapter(migrationPool, {
+        connect: () => connectWithRetry(() => migrationPool.connect()),
+      });
+    }
+    return migrationAdapter;
+  }
 
   async function verifyPool(adapter, purpose) {
     const result = await adapter.query('SELECT version() AS server_version, current_database() AS database_name');
@@ -69,17 +81,27 @@ export function createPostgresDatabase(environment = process.env, { poolFactory 
 
   return {
     runtimePool,
-    migrationPool,
     runtimeAdapter,
-    migrationAdapter,
+    get migrationPool() {
+      getMigrationAdapter();
+      return migrationPool;
+    },
+    get migrationAdapter() {
+      return getMigrationAdapter();
+    },
     verifyRuntimeConnection: () => verifyPool(runtimeAdapter, 'runtime'),
-    verifyMigrationConnection: () => verifyPool(migrationAdapter, 'migration'),
-    inTransaction: (work, pool = runtimePool) => (
-      pool === migrationPool ? migrationAdapter.inTransaction(work) : runtimeAdapter.inTransaction(work)
-    ),
+    verifyMigrationConnection: () => verifyPool(getMigrationAdapter(), 'migration'),
+    inTransaction(work, pool = runtimePool) {
+      return pool === migrationPool && migrationAdapter
+        ? migrationAdapter.inTransaction(work)
+        : runtimeAdapter.inTransaction(work);
+    },
     close() {
       if (!closePromise) {
-        closePromise = Promise.all([runtimePool.end(), migrationPool.end()]);
+        closePromise = Promise.all([
+          runtimePool.end(),
+          ...(migrationPool ? [migrationPool.end()] : []),
+        ]);
       }
       return closePromise;
     },

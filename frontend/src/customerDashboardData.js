@@ -18,3 +18,18 @@ const ENDPOINTS_BY_VIEW = {
 export function getCustomerDashboardEndpoints(view) {
   return ENDPOINTS_BY_VIEW[view] || [];
 }
+
+export function createCustomerDashboardOverviewRequests(api, owner, signal, requestDashboardData) {
+  const [overviewEndpoint, ...secondaryEndpoints] = getCustomerDashboardEndpoints('overview');
+  const overview = requestDashboardData(
+    api,
+    owner,
+    `/customer/${overviewEndpoint}`,
+    signal,
+  );
+  const secondary = Promise.allSettled(secondaryEndpoints.map((endpoint) => (
+    requestDashboardData(api, owner, `/customer/${endpoint}`, signal)
+  )));
+
+  return { overview, secondary, secondaryEndpoints };
+}

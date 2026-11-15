@@ -1,5 +1,7 @@
 # EventHub PostgreSQL Production Migration Audit
 
+> Historical snapshot. Repository configuration and legacy migration-file findings below predate the EventHub cleanup. Production remains unverified; see [MYSQL_REMOVAL_REPORT.md](./MYSQL_REMOVAL_REPORT.md) for current status.
+
 Audit date: 2026-11-11  
 Scope: Phase 1 repository/runtime audit and read-only checks against the isolated Neon test database.  
 Status: Production cutover is blocked. No production Neon credentials, production authorization, or verified production recovery point were available. The isolated test database was not treated as production.
