@@ -66,6 +66,7 @@ test('Neon PostgreSQL profile photo routes persist, return, and remove image byt
     const headers = { Cookie: `platform_session=${token}` };
     const adminUrl = `http://127.0.0.1:${server.address().port}/api/admin/profile/photo`;
     const adminHeaders = { Cookie: `admin_session=${adminToken}` };
+    const sharedAvatarUrl = `http://127.0.0.1:${server.address().port}/api/users/me/avatar`;
 
     assert.equal((await fetch(baseUrl)).status, 401);
     assert.equal((await fetch(baseUrl, { headers })).status, 204);
@@ -74,6 +75,23 @@ test('Neon PostgreSQL profile photo routes persist, return, and remove image byt
     assert.equal((await fetch(adminUrl, { headers: adminHeaders })).status, 204);
 
     const photo = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x01]);
+    assert.equal((await fetch(sharedAvatarUrl)).status, 401);
+    assert.equal((await fetch(sharedAvatarUrl, { headers })).status, 204);
+    const sharedAvatarForm = new FormData();
+    sharedAvatarForm.append('avatar', new Blob([photo], { type: 'image/jpeg' }), 'avatar.jpg');
+    assert.equal((await fetch(sharedAvatarUrl, {
+      method: 'POST',
+      headers,
+      body: sharedAvatarForm,
+    })).status, 200);
+    const sharedAvatar = await fetch(sharedAvatarUrl, { headers });
+    assert.equal(sharedAvatar.status, 200);
+    assert.equal(sharedAvatar.headers.get('content-type'), 'image/jpeg');
+    assert.deepEqual(Buffer.from(await sharedAvatar.arrayBuffer()), photo);
+    assert.equal((await fetch(sharedAvatarUrl, { headers: adminHeaders })).status, 204);
+    assert.equal((await fetch(sharedAvatarUrl, { method: 'DELETE', headers })).status, 204);
+    assert.equal((await fetch(sharedAvatarUrl, { headers })).status, 204);
+
     const invalidUpload = await fetch(baseUrl, {
       method: 'PUT',
       headers: { ...headers, 'Content-Type': 'image/png' },

@@ -1,32 +1,59 @@
-# EventHub PostgreSQL Completion Report
+# EventHub PostgreSQL Migration Completion Report
 
 ## Result
 
-**Not complete.** Runtime connection and selected user-facing flows are verified against the isolated Neon test database, but the repository still contains legacy MySQL SQL and most inventoried query call sites do not have isolated-Neon evidence. Production data, deployment, and GitHub were not accessed.
+**PARTIAL — migration completion criteria are not met.** PostgreSQL 18 is the only configured runtime and selected isolated-Neon schema, API, and workflow checks pass. Most application query call sites remain uncertified, SQL compatibility paths remain, dashboard latency exceeds target percentiles, and production/provider verification was not performed.
 
-## Current verification
+## Current evidence
 
-| Check | Result |
+| Check | Current result |
 |---|---|
-| Isolated Neon connection and `SELECT 1` | Previously passed on PostgreSQL 18 using pooled and direct connections |
-| Isolated Neon schema inventory | 53/53 expected tables; 58 public tables, 87 foreign keys, 169 indexes |
-| Static query inventory | 1,247 total call sites: 18 infrastructure, 45 Neon-verified, 1,184 uncertified |
-| Backend suite | 536 passed, 0 failed, 26 skipped |
-| Frontend suite | 214 passed, 0 failed |
-| Frontend production build | Passed |
-| Maintenance behavior tests | Passed; maintenance blocks public operations while platform availability and logout remain reachable |
-| Booking/dashboard Neon integration | Passed; organizer, customer, vendor overview bundles were 4.12s, 2.68s, and 0.81s in one run |
+| Isolated Neon pooled/direct connection and schema check | Passed; PostgreSQL 18; 53/53 expected tables, 58 public tables, 87 foreign keys, 169 indexes |
+| Static inventory | 1,255 query/execute sites in 102 backend JS files: 17 `CERTIFIED`, 566 `NEEDS_FIX`, 654 `UNVERIFIED`, 18 `EXEMPT` |
+| Migration history | Isolated test DB records 001-010, 012, 014-017; 011 and 013 remain unapplied |
+| Avatar shared route | Focused tests and exact shared-route Neon integration passed; uses PostgreSQL positional bindings |
+| OAuth registration state | Migration 016 applied to isolated Neon only; OAuth unit/integration tests passed 11/11 |
+| Marketplace/core integration | Core CRUD/relationships and populated marketplace detail Neon tests passed |
+| Booking/dashboard Neon integration | Passed in the full opt-in run; booking, quotation, availability, ownership, payments/refunds, messaging, notifications, reviews, complaints exercised |
+| Dashboard API percentiles (20 samples) | Organizer 680/950/3,035 ms; customer 2,688/2,693/2,696 ms; vendor 1,078/1,234/3,294 ms (p50/p95/p99) |
+| Isolated aggregate-query plans | Customer 3.540 ms execution; organizer 1.214 ms execution using sentinel ID `0`; not representative of production or full dashboard latency |
+| Frontend | 218 tests passed; production build passed after organizer concurrency change |
+| Demo/mock production path | `DEMO_AUTH_ENABLED` is `false`; built output contains no demo credential or demo-storage markers checked in this pass |
+| Default backend suite | 541 passed, 0 failed, 27 skipped; the skipped Neon integration tests require `RUN_NEON_INTEGRATION=true` |
+| Full opt-in backend suite | 589 passed, 0 failed, 0 skipped, including isolated-Neon integration tests |
 | Production DB, deployment, GitHub push | Not accessed or performed |
 
-These are local/test-environment results. A single timing run does not establish a p95 performance result. Migration 017 was applied only to the isolated test database after prior explicit authorization.
+## Inventory movement in this batch
 
-The frontend's `src/demoData.js` remains as an unused module: no runtime source imports it; only its unit test does. It is not wired into the production API flow.
+| Classification | Baseline | Current | Change |
+|---|---:|---:|---:|
+| CERTIFIED | 15 | 17 | +2 |
+| NEEDS_FIX | 566 | 566 | 0 resolved |
+| UNVERIFIED | 656 | 654 | -2 |
+| EXEMPT | 18 | 18 | 0 |
+
+The two newly certified entries are the administrator user-list count and paginated fetch queries, exercised against Neon with combined filters. This batch did not reduce the 566 static `NEEDS_FIX` entries.
+
+Percentiles are isolated-test API bundles, not browser or production measurements. The full opt-in suite passed after adding bounded retry classification for node-postgres pool acquisition timeouts; failed SQL queries are still never replayed. The separate read-only Neon schema check also passed.
+
+## Implemented and verified areas
+
+- Shared user-avatar upload, read, and delete use native PostgreSQL positional parameters and were exercised through the authenticated route against isolated Neon.
+- PostgreSQL administrator contact routes were mounted for the real PostgreSQL adapter; filtered reads, updates, audit writes, authorization, and transaction rollback have isolated-Neon coverage. The user-list route now builds native positional filters for status/date values; an isolated-Neon request covers combined search, status, role, and date filters for its count and page queries.
+- The customer overview query and organizer overview query now have explicit inventory evidence from the isolated-Neon dashboard integration.
+- Customer dashboard requests remain concurrent with deduplication and stale-response protection; organizer UI requests now start concurrently while retaining overview-critical and partial-loading behavior.
+- Administrator user-list status/date filters now use direct PostgreSQL `$n` parameters, and the PostgreSQL adapter no longer rewrites `?` characters.
+- `postgresRetry.js` recognizes the node-postgres pool acquisition timeout message with one bounded retry; query mutations are not retried.
+
+The regenerated [`POSTGRESQL_QUERY_VERIFICATION_MATRIX.md`](./POSTGRESQL_QUERY_VERIFICATION_MATRIX.md) and CSV inventory contain per-call-site detail. The other current reports include schema verification, MySQL removal, dashboards, security, deployment readiness, and remaining blockers.
 
 ## Remaining blockers
 
-1. Certify the 1,184 query call sites without isolated-Neon evidence and resolve or prove unreachable legacy SQL.
-2. Obtain repeated role-dashboard measurements; the organizer and customer samples exceeded the 2-second target.
-3. Verify current Netlify and Render environment, CORS, health-check, and deployment settings directly with the providers.
-4. Complete production authentication, authorization, external email, and live health checks only in an authorized environment.
+1. Resolve the 566 `NEEDS_FIX` call sites and establish whether affected callers are active runtime paths before removing remaining compatibility conversion.
+2. Inspect and verify the 654 `UNVERIFIED` call sites with isolated-Neon evidence.
+3. Investigate customer p50/p95 and organizer/vendor p99 values above 2 seconds using per-endpoint timings and query plans.
+4. Reconcile migrations 011/013 without losing the custom category mapping, and verify full column/constraint/index parity; the current checker only verifies table presence and aggregate FK/index counts.
+5. Verify provider-side production configuration, schema parity, and live health only in an authorized environment.
+6. Complete route-level security review and integration coverage beyond the selected flows.
 
-See [POSTGRESQL_QUERY_VERIFICATION_MATRIX.md](./POSTGRESQL_QUERY_VERIFICATION_MATRIX.md), [MYSQL_REMOVAL_FINAL_REPORT.md](./MYSQL_REMOVAL_FINAL_REPORT.md), and [PRODUCTION_DEPLOYMENT_READINESS.md](./PRODUCTION_DEPLOYMENT_READINESS.md).
+No production data was modified. No production migration, deployment, commit, or push was performed in this pass.

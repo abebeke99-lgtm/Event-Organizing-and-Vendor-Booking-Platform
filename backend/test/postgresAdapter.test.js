@@ -45,20 +45,16 @@ test('PostgreSQL adapter passes parameterized query results through without MySQ
   );
 });
 
-test('PostgreSQL adapter converts positional placeholders without changing quoted text or comments', async () => {
+test('PostgreSQL adapter preserves native JSON existence operators and positional parameters', async () => {
   const pool = createPool();
   const database = createPostgresAdapter(pool);
-  const sql = `SELECT ?::text AS value, '?'::text AS literal, "?" AS identifier,
-    $$?$$::text AS dollar_quoted /* ? */ -- ?
-    , /* outer /* nested ? */ comment */ ?::integer AS count`;
+  const sql = 'SELECT payload ? $1::text AS has_key FROM documents';
 
-  await database.query(sql, ['EventHub', 7]);
+  await database.query(sql, ['title']);
 
   assert.deepEqual(pool.statements[0], {
-    text: `SELECT $1::text AS value, '?'::text AS literal, "?" AS identifier,
-    $$?$$::text AS dollar_quoted /* ? */ -- ?
-    , /* outer /* nested ? */ comment */ $2::integer AS count`,
-    values: ['EventHub', 7],
+    text: sql,
+    values: ['title'],
   });
 });
 

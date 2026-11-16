@@ -1,31 +1,32 @@
 # PostgreSQL Query Verification Matrix
 
-## Inventory totals
+## Current inventory totals
 
-The generated call-site inventory scans backend source JavaScript and records 1,247 query/execute call sites in 102 source files:
+The regenerated inventory scans 102 backend source JavaScript files and records 1,255 query/execute call sites:
 
 | Classification | Call sites |
 |---|---:|
-| PostgreSQL infrastructure (not application certification) | 18 |
-| Application call sites with isolated-Neon test evidence | 45 |
-| Application call sites not certified | 1,184 |
+| CERTIFIED by a current isolated-Neon test | 17 |
+| NEEDS_FIX: MySQL syntax or `?` compatibility binding detected | 566 |
+| UNVERIFIED: insufficient current evidence | 654 |
+| EXEMPT: PostgreSQL infrastructure, not an application query | 18 |
 
-The complete per-call-site matrix, including source coordinates, static syntax markers, linked tests, and remaining issue, is `docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv`. The inventory is a verification tracker, not proof that all call sites were inspected semantically. The latest full backend run was 536 passed, 0 failed, and 26 skipped; a separate isolated-Neon booking/dashboard integration passed.
+The complete matrix is [`docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv`](docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv). Each row records source path/line, function, SQL operation, parameter-binding method, transaction and pagination context, joins, PostgreSQL compatibility, error handling, test evidence, and certification status. Static guesses are explicitly marked unverified; candidate tests are not evidence.
 
-## Newly verified marketplace path
+## Current isolated-Neon evidence
 
-The isolated-Neon marketplace integration exercises the vendor-list query and its related category resolution and page-only service, package, media, and availability hydration. The inventory records those seven call sites as verified by `backend/test/vendorPublicApi.test.js`. The clean rerun passed all 18 tests.
+The shared-avatar PostgreSQL integration passed against the isolated Neon test database. It covers the shared `/api/users/me/avatar` route's parameterized upload, authenticated read, deletion, missing-photo response, unauthorized request, and isolation from another account. The inventory certifies those three query call sites plus ten public/admin contact query sites directly exercised by the isolated-Neon contact integrations. Two aggregate dashboard query call sites are also certified from the isolated-Neon booking/dashboard integration, which exercises the customer and organizer overview endpoints with persisted test records. The administrator contact workflow covers filtered/paginated reads, status/reply and read-state updates, archival/deletion audit writes, and transactional behavior. The latest administrator integration also exercises combined search, status, role, and date filters for both count and paginated user-list queries; those two call sites are newly `CERTIFIED`. The PostgreSQL adapter no longer rewrites `?` characters, and its regression test confirms the JSON existence operator `?` is preserved alongside `$1` binding. The platform/admin photo route remains separate.
 
-`backend/test/postgresMarketplace.test.js` also checks generated parameterized SQL, category/search/location/price/availability filters, stable ordering, database `LIMIT`/`OFFSET`, and pagination response metadata. Unit coverage does not itself certify the production SQL; the Neon integration provides that execution evidence.
+The Neon core CRUD/relationship and populated-marketplace integration tests were rerun and passed. These broad integrations do not certify every marketplace call site; only the 15 explicit call sites currently listed as `CERTIFIED` have call-site-specific evidence. A stale fixed schema-count assertion was removed; expected table presence is still checked against the application table list.
 
-## Classification caveats
+## Status definitions and caveats
 
-- “Verified” applies only to the behavior exercised by its linked isolated-Neon test. It does not certify every possible input, transaction path, result shape, or neighboring query.
-- “Not certified” means the SQL and runtime behavior have not been established by call-site-specific isolated-Neon evidence. It must not be interpreted as a known failure or as a PostgreSQL-compatible query.
-- Some backend call sites are in shared, conditional, or legacy route code. Reachability is not a substitute for conversion or test evidence.
-- The static scanner detects selected MySQL-specific syntax but cannot prove SQL correctness, parameter type inference, runtime branch coverage, or the absence of dynamically assembled queries.
-- MySQL markers including `GROUP_CONCAT`, `DATE_ADD`, and `ON DUPLICATE KEY UPDATE` remain in unconverted or uncertified code paths.
+- `CERTIFIED` means this pass ran a call-site-specific isolated-Neon integration test.
+- `NEEDS_FIX` means incompatible MySQL syntax or the question-mark compatibility binding path was found; reachability still needs review.
+- `UNVERIFIED` means evidence is insufficient. PostgreSQL-looking syntax alone is not certification.
+- `EXEMPT` is reserved for adapter, connection, migration, and schema infrastructure rather than application queries.
+- Static analysis does not prove complete SQL semantics, dynamic SQL, transaction behavior, runtime reachability, or all authorization paths. The matrix conservatively marks those aspects for review.
 
-## Next certification work
+## Remaining work
 
-Prioritize active authentication/authorization, user/role/permission, event, vendor/service, booking, payment/refund, and admin workflows. For each query, record the exact Neon integration test and input/output conditions. Do not mark skipped or unit-only tests as live Neon verification.
+Inspect and resolve the 566 `NEEDS_FIX` rows, establish reachability for shared and legacy route branches, then run isolated-Neon tests to certify each application call site. The latest inventory update changed two rows from `UNVERIFIED` to `CERTIFIED`; no `NEEDS_FIX` row was resolved in this batch. Do not count skipped tests, unit-only tests, or historical run output as current evidence.

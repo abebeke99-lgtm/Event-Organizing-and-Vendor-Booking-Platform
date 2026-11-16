@@ -1,17 +1,21 @@
-# Security Verification Final Status
+# Security Verification Report
 
-## Verified
+## Verified in this pass
 
-- Database configuration remains server-side; secret values were not printed or copied into frontend files.
-- The isolated Neon runtime and test configuration are separate from production; production data and secrets were not accessed.
-- The PostgreSQL admin middleware regression test verifies an unknown/expired session returns 401 without invoking `execute` or issuing `?` placeholders.
-- The full backend suite passed 536 tests, failed 0, and skipped 26. The isolated-Neon booking/dashboard integration passed its authentication, authorization, ownership, and conflict assertions.
+- Runtime configuration accepts only PostgreSQL and rejects other database dialects.
+- No MySQL/MariaDB/SQLite driver import was found in backend runtime source.
+- The shared avatar endpoints require an authenticated account, use the authenticated user ID for database access, return 204 for a missing photo, and do not return another account's photo in the focused route test.
+- Shared avatar upload/read/delete passed against isolated Neon using `$1`/`$2`/`$3` bindings. Unauthorized access and sanitized database-error handling passed focused tests.
+- Existing administrator middleware regression coverage and current frontend tests passed.
+- No production credentials, database URLs, or user data were inspected or included in reports.
 
 ## Not certified
 
-- 1,184 application query call sites lack isolated-Neon evidence; route/permission coverage is not complete.
-- This was not a penetration test or a complete review of all legacy/shared modules.
-- Production secret storage, provider access controls, live CORS allowlists, TLS, rate limits, email delivery, and deployed headers were not independently checked.
-- No production authentication, payment, or data-retention behavior was tested.
+- This work was not a penetration test or a complete review of all routes, query call sites, sessions, cookies, CORS, rate limits, file uploads, or permissions.
+- The query matrix has 566 `NEEDS_FIX` and 654 `UNVERIFIED` application call sites.
+- Production secret storage, provider settings, TLS, allowed origins, deployed headers, and rate limits were not independently checked.
+- Production authentication, payments, refunds, external email delivery, and deployment behavior were not tested.
 
-Do not treat the passing tests as evidence of complete application security or production readiness.
+## Decision
+
+**Partial verification only.** The default backend suite passed 541 tests with 27 opt-in Neon tests skipped; the full opt-in backend suite passed 589/589. These results do not prove complete application security or production readiness. See the query matrix and remaining-blockers report for unresolved evidence.

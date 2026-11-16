@@ -11,8 +11,25 @@ const accounts = [
 ];
 const sessions = new Map(accounts.map((account) => [hashToken(account.token), account]));
 const profiles = new Map(accounts.map(({ id }) => [id, { profile_photo: null, profile_photo_mime: null }]));
+let profileQueryError;
 
 async function execute(sql, values = []) {
+  if (sql.startsWith('SELECT profile_photo, profile_photo_mime FROM users')) {
+    if (profileQueryError) throw profileQueryError;
+    return [[profiles.get(values[0]) || { profile_photo: null, profile_photo_mime: null }]];
+  }
+  if (sql.startsWith('UPDATE users SET profile_photo = $1')) {
+    const profile = profiles.get(values[2]);
+    profile.profile_photo = values[0];
+    profile.profile_photo_mime = values[1];
+    return [{ affectedRows: 1 }];
+  }
+  if (sql.startsWith('UPDATE users SET profile_photo = NULL')) {
+    const profile = profiles.get(values[0]);
+    profile.profile_photo = null;
+    profile.profile_photo_mime = null;
+    return [{ affectedRows: 1 }];
+  }
   if (sql.includes('FROM user_sessions s')) {
     const account = sessions.get(values[0]);
     return [account ? [{
@@ -24,21 +41,6 @@ async function execute(sql, values = []) {
       role: account.role,
       permission_keys: '',
     }] : []];
-  }
-  if (sql.startsWith('SELECT profile_photo, profile_photo_mime FROM users')) {
-    return [[profiles.get(values[0]) || { profile_photo: null, profile_photo_mime: null }]];
-  }
-  if (sql.startsWith('UPDATE users SET profile_photo = ?')) {
-    const profile = profiles.get(values[2]);
-    profile.profile_photo = values[0];
-    profile.profile_photo_mime = values[1];
-    return [{ affectedRows: 1 }];
-  }
-  if (sql.startsWith('UPDATE users SET profile_photo = NULL')) {
-    const profile = profiles.get(values[0]);
-    profile.profile_photo = null;
-    profile.profile_photo_mime = null;
-    return [{ affectedRows: 1 }];
   }
   return [{ affectedRows: 1 }];
 }
@@ -61,9 +63,39 @@ after(async () => {
 
 function avatarRequest(account, options = {}) {
   const headers = new Headers(options.headers || {});
-  headers.set('Cookie', `platform_session=${account.token}`);
+  if (account) headers.set('Cookie', `platform_session=${account.token}`);
   return fetch(`${baseUrl}/api/users/me/avatar`, { ...options, headers, signal: AbortSignal.timeout(8000) });
 }
+
+test('shared avatar reads only the authenticated account photo and returns 204 when missing', async () => {
+  const customerPhoto = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  profiles.get(accounts[0].id).profile_photo = customerPhoto;
+  profiles.get(accounts[0].id).profile_photo_mime = 'image/png';
+
+  const customerRead = await avatarRequest(accounts[0]);
+  assert.equal(customerRead.status, 200);
+  assert.equal(customerRead.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await customerRead.arrayBuffer()), customerPhoto);
+
+  const otherAccountRead = await avatarRequest(accounts[1]);
+  assert.equal(otherAccountRead.status, 204);
+  const missingRead = await avatarRequest(accounts[2]);
+  assert.equal(missingRead.status, 204);
+
+  const unauthorizedRead = await avatarRequest(null);
+  assert.equal(unauthorizedRead.status, 401);
+});
+
+test('shared avatar exposes database read failures as server errors', async () => {
+  profileQueryError = new Error('database unavailable');
+  try {
+    const response = await avatarRequest(accounts[0]);
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), { message: 'The request could not be completed.' });
+  } finally {
+    profileQueryError = undefined;
+  }
+});
 
 test('multipart avatars are isolated to the authenticated customer, organizer, or vendor', async () => {
   for (const account of accounts) {

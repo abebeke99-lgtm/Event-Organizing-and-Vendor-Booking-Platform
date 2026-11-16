@@ -1,40 +1,33 @@
-# MySQL and XAMPP Removal Status
+# MySQL Removal Report
 
 ## Result
 
-**Runtime driver removal is complete; repository-wide PostgreSQL compatibility is not.** MySQL driver dependencies and retired MySQL database artifacts were removed in earlier work. This audit found no `mysql`, `mysql2`, or `mariadb` references in the root/backend package manifests or lockfiles searched. The source still contains MySQL-specific branches and SQL, so a repository-wide “removed” claim would be inaccurate.
+**PARTIAL.** PostgreSQL is the only configured database runtime, and no MySQL, MariaDB, or SQLite driver dependency/import was found in the root/backend/frontend manifests, root lockfile, or backend source imports. However, the application query inventory still contains question-mark compatibility bindings and MySQL SQL markers. Do not claim complete MySQL-dialect removal.
 
-## Remaining source references
-
-A targeted scan of `backend/src` found 73 matches in 21 files for MySQL-specific SQL or dialect markers. Examples include `GROUP_CONCAT`, `DATE_ADD`, `DATE_FORMAT`, `CURDATE`, `ON DUPLICATE KEY UPDATE`, `LAST_INSERT_ID`, and `?` placeholders. They occur in legacy/shared modules, including middleware and older route/database modules. Their complete reachability has not been established. Do not treat this report as proof that all active paths are PostgreSQL-compatible.
-
-The PostgreSQL-specific route modules are used by the PostgreSQL app path. One unsafe shared-path fallback in admin authorization was removed and covered by `backend/test/postgresAdminMiddleware.test.js`.
-
-## Final status checklist
-
-| Requirement | Status |
-|---|---|
-| XAMPP/phpMyAdmin/3306 references in searched runtime source and deployment/environment config | None found |
-| MySQL/MariaDB driver dependencies in searched manifests and lockfiles | None found |
-| MySQL SQL/dialect references in backend source | Remaining; 73 matches across 21 files |
-| Neon PostgreSQL runtime connection | Verified previously on isolated test DB; production remains unverified |
-| Frontend build/tests; backend tests | Passed |
-| Netlify/Render deployment and GitHub synchronization | Pending; not accessed |
-
-## Checks
+## Current evidence
 
 | Check | Result |
 |---|---|
-| MySQL driver dependencies in root/backend manifests and lockfiles | No matches found |
-| Legacy MySQL SQL in backend source | Remaining; see `docs/POSTGRESQL_QUERY_CONVERSION_INVENTORY.csv` |
-| Isolated Neon connection/schema | Previously verified; production not inspected |
-| Backend tests | 536 passed, 0 failed, 26 skipped |
-| Frontend tests/build | 214 passed; production build passed |
-| Database reset or production migration | None |
-| Production deployment or GitHub push | None |
+| Runtime dialect configuration | Defaults to PostgreSQL and rejects other dialect values in `backend/src/lib/startupConfig.js` |
+| Runtime driver | `pg` is instantiated by `backend/src/postgresDb.js` |
+| MySQL/MariaDB/SQLite dependency or import scan | No matches in selected manifests, root lockfile, or `backend/src` imports |
+| Backend JavaScript source files scanned | 102 |
+| Selected SQL-marker scan | 73 matches across 21 source files |
+| Query inventory rows marked `NEEDS_FIX` | 566; static markers still require runtime reachability review |
+| Other inventory statuses | 17 `CERTIFIED`, 654 `UNVERIFIED`, 18 `EXEMPT` |
+| Live Neon verification | Shared avatar and public/admin contact routes passed; this does not certify the other query paths |
 
-Old migration/schema/seed artifacts and XAMPP-oriented database scripts were retired earlier. Historical migration documentation may still mention MySQL/XAMPP as context. The separate `personalportofolio/` directory was not changed.
+The current source-text scan checks `ON DUPLICATE KEY UPDATE`, `VALUES(column)`, `GROUP_CONCAT`, `DATE_FORMAT`, `DATE_ADD`, `DATE_SUB`, `CURDATE()`, `LAST_INSERT_ID`, `IFNULL()`, and interval expressions. It returns 73 matches across 21 files; some are PostgreSQL-valid interval expressions, startup rejection code, or inactive compatibility branches, so this is a triage count, not a count of active MySQL execution paths. The regenerated per-query inventory records source path, line, operation, binding, transaction/pagination/join context, error handling, candidate tests, and evidence status.
 
-## Required follow-up
+## Runtime and compatibility findings
 
-Classify every remaining SQL path as active PostgreSQL, converted-but-uncertified, or unreachable and remove obsolete branches only after proving they are not used. Do not perform production schema changes or data migrations without explicit authorization.
+- `backend/src/lib/startupConfig.js` rejects `DB_DIALECT=mysql` and non-PostgreSQL values.
+- `backend/src/lib/postgresAdapter.js` no longer rewrites SQL; it passes PostgreSQL text and `$n` parameters through to node-postgres unchanged.
+- `backend/src/db.js` still contains legacy adapter fallback and `$n`-to-`?` placeholder rewriting for legacy execute adapters; those branches have not been proven unreachable in every call path.
+- Shared routes and conditional legacy route modules remain to be classified by runtime reachability. Compatibility code was not removed globally because every caller has not been proven independent of it.
+- The shared avatar route has been converted to PostgreSQL `$n` bindings and is covered by current Neon integration.
+- PostgreSQL public/admin contact workflows now use a dedicated query-based administrator router; the isolated-Neon contact integration verifies persisted reads, writes, authorization, and audit transactions.
+
+## Remaining work
+
+Resolve each `NEEDS_FIX` inventory row. First distinguish reachable production code from inactive compatibility routes; then convert reachable SQL to PostgreSQL-native syntax and remove a compatibility branch only after its full call graph has no remaining dependency. Keep historical MySQL/XAMPP mentions only where they are clearly documentation, not executable configuration.

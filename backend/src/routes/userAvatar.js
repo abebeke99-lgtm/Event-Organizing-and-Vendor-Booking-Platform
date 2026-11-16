@@ -47,8 +47,8 @@ router.post('/', requireAuthenticatedAccount, parseAvatar, asyncHandler(async (r
   if (!validation.valid) return res.status(400).json({ error: validation.error });
 
   const database = req.app?.locals?.database || pool;
-  await database.execute(
-    'UPDATE users SET profile_photo = ?, profile_photo_mime = ? WHERE id = ?',
+  await database.query(
+    'UPDATE users SET profile_photo = $1, profile_photo_mime = $2 WHERE id = $3',
     [file.buffer, file.mimetype, req.user.id],
   );
   return res.json({ message: 'Profile photo saved.' });

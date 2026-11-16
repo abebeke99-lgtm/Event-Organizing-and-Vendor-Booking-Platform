@@ -67,6 +67,7 @@ import {
   createCustomerDashboardOverviewRequests,
   getCustomerDashboardEndpoints,
 } from './customerDashboardData.js';
+import { createOrganizerDashboardOverviewRequests } from './organizerDashboardData.js';
 import { getVendorDashboardEndpoints } from './vendorDashboardData.js';
 import { requestDashboardData } from './dashboardRequests.js';
 const AdminUserManagement = React.lazy(() => import('./AdminUserManagement.jsx'));
@@ -5091,16 +5092,18 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
         setVendors([]);
         setBookings([]);
         const owner = user.id == null ? null : `organizer:${user.id}`;
-        const overviewResponse = await requestDashboardData(api, owner, '/platform/organizer/overview', controller.signal);
+        const overviewRequests = createOrganizerDashboardOverviewRequests(
+          api,
+          owner,
+          controller.signal,
+          requestDashboardData,
+        );
+        const overviewResponse = await overviewRequests.overview;
         if (controller.signal.aborted) return;
         setOverview(overviewResponse.data);
         setLoading(false);
 
-        const secondaryResults = await Promise.allSettled([
-          requestDashboardData(api, owner, '/platform/events/mine', controller.signal),
-          requestDashboardData(api, owner, '/platform/vendors?page=1&limit=4&sort=recommended', controller.signal),
-          requestDashboardData(api, owner, '/platform/bookings', controller.signal),
-        ]);
+        const secondaryResults = await overviewRequests.secondary;
         if (controller.signal.aborted) return;
         const failures = [];
         if (secondaryResults[0].status === 'fulfilled') setEvents(secondaryResults[0].value.data || []);

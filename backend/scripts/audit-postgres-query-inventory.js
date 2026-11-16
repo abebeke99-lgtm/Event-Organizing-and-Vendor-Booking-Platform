@@ -199,6 +199,76 @@ const neonVerifiedCallsites = new Map([
     test: 'backend/test/vendorPublicApi.test.js',
   }],
 ]);
+const currentNeonVerifiedCallsites = new Map([
+  ['backend/src/routes/postgresBookings.js:573:26', {
+    description: 'Aggregate customer dashboard overview for the authenticated account',
+    test: 'backend/test/postgresBookingsIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresOrganizerPlanning.js:127:26', {
+    description: 'Aggregate organizer dashboard overview for the authenticated account',
+    test: 'backend/test/postgresBookingsIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAdmin.js:497:27', {
+    description: 'Count administrator user results with combined search, status, role, and date filters',
+    test: 'backend/test/postgresAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/postgresAdmin.js:499:26', {
+    description: 'Fetch the filtered and paginated administrator user roster',
+    test: 'backend/test/postgresAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:78:14', {
+    description: 'Read public contact settings from PostgreSQL',
+    test: 'backend/test/postgresContactIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:190:11', {
+    description: 'Persist public contact submissions in PostgreSQL',
+    test: 'backend/test/postgresContactIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:448:11', {
+    description: 'Write contact archive and deletion audit records transactionally',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:487:31', {
+    description: 'Count filtered administrator contact messages',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:491:30', {
+    description: 'List and paginate administrator contact messages',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:524:33', {
+    description: 'Read a contact message before applying an administrator reply',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:534:27', {
+    description: 'Update contact status and administrator reply',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:572:26', {
+    description: 'Update contact-message read state',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:593:28', {
+    description: 'Archive contact messages with an audit record in one transaction',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/routes/contact.js:622:28', {
+    description: 'Delete contact messages with an audit record in one transaction',
+    test: 'backend/test/postgresContactAdminIntegration.test.js',
+  }],
+  ['backend/src/lib/profilePhoto.js:38:24', {
+    description: 'Read the authenticated account photo through the shared avatar route',
+    test: 'backend/test/postgresProfilePhotoIntegration.test.js',
+  }],
+  ['backend/src/lib/profilePhoto.js:65:9', {
+    description: 'Delete the authenticated account photo through the shared avatar route',
+    test: 'backend/test/postgresProfilePhotoIntegration.test.js',
+  }],
+  ['backend/src/routes/userAvatar.js:50:9', {
+    description: 'Persist an uploaded avatar through the shared avatar route',
+    test: 'backend/test/postgresProfilePhotoIntegration.test.js',
+  }],
+]);
 
 async function listJavaScriptFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -221,15 +291,36 @@ function csv(value) {
   return `"${String(value).replaceAll('"', '""')}"`;
 }
 
-function inspectCallsites(ast, filePath, testFiles) {
+function getSqlOperation(sql) {
+  return sql.match(/^\s*(SELECT|WITH|INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i)?.[1]?.toUpperCase()
+    || 'Dynamic or unclassified';
+}
+
+function getParameterBinding(argument, sql) {
+  if (!argument) return 'No second argument detected; dynamic binding remains unverified';
+  const markerKinds = [
+    /\$\d+/.test(sql) ? '$n PostgreSQL placeholders' : null,
+    sql.includes('?') ? '? compatibility placeholders' : null,
+  ].filter(Boolean);
+  const argumentKind = argument.type === 'ArrayExpression'
+    ? 'literal parameter array'
+    : argument.type === 'Identifier'
+      ? `parameter variable ${argument.name}`
+      : `argument expression ${argument.type}`;
+  return `${argumentKind}${markerKinds.length ? `; ${markerKinds.join(', ')}` : '; placeholder form not statically detected'}`;
+}
+
+function inspectCallsites(ast, filePath, testFiles, source) {
   const rows = [];
-  function visit(node, scope = '<module>', parentKey = '') {
+  function visit(node, scope = '<module>', parentKey = '', enclosingFunction = null) {
     if (!node || typeof node !== 'object') return;
     let currentScope = scope;
+    let currentFunction = enclosingFunction;
     if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression'
       || node.type === 'ArrowFunctionExpression' || node.type === 'ObjectMethod'
       || node.type === 'ClassMethod' || node.type === 'ClassPrivateMethod') {
       currentScope = nodeFunctionName(node, parentKey) || scope;
+      currentFunction = node;
     }
 
     if (node.type === 'CallExpression' && node.callee?.type === 'MemberExpression') {
@@ -244,64 +335,93 @@ function inspectCallsites(ast, filePath, testFiles) {
         const markers = mysqlPatterns
           .filter(([, pattern]) => pattern.test(sql))
           .map(([label]) => label);
+        const hasCompatibilityPlaceholder = sql.includes('?') && Boolean(node.arguments[1]);
         const isPostgresInfrastructure = /(?:^|[\\/])(?:postgresAdapter|postgresDb|postgresPool|postgresMigrate|postgresSchema)\.js$/i
           .test(filePath);
         const relativeFilePath = relative(resolve(backendDirectory, '..'), filePath).replaceAll('\\', '/');
         const line = node.loc?.start.line ?? 0;
         const column = (node.loc?.start.column ?? 0) + 1;
         const callSiteKey = `${relativeFilePath}:${line}:${column}`;
-        const neonVerification = neonVerifiedCallsites.get(callSiteKey);
+        const neonVerification = currentNeonVerifiedCallsites.get(callSiteKey);
+        const historicalNeonEvidence = neonVerifiedCallsites.get(callSiteKey);
         const neighboringTests = [...testFiles].filter((testFile) => {
           const base = relative(resolve(backendDirectory, 'test'), testFile).toLowerCase();
           const sourceBase = filePath.split(/[\\/]/).at(-1).replace(/\.js$/i, '').toLowerCase();
           return base.startsWith(`${sourceBase}.`) || base.includes(sourceBase);
         }).map((testFile) => relative(resolve(backendDirectory, '..'), testFile).replaceAll('\\', '/'));
-        const stage = isPostgresInfrastructure
-          ? 'Inspected'
+        const status = isPostgresInfrastructure
+          ? 'EXEMPT'
+          : markers.length || hasCompatibilityPlaceholder
+            ? 'NEEDS_FIX'
+            : neonVerification
+              ? 'CERTIFIED'
+              : 'UNVERIFIED';
+        const sqlOperation = getSqlOperation(sql);
+        const functionSource = currentFunction
+          ? source.slice(currentFunction.start, currentFunction.end)
+          : '';
+        const explicitTransaction = /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)$/.test(sqlOperation);
+        const transactionBehavior = explicitTransaction
+          ? 'Explicit PostgreSQL transaction-control statement'
+          : /\.inTransaction\s*\(|\binTransaction\s*\(/.test(functionSource)
+            ? 'Transaction helper referenced in containing function; call-site participation requires review'
+            : 'Not established statically; inspect caller and transaction boundaries';
+        const paginationBehavior = /\b(?:LIMIT|OFFSET|FETCH\s+(?:FIRST|NEXT)|SEEK)\b/i.test(sql)
+          ? 'Pagination clause present in static SQL'
+          : 'No pagination clause visible in static SQL; dynamic pagination requires review';
+        const joinBehavior = /\bJOIN\b/i.test(sql)
+          ? `${[...sql.matchAll(/\bJOIN\b/ig)].length} join clause(s) visible in static SQL`
+          : 'No join clause visible in static SQL';
+        const errorHandling = /catch\s*(?:\(|\{)|\.catch\s*\(/.test(functionSource)
+          ? 'Local catch handling exists; verify the query error is surfaced correctly'
+          : 'No local catch found; propagation or caller handling requires review';
+        const postgresCompatibility = isPostgresInfrastructure
+          ? 'EXEMPT: PostgreSQL infrastructure call, not an application query'
+          : status === 'NEEDS_FIX'
+            ? 'NEEDS_FIX: incompatible MySQL SQL or question-mark compatibility binding detected'
+            : status === 'CERTIFIED'
+              ? `CERTIFIED by current isolated-Neon integration: ${neonVerification.description}`
+              : 'UNVERIFIED: syntax alone is not certification; inspect runtime semantics and test evidence';
+        const verificationResult = isPostgresInfrastructure
+          ? 'EXEMPT: adapter, connection, migration, or schema infrastructure'
           : neonVerification
-            ? 'Certified'
-            : 'Not inspected';
-        const dialect = isPostgresInfrastructure || /(?:^|\/)postgres[^/]*\.js$/i.test(relativeFilePath)
-          ? 'PostgreSQL-specific source'
-          : property === 'execute'
-            ? 'Database adapter execute method; result handling requires review'
-            : 'Dual-dialect or unknown; requires review';
+            ? `CERTIFIED: current isolated-Neon test ${neonVerification.test}`
+            : historicalNeonEvidence
+              ? `UNVERIFIED: historical Neon evidence only (${historicalNeonEvidence.test}); not rerun in this pass`
+              : 'UNVERIFIED: no current query-specific isolated-Neon evidence';
+        const secondArgument = node.arguments[1];
+        const functionName = relativeFilePath === 'backend/src/routes/userAvatar.js'
+          && currentScope === '<anonymous>'
+          ? 'POST /api/users/me/avatar'
+          : currentScope;
         rows.push({
           callSiteId: `${relativeFilePath}:L${line}:C${column}:${property}`,
           path: relative(resolve(backendDirectory, '..'), filePath).replaceAll('\\', '/'),
-          functionName: currentScope,
+          functionName,
           line,
           column,
           method: property,
-          dialect,
-          markers: markers.join('; ') || 'No MySQL-only syntax detected in static SQL text',
-          stage,
-          conversionStatus: isPostgresInfrastructure
-            ? 'PostgreSQL infrastructure; not an application query'
-            : neonVerification
-              ? `PostgreSQL verified on isolated Neon; ${neonVerification.description}`
-              : property === 'execute'
-                ? markers.length
-                  ? 'Not converted; MySQL-specific SQL detected'
-                  : 'Not certified; inspect SQL, parameters, and adapter result handling'
-                : markers.length
-                  ? 'Not converted; MySQL-specific SQL detected'
-                  : 'Not certified; inspect SQL, parameters, and result handling',
-          postgresTestStatus: isPostgresInfrastructure
-            ? 'Infrastructure; application-query certification not applicable'
-            : neonVerification
-                ? `Neon integration tested by ${neonVerification.test}`
-                : 'No call-site-specific PostgreSQL test evidence recorded',
-          neonVerification: neonVerification
-            ? `Verified on isolated Neon; ${neonVerification.description}`
-            : 'Not verified on Neon',
-          remainingIssues: isPostgresInfrastructure
-            ? 'Infrastructure verification is tracked by database configuration and adapter tests'
-            : neonVerification
-                ? 'Only behavior exercised by the linked integration is certified; other route paths remain outside this call-site record'
-                : 'PostgreSQL compatibility, parameter/result semantics, and runtime behavior remain unverified',
-          linkedTest: neonVerification ? neonVerification.test : 'None',
-          staticTestCandidates: neighboringTests.join('; ') || 'None',
+          sqlOperation,
+          parameterBinding: getParameterBinding(secondArgument, sql),
+          transactionBehavior,
+          paginationBehavior,
+          joinBehavior,
+          postgresCompatibility,
+          errorHandling,
+          status,
+          relevantTestFiles: [
+            ...(neonVerification ? [neonVerification.test] : []),
+            ...(historicalNeonEvidence && !neonVerification
+              ? [`Historical evidence only: ${historicalNeonEvidence.test}`]
+              : []),
+            ...neighboringTests
+              .filter((test) => test !== neonVerification?.test && test !== historicalNeonEvidence?.test)
+              .map((test) => `Candidate only: ${test}`),
+          ].join('; ') || 'None identified',
+          verificationResult,
+          mysqlMarkers: markers.join('; ') || (hasCompatibilityPlaceholder
+            ? 'Question-mark compatibility parameter'
+            : 'No known MySQL-only syntax detected in static SQL text'),
         });
       }
     }
@@ -311,7 +431,7 @@ function inspectCallsites(ast, filePath, testFiles) {
         || key === 'tokens' || key === 'errors') continue;
       if (Array.isArray(value)) {
         for (const child of value) {
-          visit(child, currentScope, child?.key?.name || child?.key?.value || '');
+          visit(child, currentScope, child?.key?.name || child?.key?.value || '', currentFunction);
         }
       } else if (value && typeof value === 'object') {
         const memberName = node.type === 'VariableDeclarator' && key === 'init'
@@ -319,7 +439,7 @@ function inspectCallsites(ast, filePath, testFiles) {
           : node.type === 'ObjectProperty' && key === 'value'
             ? node.key?.name || node.key?.value
             : value.key?.name || value.key?.value;
-        visit(value, currentScope, memberName || '');
+        visit(value, currentScope, memberName || '', currentFunction);
       }
     }
   }
@@ -333,15 +453,15 @@ const rows = [];
 for (const filePath of sourceFiles.sort()) {
   const source = await readFile(filePath, 'utf8');
   const ast = parse(source, { sourceType: 'unambiguous', plugins: ['jsx'] });
-  rows.push(...inspectCallsites(ast, filePath, testFiles));
+  rows.push(...inspectCallsites(ast, filePath, testFiles, source));
 }
 
-const certifiedCallsiteKeys = new Set(rows
-  .filter((row) => row.stage === 'Certified')
+const currentCallsiteKeys = new Set(rows
+  .filter((row) => row.status === 'CERTIFIED')
   .map((row) => `${row.path}:${row.line}:${row.column}`));
-for (const callsiteKey of neonVerifiedCallsites.keys()) {
-  if (!certifiedCallsiteKeys.has(callsiteKey)) {
-    throw new Error(`Neon certification metadata does not match an inventoried source call site: ${callsiteKey}`);
+for (const callsiteKey of currentNeonVerifiedCallsites.keys()) {
+  if (!currentCallsiteKeys.has(callsiteKey)) {
+    throw new Error(`Current Neon verification metadata does not match an inventoried source call site: ${callsiteKey}`);
   }
 }
 const callsiteIds = rows.map((row) => row.callSiteId);
@@ -356,15 +476,17 @@ const columns = [
   'Line',
   'Column',
   'Method',
-  'Current dialect classification',
-  'MySQL-specific syntax',
-  'Migration stage',
-  'PostgreSQL conversion status',
-  'PostgreSQL test status',
-  'Neon verification status',
-  'Remaining issues',
-  'Linked test',
-  'Static test candidates (not evidence)',
+  'SQL operation',
+  'Parameter-binding method',
+  'Transaction behavior',
+  'Pagination behavior',
+  'Join behavior',
+  'PostgreSQL compatibility',
+  'Error handling',
+  'Certification status',
+  'Relevant test file(s) and evidence quality',
+  'Verification result',
+  'MySQL-specific syntax or compatibility marker',
 ];
 const output = [
   columns.map(csv).join(','),
@@ -375,26 +497,23 @@ const output = [
     row.line,
     row.column,
     row.method,
-    row.dialect,
-    row.markers,
-    row.stage,
-    row.conversionStatus,
-    row.postgresTestStatus,
-    row.neonVerification,
-    row.remainingIssues,
-    row.linkedTest,
-    row.staticTestCandidates,
+    row.sqlOperation,
+    row.parameterBinding,
+    row.transactionBehavior,
+    row.paginationBehavior,
+    row.joinBehavior,
+    row.postgresCompatibility,
+    row.errorHandling,
+    row.status,
+    row.relevantTestFiles,
+    row.verificationResult,
+    row.mysqlMarkers,
   ].map(csv).join(',')),
 ].join('\n');
 await writeFile(outputPath, `${output}\n`, 'utf8');
 console.log(`Query inventory written: ${relative(resolve(backendDirectory, '..'), outputPath).replaceAll('\\', '/')}`);
 console.log(`Source JavaScript files scanned: ${sourceFiles.length}`);
 console.log(`Database query/execute call sites inventoried: ${rows.length}`);
-const infrastructureCalls = rows.filter((row) => row.conversionStatus.startsWith('PostgreSQL infrastructure')).length;
-const applicationRows = rows.filter((row) => !row.conversionStatus.startsWith('PostgreSQL infrastructure'));
-const certifiedCalls = applicationRows.filter((row) => row.stage === 'Certified').length;
-const inspectedApplicationCalls = applicationRows.filter((row) => row.stage === 'Inspected').length;
-console.log(`PostgreSQL infrastructure call sites: ${infrastructureCalls}`);
-console.log(`Application call sites not inspected semantically: ${applicationRows.length - certifiedCalls - inspectedApplicationCalls}`);
-console.log(`Application call sites verified on isolated Neon: ${certifiedCalls}`);
-console.log(`Application call sites not certified: ${applicationRows.length - certifiedCalls}`);
+for (const status of ['CERTIFIED', 'NEEDS_FIX', 'UNVERIFIED', 'EXEMPT']) {
+  console.log(`${status} application call sites: ${rows.filter((row) => row.status === status).length}`);
+}

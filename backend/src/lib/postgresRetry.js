@@ -17,6 +17,7 @@ const TRANSIENT_CONNECTION_MESSAGES = [
   /connection terminated due to connection timeout/i,
   /connection terminated unexpectedly/i,
   /timeout expired/i,
+  /timeout exceeded when trying to connect/i,
   /server closed the connection unexpectedly/i,
 ];
 

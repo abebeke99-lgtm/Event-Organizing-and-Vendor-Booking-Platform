@@ -168,7 +168,8 @@ async function execute(sql, values = []) {
     return [{ affectedRows: 1 }];
   }
   if (sql.startsWith('DELETE FROM user_sessions WHERE user_id')) return [{ affectedRows: 1 }];
-  if (sql.startsWith('UPDATE users SET profile_photo = ?')) {
+  if (sql.startsWith('UPDATE users SET profile_photo = $1')
+    || sql.startsWith('UPDATE users SET profile_photo = ?')) {
     profile.profile_photo = values[0];
     profile.profile_photo_mime = values[1];
     return [{ affectedRows: 1 }];
@@ -187,7 +188,13 @@ async function execute(sql, values = []) {
 
 const database = {
   execute,
-  async query() { return [[], []]; },
+  async query(sql, values) {
+    if (sql.startsWith('SELECT profile_photo, profile_photo_mime FROM users')
+      || sql.startsWith('UPDATE users SET profile_photo')) {
+      return execute(sql, values);
+    }
+    return [[], []];
+  },
   async getConnection() {
     return {
       execute,

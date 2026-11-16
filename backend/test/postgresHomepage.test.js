@@ -35,7 +35,9 @@ test('PostgreSQL homepage serves the public About page payload', async () => {
       completedBookingCount: 0,
     });
   } finally {
-    server.close();
-    await once(server, 'close');
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+      server.closeAllConnections();
+    });
   }
 });

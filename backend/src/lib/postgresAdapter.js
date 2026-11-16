@@ -1,97 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { isPostgresConnectionError } from './postgresRetry.js';
 
-function replaceQuestionMarkPlaceholders(text, values) {
-  if (!values.length || !text.includes('?')) return text;
-
-  const placeholders = [];
-  let state = 'normal';
-  let blockDepth = 0;
-  let dollarTag = '';
-  let positionalParameterCount = 0;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    const next = text[index + 1];
-
-    if (state === 'single-quoted') {
-      if (character === '\\') {
-        index += 1;
-      } else if (character === "'" && next === "'") {
-        index += 1;
-      } else if (character === "'") {
-        state = 'normal';
-      }
-      continue;
-    }
-
-    if (state === 'double-quoted') {
-      if (character === '"' && next === '"') index += 1;
-      else if (character === '"') state = 'normal';
-      continue;
-    }
-
-    if (state === 'line-comment') {
-      if (character === '\n') state = 'normal';
-      continue;
-    }
-
-    if (state === 'block-comment') {
-      if (character === '/' && next === '*') {
-        blockDepth += 1;
-        index += 1;
-      } else if (character === '*' && next === '/') {
-        blockDepth -= 1;
-        index += 1;
-        if (blockDepth === 0) state = 'normal';
-      }
-      continue;
-    }
-
-    if (state === 'dollar-quoted') {
-      if (text.startsWith(dollarTag, index)) {
-        index += dollarTag.length - 1;
-        state = 'normal';
-      }
-      continue;
-    }
-
-    if (character === "'") {
-      state = 'single-quoted';
-    } else if (character === '"') {
-      state = 'double-quoted';
-    } else if (character === '-' && next === '-') {
-      state = 'line-comment';
-      index += 1;
-    } else if (character === '/' && next === '*') {
-      state = 'block-comment';
-      blockDepth = 1;
-      index += 1;
-    } else if (character === '$') {
-      const match = text.slice(index).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
-      if (match) {
-        dollarTag = match[0];
-        state = 'dollar-quoted';
-        index += dollarTag.length - 1;
-      } else if (/\d/.test(next || '')) {
-        positionalParameterCount += 1;
-      }
-    } else if (character === '?') {
-      placeholders.push(index);
-    }
-  }
-
-  if (placeholders.length !== values.length || positionalParameterCount > 0) return text;
-
-  let output = '';
-  let previousIndex = 0;
-  placeholders.forEach((placeholder, index) => {
-    output += `${text.slice(previousIndex, placeholder)}$${index + 1}`;
-    previousIndex = placeholder + 1;
-  });
-  return output + text.slice(previousIndex);
-}
-
 export function createPostgresAdapter(pool, { connect = () => pool.connect() } = {}) {
   const transactionContext = new AsyncLocalStorage();
   let savepointSequence = 0;
@@ -103,7 +12,6 @@ export function createPostgresAdapter(pool, { connect = () => pool.connect() } =
     if (!Array.isArray(values)) {
       throw new TypeError('PostgreSQL query parameters must be provided as an array.');
     }
-    text = replaceQuestionMarkPlaceholders(text, values);
     const transaction = transactionContext.getStore();
     if (transaction) {
       try {

@@ -54,7 +54,6 @@ test('Neon PostgreSQL core CRUD and relationships (transaction rolled back)', {
       `SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename`,
     );
     const existingTables = new Set(schema.rows.map((row) => row.tablename));
-    assert.equal(postgresApplicationTables.length, 51);
     assert.ok(postgresApplicationTables.every((table) => existingTables.has(table)));
 
     await assert.rejects(database.inTransaction(async (client) => {

@@ -6,6 +6,8 @@ import { inTransaction, pool } from '../db.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { writeAudit } from '../lib/security.js';
 import { isNotificationEmailConfigured, sendNotificationEmail } from '../lib/notificationService.js';
+import { getRequestId } from '../lib/requestContext.js';
+import { normalizeDatabaseAdapter } from '../db.js';
 
 const publicRouter = Router();
 const adminRouter = Router();
@@ -433,3 +435,203 @@ adminRouter.delete('/:id', asyncHandler(async (req, res) => {
 
 export { adminRouter };
 export default publicRouter;
+
+export function createPostgresContactAdminRouter({ database }) {
+  const postgresDatabase = normalizeDatabaseAdapter(database);
+  if (!postgresDatabase || typeof postgresDatabase.query !== 'function') {
+    throw new TypeError('A PostgreSQL database adapter is required.');
+  }
+
+  const router = Router();
+
+  async function writePostgresContactAudit(transaction, req, action, id) {
+    await transaction.query(
+      `INSERT INTO audit_logs
+       (actor_id, action, entity_type, entity_id, details, ip_address, request_id)
+       VALUES ($1, $2, 'contact_message', $3, $4::jsonb, $5, $6)`,
+      [req.admin.id, action, String(id), JSON.stringify({}), req.ip || null, getRequestId()],
+    );
+  }
+
+  router.get('/', asyncHandler(async (req, res) => {
+    const parsedFilters = z.object({
+      page: z.coerce.number().int().min(1).default(1),
+      pageSize: z.coerce.number().int().min(1).max(100).default(20),
+      q: z.string().trim().max(120).optional(),
+      status: z.enum(contactStatuses).optional(),
+      inquiry_type: z.enum(inquiryTypes).optional(),
+      archived: z.enum(['active', 'archived', 'all']).default('active'),
+    }).safeParse(req.query);
+    if (!parsedFilters.success) {
+      return res.status(400).json({ success: false, error: 'Invalid contact message filters.' });
+    }
+
+    const { page, pageSize, q, status, inquiry_type: inquiryType, archived } = parsedFilters.data;
+    const offset = (page - 1) * pageSize;
+    const values = [];
+    const clauses = archived === 'all' ? [] : [`m.archived_at IS ${archived === 'archived' ? 'NOT ' : ''}NULL`];
+    const addValue = (value) => {
+      values.push(value);
+      return `$${values.length}`;
+    };
+
+    if (q) {
+      const marker = addValue(`%${q}%`);
+      clauses.push(`(m.full_name ILIKE ${marker} OR m.email ILIKE ${marker}
+        OR m.subject ILIKE ${marker} OR m.message ILIKE ${marker})`);
+    }
+    if (status) clauses.push(`m.status = ${addValue(status)}`);
+    if (inquiryType) clauses.push(`m.inquiry_type = ${addValue(inquiryType)}`);
+
+    const where = clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '';
+    const countResult = await postgresDatabase.query(
+      `SELECT COUNT(*) AS total FROM contact_messages m${where}`,
+      values,
+    );
+    const rowsResult = await postgresDatabase.query(
+      `SELECT m.id, m.reference_id, m.full_name, m.email, m.phone, m.subject, m.inquiry_type, m.message,
+              m.status, m.admin_reply, m.reviewed_at, m.read_at,
+              CASE WHEN m.read_at IS NULL THEN 'unread' ELSE 'read' END AS read_status,
+              m.created_at, m.updated_at, m.archived_at,
+              u.full_name AS user_name
+       FROM contact_messages m
+       LEFT JOIN users u ON u.id = m.user_id
+       ${where}
+       ORDER BY m.created_at DESC
+       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      [...values, pageSize, offset],
+    );
+
+    return res.json({
+      success: true,
+      data: rowsResult.rows,
+      pagination: { page, pageSize, total: Number(countResult.rows[0].total) },
+    });
+  }));
+
+  router.patch('/:id/status', asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    const parsed = z.object({
+      status: z.enum(contactStatuses),
+      admin_reply: z.string().transform((value) => sanitizeContactText(value).trim())
+        .pipe(z.string().max(2000)).optional().or(z.literal('')),
+    }).strict().safeParse(req.body || {});
+
+    if (!Number.isInteger(id) || id <= 0 || !parsed.success) {
+      return res.status(400).json({ success: false, error: 'A valid message ID and status are required.' });
+    }
+
+    const messageResult = await postgresDatabase.query(
+      'SELECT full_name, email, subject, admin_reply FROM contact_messages WHERE id = $1',
+      [id],
+    );
+    const message = messageResult.rows[0];
+    if (!message) {
+      return res.status(404).json({ success: false, error: 'Contact message not found.' });
+    }
+
+    const reply = parsed.data.admin_reply === undefined ? message.admin_reply : parsed.data.admin_reply || null;
+    const updated = await postgresDatabase.query(
+      `UPDATE contact_messages
+       SET status = $1, admin_reply = $2, reviewed_by = $3, reviewed_at = NOW(),
+           read_at = CASE WHEN $4 = 'new' THEN NULL ELSE COALESCE(read_at, NOW()) END
+       WHERE id = $5
+       RETURNING id`,
+      [parsed.data.status, reply, req.admin.id, parsed.data.status, id],
+    );
+    if (!updated.rows.length) {
+      return res.status(404).json({ success: false, error: 'Contact message not found.' });
+    }
+
+    let emailStatus = 'not_requested';
+    if (reply && reply !== message.admin_reply) {
+      const services = req.app.locals.notificationServices || {};
+      const configured = await getEmailConfiguration(services);
+      emailStatus = configured === true
+        ? await sendEmail(services, {
+          email: message.email,
+          title: `Re: ${message.subject}`,
+          message: `Hello ${message.full_name},\n\n${reply}\n\nEventHub Support`,
+        }, 'administrator reply')
+        : configured === false ? 'not_configured' : 'failed';
+    }
+
+    return res.json({
+      success: true,
+      data: { id, status: parsed.data.status, email: emailStatus },
+    });
+  }));
+
+  router.patch('/:id/read', asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    const parsed = z.object({ read: z.boolean() }).strict().safeParse(req.body || {});
+    if (!id.success || !parsed.success) {
+      return res.status(400).json({ success: false, error: 'A valid message ID and read state are required.' });
+    }
+
+    const result = await postgresDatabase.query(
+      'UPDATE contact_messages SET read_at = $1 WHERE id = $2 RETURNING id',
+      [parsed.data.read ? new Date() : null, id.data],
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, error: 'Contact message not found.' });
+    }
+    return res.json({ success: true, data: { id: id.data, read: parsed.data.read } });
+  }));
+
+  router.patch('/:id/archive', asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    const parsed = z.object({ archived: z.boolean() }).strict().safeParse(req.body || {});
+    if (!id.success || !parsed.success) {
+      return res.status(400).json({ success: false, error: 'A valid message ID and archive state are required.' });
+    }
+    if (typeof postgresDatabase.inTransaction !== 'function') {
+      throw new TypeError('The PostgreSQL database adapter does not support transactions.');
+    }
+
+    const archived = await postgresDatabase.inTransaction(async (transaction) => {
+      const result = await transaction.query(
+        'UPDATE contact_messages SET archived_at = CASE WHEN $1 THEN NOW() ELSE NULL END WHERE id = $2 RETURNING id',
+        [parsed.data.archived, id.data],
+      );
+      if (!result.rows.length) return false;
+      await writePostgresContactAudit(
+        transaction,
+        req,
+        parsed.data.archived ? 'contact_message.archived' : 'contact_message.restored',
+        id.data,
+      );
+      return true;
+    });
+    if (!archived) {
+      return res.status(404).json({ success: false, error: 'Contact message not found.' });
+    }
+    return res.json({ success: true, data: { id: id.data, archived: parsed.data.archived } });
+  }));
+
+  router.delete('/:id', asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) {
+      return res.status(400).json({ success: false, error: 'A valid message ID is required.' });
+    }
+    if (typeof postgresDatabase.inTransaction !== 'function') {
+      throw new TypeError('The PostgreSQL database adapter does not support transactions.');
+    }
+
+    const deleted = await postgresDatabase.inTransaction(async (transaction) => {
+      const result = await transaction.query(
+        'DELETE FROM contact_messages WHERE id = $1 RETURNING id',
+        [id.data],
+      );
+      if (!result.rows.length) return false;
+      await writePostgresContactAudit(transaction, req, 'contact_message.deleted', id.data);
+      return true;
+    });
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Contact message not found.' });
+    }
+    return res.status(204).end();
+  }));
+
+  return router;
+}

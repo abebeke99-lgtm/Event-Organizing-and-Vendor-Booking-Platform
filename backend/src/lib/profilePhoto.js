@@ -35,10 +35,11 @@ export async function getProfilePhoto(database, userId, res) {
     'Cache-Control': 'private, no-store',
     'X-Content-Type-Options': 'nosniff',
   });
-  const [[photo]] = await database.execute(
-    'SELECT profile_photo, profile_photo_mime FROM users WHERE id = ?',
+  const result = await database.query(
+    'SELECT profile_photo, profile_photo_mime FROM users WHERE id = $1',
     [userId],
   );
+  const photo = result.rows[0];
   if (!photo?.profile_photo) return res.status(204).end();
 
   res.set({
@@ -53,16 +54,16 @@ export async function saveProfilePhoto(database, userId, req, res) {
   const validation = validateProfilePhoto(mimeType, req.body);
   if (!validation.valid) return res.status(400).json({ error: validation.error });
 
-  await database.execute(
-    'UPDATE users SET profile_photo = ?, profile_photo_mime = ? WHERE id = ?',
+  await database.query(
+    'UPDATE users SET profile_photo = $1, profile_photo_mime = $2 WHERE id = $3',
     [req.body, mimeType, userId],
   );
   return res.json({ message: 'Profile photo saved.' });
 }
 
 export async function removeProfilePhoto(database, userId, res) {
-  await database.execute(
-    'UPDATE users SET profile_photo = NULL, profile_photo_mime = NULL WHERE id = ?',
+  await database.query(
+    'UPDATE users SET profile_photo = NULL, profile_photo_mime = NULL WHERE id = $1',
     [userId],
   );
   return res.status(204).end();

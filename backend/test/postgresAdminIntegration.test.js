@@ -736,7 +736,10 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         `/dashboard/overview?startDate=${startDate}&endDate=${endDate}`,
         { token: userToken },
       ),
-      request(`/users?q=${encodeURIComponent(`pg-user-${suffix}`)}&pageSize=5`),
+      request(
+        `/users?q=${encodeURIComponent(`pg-user-${suffix}`)}&status=active&role=organizer`
+          + '&dateFrom=2000-01-01&dateTo=2099-12-31&pageSize=5',
+      ),
     ]);
     assert.equal(nonAdminAccess.status, 403);
     assert.equal(nonAdminReportAccess.status, 403);

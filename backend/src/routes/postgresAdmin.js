@@ -459,9 +459,10 @@ export function createPostgresAdminRouter({
 
     const conditions = [];
     const values = [];
-    const addCondition = (sql, value) => {
+    const addCondition = (buildCondition, value) => {
+      const parameter = `$${values.length + 1}`;
       values.push(value);
-      conditions.push(sql.replace('?', `$${values.length}`));
+      conditions.push(buildCondition(parameter));
     };
     if (q) {
       values.push(`%${q}%`);
@@ -471,7 +472,7 @@ export function createPostgresAdminRouter({
       conditions.push(`(u.full_name ILIKE ${marker} OR u.email ILIKE ${marker}
         OR COALESCE(u.phone, '') ILIKE ${marker} OR u.id::text = ${idMarker})`);
     }
-    if (status) addCondition('u.status = ?', status);
+    if (status) addCondition((parameter) => `u.status = ${parameter}`, status);
     if (role) {
       values.push(role);
       conditions.push(`EXISTS (
@@ -480,8 +481,8 @@ export function createPostgresAdminRouter({
         WHERE filter_ur.user_id = u.id AND LOWER(filter_r.name) = LOWER($${values.length})
       )`);
     }
-    if (dateFrom) addCondition('u.created_at >= ?::date', dateFrom);
-    if (dateTo) addCondition(`u.created_at < (?::date + INTERVAL '1 day')`, dateTo);
+    if (dateFrom) addCondition((parameter) => `u.created_at >= ${parameter}::date`, dateFrom);
+    if (dateTo) addCondition((parameter) => `u.created_at < (${parameter}::date + INTERVAL '1 day')`, dateTo);
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const orderColumns = {

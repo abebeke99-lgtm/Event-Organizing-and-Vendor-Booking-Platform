@@ -49,6 +49,7 @@ export function mapVendor(row, services = [], media = []) {
     visibility: 'public',
     isPublished: true,
     services,
+    publicServiceCount: services.length,
     logoUrl: media.find((entry) => entry.media_type === 'logo') ? mediaUrl(media.find((entry) => entry.media_type === 'logo')) : null,
     coverImageUrl: media.find((entry) => entry.media_type === 'cover') ? mediaUrl(media.find((entry) => entry.media_type === 'cover')) : null,
     portfolio: media.filter((entry) => entry.media_type === 'portfolio').map((entry) => ({

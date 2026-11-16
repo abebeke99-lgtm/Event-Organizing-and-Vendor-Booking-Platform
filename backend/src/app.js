@@ -8,7 +8,10 @@ import adminRoutes from './routes/admin.js';
 import platformRoutes from './routes/platform.js';
 import organizerRoutes from './routes/organizer.js';
 import aboutRoutes, { adminRouter as adminAboutRoutes } from './routes/about.js';
-import contactRoutes, { adminRouter as adminContactRoutes } from './routes/contact.js';
+import contactRoutes, {
+  adminRouter as adminContactRoutes,
+  createPostgresContactAdminRouter,
+} from './routes/contact.js';
 import vendorRoutes from './routes/vendor.js';
 import customerRoutes from './routes/customer.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
@@ -81,6 +84,7 @@ export function createApp({
   const hasLegacyExecuteAdapter = database?.dialect !== 'postgres'
     && typeof database?.execute === 'function';
   const normalizedDatabase = normalizeDatabaseAdapter(database);
+  const isLegacyCompatibilityAdapter = hasLegacyExecuteAdapter && typeof normalizedDatabase.query === 'function';
   app.use(requestContextMiddleware);
   app.use(localizationMiddleware);
   app.locals.database = normalizedDatabase;
@@ -157,7 +161,6 @@ export function createApp({
   app.use('/api/users/me/avatar', userAvatarRoutes);
   app.use('/api/contact', requirePlatformAvailable, contactRoutes);
   if (databaseDialect === 'postgres') {
-    const isLegacyCompatibilityAdapter = hasLegacyExecuteAdapter && typeof normalizedDatabase.query === 'function';
     if (isLegacyCompatibilityAdapter) {
       app.use('/api/platform/organizer', requirePlatformAvailable, requirePlatformRole('organizer'), organizerRoutes);
       app.use('/api/platform', requirePlatformAvailable, platformRoutes);
@@ -195,6 +198,9 @@ export function createApp({
     app.use('/api', createPostgresHomepageRouter({ database: normalizedDatabase }));
     app.use('/api', requirePlatformAvailable, createPostgresMarketplaceRouter({ database: normalizedDatabase }));
     app.use('/api/admin', requireAdmin);
+    if (!isLegacyCompatibilityAdapter) {
+      app.use('/api/admin/contact', createPostgresContactAdminRouter({ database: normalizedDatabase }));
+    }
     app.use('/api/admin/profile/photo', createPostgresProfilePhotoRouter({
       database: normalizedDatabase,
       administrator: true,

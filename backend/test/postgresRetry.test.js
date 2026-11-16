@@ -88,6 +88,26 @@ test('wrapped Neon connection-acquisition timeouts receive the bounded retry', a
   assert.equal(isPostgresConnectionError(error), true);
 });
 
+test('node-postgres pool acquisition timeouts receive the bounded retry', async () => {
+  const delays = [];
+  let calls = 0;
+  const client = { id: 'reconnected' };
+  const error = new Error('timeout exceeded when trying to connect');
+  const result = await connectWithRetry(async () => {
+    calls += 1;
+    if (calls === 1) throw error;
+    return client;
+  }, {
+    sleep: async (milliseconds) => delays.push(milliseconds),
+  });
+
+  assert.equal(result, client);
+  assert.equal(calls, 2);
+  assert.deepEqual(delays, [250]);
+  assert.equal(isTransientPostgresError(error), true);
+  assert.equal(isPostgresConnectionError(error), true);
+});
+
 test('PostgreSQL runtime pool retries connection acquisition, never replays failed queries, and logs only safe error codes', async () => {
   const events = {};
   const statements = [];
@@ -115,7 +135,7 @@ test('PostgreSQL runtime pool retries connection acquisition, never replays fail
         async connect() {
           connectionAttempts += 1;
           if (connectionAttempts === 1) {
-            throw Object.assign(new Error('temporary network failure'), { code: 'ECONNRESET' });
+            throw new Error('timeout exceeded when trying to connect');
           }
           return {
             async query(statement) {
