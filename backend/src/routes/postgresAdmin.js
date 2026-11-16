@@ -8,6 +8,7 @@ import { requirePermission } from '../middleware/rbac.js';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { getPasswordResetEmailConfig, sendPasswordSetupEmail } from '../lib/passwordResetEmail.js';
 import { hashToken, newSessionToken } from '../lib/security.js';
+import { isStrongPassword } from '../lib/authFlow.js';
 import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
 import { createPostgresAdminProfileRouter } from './postgresAdminProfile.js';
 import {
@@ -20,8 +21,7 @@ import {
 
 const userIdSchema = z.coerce.number().int().positive();
 const emailSchema = z.string().trim().email().max(254).transform((email) => email.toLowerCase());
-const phoneSchema = z.string().trim().max(40).nullable().optional().refine((value) => {
-  if (!value) return true;
+const phoneSchema = z.string().trim().min(1).max(40).refine((value) => {
   const digits = value.replace(/\D/g, '');
   return /^\+?[\d().\s-]+$/.test(value) && digits.length >= 7 && digits.length <= 15;
 });
@@ -470,7 +470,8 @@ export function createPostgresAdminRouter({
       values.push(q);
       const idMarker = `$${values.length}`;
       conditions.push(`(u.full_name ILIKE ${marker} OR u.email ILIKE ${marker}
-        OR COALESCE(u.phone, '') ILIKE ${marker} OR u.id::text = ${idMarker})`);
+        OR COALESCE(u.phone, '') ILIKE ${marker} OR u.digital_id ILIKE ${marker}
+        OR COALESCE(u.fid_number, '') ILIKE ${marker} OR u.id::text = ${idMarker})`);
     }
     if (status) addCondition((parameter) => `u.status = ${parameter}`, status);
     if (role) {
@@ -497,7 +498,7 @@ export function createPostgresAdminRouter({
       const count = await database.query(`SELECT COUNT(*) AS total FROM users u ${where}`, values);
       const pageValues = [...values, pageSize, (page - 1) * pageSize];
       const rows = await database.query(
-        `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at,
+        `SELECT u.id, u.full_name, u.email, u.phone, u.digital_id, u.fid_number, u.status, u.created_at,
           STRING_AGG(DISTINCT r.name, ', ' ORDER BY r.name) AS roles,
           MIN(r.id) FILTER (WHERE r.is_admin = FALSE) AS role_id,
           (SELECT COUNT(DISTINCT b.id)
@@ -528,7 +529,7 @@ export function createPostgresAdminRouter({
     if (!id.success) return res.status(400).json({ error: 'User ID is invalid.' });
     try {
       const result = await database.query(
-        `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at,
+        `SELECT u.id, u.full_name, u.email, u.phone, u.digital_id, u.fid_number, u.status, u.created_at,
           STRING_AGG(DISTINCT r.name, ', ' ORDER BY r.name) AS roles,
           MIN(r.id) FILTER (WHERE r.is_admin = FALSE) AS role_id
          FROM users u
@@ -551,14 +552,25 @@ export function createPostgresAdminRouter({
       email: emailSchema,
       phone: phoneSchema,
       role_id: z.coerce.number().int().positive(),
+      password: z.string()
+        .min(12, 'Password must be 12–16 characters and include uppercase, lowercase, and a number.')
+        .max(16, 'Password must be 12–16 characters and include uppercase, lowercase, and a number.')
+        .refine(isStrongPassword, 'Password must be 12–16 characters and include uppercase, lowercase, and a number.')
+        .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, 'Password is too long.'),
+      confirm_password: z.string().min(1).max(16),
+      fid_number: z.string().trim().max(120).nullable().optional()
+        .transform((value) => value || null),
       business_name: z.string().trim().min(1).max(160).optional(),
       category_id: z.coerce.number().int().positive().optional(),
-    }).strict().safeParse(req.body);
+    }).strict().refine((value) => value.password === value.confirm_password, {
+      path: ['confirm_password'],
+      message: 'Passwords do not match.',
+    }).safeParse(req.body);
     if (!parsed.success) return sendValidationError(res, parsed.error);
 
     try {
-      const passwordHash = await bcrypt.hash(randomBytes(48).toString('base64url'), 12);
-      const invitationToken = newSessionToken();
+      const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+      const digitalId = `EH-${randomBytes(16).toString('hex').toUpperCase()}`;
       const created = await database.inTransaction(async (client) => {
         await client.query('SELECT pg_advisory_xact_lock(hashtext(LOWER($1)))', [parsed.data.email]);
         const roleResult = await client.query(
@@ -567,8 +579,8 @@ export function createPostgresAdminRouter({
         );
         const role = roleResult.rows[0];
         const roleName = String(role?.name || '').toLowerCase();
-        if (!role || !['customer', 'organizer', 'vendor'].includes(roleName)) {
-          throw statusError('Choose Customer, Event Organizer, or Vendor for this account.', 400);
+        if (!role || !['organizer', 'vendor'].includes(roleName)) {
+          throw statusError('Choose Event Organizer or Vendor for this account.', 400);
         }
         if (roleName === 'vendor' && (!parsed.data.business_name || !parsed.data.category_id)) {
           throw statusError('Vendor accounts require a business name and service category.', 400);
@@ -590,9 +602,17 @@ export function createPostgresAdminRouter({
           if (existingPhone.rows.length) throw statusError('An account with this phone number already exists.', 409);
         }
         const userResult = await client.query(
-          `INSERT INTO users (full_name, email, phone, password_hash, status)
-           VALUES ($1, $2, $3, $4, 'pending') RETURNING id`,
-          [parsed.data.full_name, parsed.data.email, parsed.data.phone || null, passwordHash],
+          `INSERT INTO users (full_name, email, phone, password_hash, status, digital_id, fid_number)
+           VALUES ($1, $2, $3, $4, 'active', $5, $6)
+           RETURNING id, full_name, email, phone, digital_id, fid_number, status, created_at`,
+          [
+            parsed.data.full_name,
+            parsed.data.email,
+            parsed.data.phone,
+            passwordHash,
+            digitalId,
+            parsed.data.fid_number,
+          ],
         );
         const userId = userResult.rows[0].id;
         await client.query('INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)', [userId, role.id]);
@@ -603,39 +623,16 @@ export function createPostgresAdminRouter({
             [userId, parsed.data.business_name, parsed.data.category_id],
           );
         }
-        await client.query(
-          `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, used_at)
-           VALUES ($1, $2, $3, NULL)
-           ON CONFLICT (user_id) DO UPDATE
-           SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at, used_at = NULL`,
-          [userId, hashToken(invitationToken), new Date(Date.now() + 24 * 60 * 60 * 1000)],
-        );
         await writeAudit(client, {
           actorId: req.admin.id,
-          action: 'user.invitation_created',
+          action: 'user.created',
           entityId: userId,
-          details: { role: role.name },
+          details: { role: role.name, digital_id: digitalId },
           ip: req.ip,
         });
-        return { id: userId, role: role.name };
+        return { ...userResult.rows[0], roles: role.name, role_id: role.id, bookings_count: 0 };
       });
-      try {
-        if (!emailConfigured()) throw new Error('Email is not configured.');
-        const configuredFrontend = String(frontendUrl || '').split(',')[0].trim();
-        const setupUrl = new URL('/set-password', configuredFrontend);
-        setupUrl.searchParams.set('token', invitationToken);
-        await emailSender({
-          email: parsed.data.email,
-          name: parsed.data.full_name,
-          setupUrl: setupUrl.href,
-        });
-      } catch {
-        return res.status(503).json({
-          error: 'The account was created, but the invitation email could not be sent. Check email settings and resend the invitation.',
-          data: { id: created.id },
-        });
-      }
-      return res.status(201).json({ data: { id: created.id }, invitationSent: true });
+      return res.status(201).json({ data: created });
     } catch (error) {
       if (error.status) return res.status(error.status).json({ error: error.message });
       if (error.code === '23505') return res.status(409).json({ error: 'A record with the same unique value already exists.' });

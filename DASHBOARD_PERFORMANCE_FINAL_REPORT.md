@@ -2,7 +2,7 @@
 
 ## Current isolated-Neon measurements
 
-`backend/test/postgresBookingsIntegration.test.js` runs 20 repeated samples per role. Each sample starts the listed endpoints concurrently and records the slowest response as the bundle duration. Percentiles use linear interpolation over 20 samples. The complete opt-in backend run passed 589/589 tests and included this workflow.
+`backend/test/postgresBookingsIntegration.test.js` runs 20 repeated samples per role. Each sample starts the listed endpoints concurrently and records the slowest response as the bundle duration. Percentiles use linear interpolation over 20 samples. The complete opt-in backend run passed 590/590 tests and included this workflow.
 
 | Bundle | Endpoints included | Samples | p50 | p95 | p99 |
 |---|---|---:|---:|---:|---:|

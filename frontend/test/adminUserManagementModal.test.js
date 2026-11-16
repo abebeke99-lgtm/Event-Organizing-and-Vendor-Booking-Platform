@@ -5,33 +5,45 @@ import { translate } from '../src/language.js';
 
 const componentSource = await readFile(new URL('../src/AdminUserManagement.jsx', import.meta.url), 'utf8');
 
-test('create-user form requests an invitation instead of a permanent password', () => {
+test('create-user form includes credentials, a generated digital ID, and optional FID', () => {
   const createForm = componentSource.slice(
     componentSource.indexOf('function UserModal'),
     componentSource.indexOf('function ActionModal'),
   );
-  assert.match(createForm, /adminUserCreateAndInvite/);
+  assert.match(createForm, /adminUserPassword/);
+  assert.match(createForm, /adminUserConfirmPassword/);
+  assert.match(createForm, /adminUserDigitalIdGenerated/);
+  assert.match(createForm, /adminUserFidNumber/);
+  assert.match(createForm, /showPassword \? 'text' : 'password'/);
+  assert.match(createForm, /adminUserCreateAccount/);
   assert.match(createForm, /adminUserServiceCategory/);
   assert.match(createForm, /adminUserBusinessName/);
-  assert.doesNotMatch(createForm, /type="password"|adminUserInitialPassword|adminUserConfirmPassword/);
+  assert.match(createForm, /adminUserCancel/);
 });
 
-test('create-user form supports customer, organizer, and vendor but never administrator roles', () => {
+test('create-user form offers only organizer and vendor roles', () => {
   const createForm = componentSource.slice(
     componentSource.indexOf('function UserModal'),
     componentSource.indexOf('function ActionModal'),
   );
   assert.match(createForm, /roles\.map\(\(role\)/);
-  assert.match(componentSource, /\['customer', 'organizer', 'vendor'\]\.includes/);
+  assert.match(componentSource, /\['organizer', 'vendor'\]\.includes/);
+  assert.match(componentSource, /roles\.map\(\(role\) => role\.id\)/);
+  assert.doesNotMatch(componentSource.slice(componentSource.indexOf('setRoles(allRoles.filter'), componentSource.indexOf('setRoles(allRoles.filter') + 180), /customer/);
   assert.doesNotMatch(createForm, /adminUserRoleadmin/);
 });
 
-test('invitation-management messages are localized in English and Amharic', () => {
+test('create-account and invitation-management messages are localized in English and Amharic', () => {
   for (const key of [
-    'adminUserCreateAndInvite',
+    'adminUserCreateAccount',
     'adminUserBusinessName',
     'adminUserServiceCategory',
-    'adminUserInvitationSent',
+    'adminUserPassword',
+    'adminUserConfirmPassword',
+    'adminUserDigitalId',
+    'adminUserFidNumber',
+    'adminUserCreated',
+    'adminUserPasswordMismatch',
     'adminUserInviteEmailFailed',
     'adminUserResendInvitation',
     'adminUserStatusInvited',

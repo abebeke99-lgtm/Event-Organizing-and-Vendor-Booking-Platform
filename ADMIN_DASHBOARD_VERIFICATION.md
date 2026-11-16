@@ -13,7 +13,7 @@ The full opt-in backend run passed the following isolated-Neon admin integration
 - `backend/test/postgresAdminProfileIntegration.test.js` — profile update, password rotation, and email-change verification.
 - `backend/test/postgresAdminSettingsIntegration.test.js` — isolated setting persistence and restoration.
 
-These are live isolated-Neon tests; no production administrator accounts or data were accessed. The current full opt-in backend suite passed 589/589 tests. The default backend suite passed 541 tests, failed 0, and skipped 27 opt-in Neon tests gated by `RUN_NEON_INTEGRATION=true`.
+These are live isolated-Neon tests; no production administrator accounts or data were accessed. The current full opt-in backend suite passed 590/590 tests. The default backend suite passed 541 tests, failed 0, and skipped 28 opt-in Neon tests gated by `RUN_NEON_INTEGRATION=true`.
 
 ## Limits
 

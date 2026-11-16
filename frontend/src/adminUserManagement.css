@@ -14,12 +14,13 @@
 .um-page-size{display:flex;align-items:center;gap:8px;color:#8993a6;font-size:10px}
 .um-page-size select{height:30px}
 .um-table-scroll{width:100%;overflow-x:auto}
-.um-table{min-width:940px}
+.um-table{min-width:1260px}
 .um-table th,.um-table td{font-size:10px}
 .um-table td{vertical-align:middle}
 .um-user-name,.um-user-email,.um-user-phone{display:block}
 .um-user-name{color:#26344c;font-size:11px}
 .um-user-email,.um-user-phone{margin-top:3px;color:#8490a4;font-size:9px}
+.um-table td code{color:#34425b;font-size:9px;white-space:nowrap}
 .um-row-actions{display:flex;align-items:center;gap:4px}
 .um-row-actions button,.um-icon-button{width:29px;height:29px;display:grid;place-items:center;border:0;border-radius:6px;background:transparent;color:#68758b}
 .um-row-actions button:hover,.um-icon-button:hover{background:#f0f3f8;color:#315d99}

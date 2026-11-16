@@ -6,7 +6,7 @@ The isolated-Neon booking/dashboard integration passed for the customer flow. It
 
 The current full-suite measurement recorded bundle latency of p50 **2,688 ms**, p95 **2,693 ms**, p99 **2,696 ms**. The measurement is the slowest response in each concurrent API bundle, not a browser-render or production measurement.
 
-The full opt-in backend run passed customer booking/payment/refund reads, quotation decision, rescheduling, messaging, notifications, reviews, complaints, and ownership checks. Expected unauthorized, missing-resource, and conflict responses are asserted by the integration. Test fixtures are isolated and cleaned up by the test. The complete opt-in suite passed 589/589 tests.
+The full opt-in backend run passed customer booking/payment/refund reads, quotation decision, rescheduling, messaging, notifications, reviews, complaints, and ownership checks. Expected unauthorized, missing-resource, and conflict responses are asserted by the integration. Test fixtures are isolated and cleaned up by the test. The complete opt-in suite passed 590/590 tests.
 
 The frontend dashboard already starts the overview and six independent requests concurrently and retains deduplication, cancellation, stale-response protection, and partial-loading behavior. Its focused regressions and full frontend test suite passed.
 

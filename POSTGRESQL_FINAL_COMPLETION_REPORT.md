@@ -10,17 +10,17 @@
 |---|---|
 | Isolated Neon pooled/direct connection and schema check | Passed; PostgreSQL 18; 53/53 expected tables, 58 public tables, 87 foreign keys, 169 indexes |
 | Static inventory | 1,255 query/execute sites in 102 backend JS files: 17 `CERTIFIED`, 566 `NEEDS_FIX`, 654 `UNVERIFIED`, 18 `EXEMPT` |
-| Migration history | Isolated test DB records 001-010, 012, 014-017; 011 and 013 remain unapplied |
+| Migration history | Isolated test DB records 001-010, 012, 014-017; 011 and 013 remain unapplied. Corrected 011/013 ran against temporary Neon fixtures in a rolled-back transaction, including custom-mapping restoration. |
 | Avatar shared route | Focused tests and exact shared-route Neon integration passed; uses PostgreSQL positional bindings |
 | OAuth registration state | Migration 016 applied to isolated Neon only; OAuth unit/integration tests passed 11/11 |
 | Marketplace/core integration | Core CRUD/relationships and populated marketplace detail Neon tests passed |
 | Booking/dashboard Neon integration | Passed in the full opt-in run; booking, quotation, availability, ownership, payments/refunds, messaging, notifications, reviews, complaints exercised |
-| Dashboard API percentiles (20 samples) | Organizer 680/950/3,035 ms; customer 2,688/2,693/2,696 ms; vendor 1,078/1,234/3,294 ms (p50/p95/p99) |
+| Latest dashboard API percentiles (20 samples) | Organizer 743/1,435/3,144 ms; customer 2,668/3,469/4,027 ms; vendor 1,083/1,230/3,307 ms (p50/p95/p99); customer target and organizer/vendor p99 targets missed |
 | Isolated aggregate-query plans | Customer 3.540 ms execution; organizer 1.214 ms execution using sentinel ID `0`; not representative of production or full dashboard latency |
 | Frontend | 218 tests passed; production build passed after organizer concurrency change |
 | Demo/mock production path | `DEMO_AUTH_ENABLED` is `false`; built output contains no demo credential or demo-storage markers checked in this pass |
-| Default backend suite | 541 passed, 0 failed, 27 skipped; the skipped Neon integration tests require `RUN_NEON_INTEGRATION=true` |
-| Full opt-in backend suite | 589 passed, 0 failed, 0 skipped, including isolated-Neon integration tests |
+| Default backend suite | 541 passed, 0 failed, 28 skipped; the skipped Neon integration tests require `RUN_NEON_INTEGRATION=true` |
+| Latest full opt-in backend attempt | 583 tests: 581 passed, 2 failed, 0 skipped; failures were in admin invitation and authentication integrations |
 | Production DB, deployment, GitHub push | Not accessed or performed |
 
 ## Inventory movement in this batch
@@ -34,7 +34,7 @@
 
 The two newly certified entries are the administrator user-list count and paginated fetch queries, exercised against Neon with combined filters. This batch did not reduce the 566 static `NEEDS_FIX` entries.
 
-Percentiles are isolated-test API bundles, not browser or production measurements. The full opt-in suite passed after adding bounded retry classification for node-postgres pool acquisition timeouts; failed SQL queries are still never replayed. The separate read-only Neon schema check also passed.
+Percentiles are isolated-test API bundles, not browser or production measurements. The latest full opt-in attempt failed two assertions: the admin user creation integration received 400 instead of 201, and authentication integration received 500 instead of 200. This does not invalidate the earlier recorded 590-test run, but that historical result was not reproduced in this workspace state. The bounded connection retry does not replay SQL queries. The separate read-only Neon schema check was not rerun in this pass.
 
 ## Implemented and verified areas
 
@@ -52,7 +52,7 @@ The regenerated [`POSTGRESQL_QUERY_VERIFICATION_MATRIX.md`](./POSTGRESQL_QUERY_V
 1. Resolve the 566 `NEEDS_FIX` call sites and establish whether affected callers are active runtime paths before removing remaining compatibility conversion.
 2. Inspect and verify the 654 `UNVERIFIED` call sites with isolated-Neon evidence.
 3. Investigate customer p50/p95 and organizer/vendor p99 values above 2 seconds using per-endpoint timings and query plans.
-4. Reconcile migrations 011/013 without losing the custom category mapping, and verify full column/constraint/index parity; the current checker only verifies table presence and aggregate FK/index counts.
+4. Review the corrected 011/013 snapshot and restore behavior against the target database backup, then approve and apply only through a separately authorized migration. Verify full column/constraint/index parity; the current checker only verifies table presence and aggregate FK/index counts.
 5. Verify provider-side production configuration, schema parity, and live health only in an authorized environment.
 6. Complete route-level security review and integration coverage beyond the selected flows.
 

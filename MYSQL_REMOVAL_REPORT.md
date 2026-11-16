@@ -15,15 +15,15 @@ The separate `personalportofolio/` application was not changed. No production da
 | PostgreSQL runtime | Neon pooled `DATABASE_URL`; direct `DIRECT_URL` for migration/check workflows; SSL and bounded pooling configured |
 | Neon test connection | Pooled and direct connections passed; `SELECT 1` passed |
 | Neon test schema | 53/53 expected application tables; 58 public tables, 87 foreign keys, 169 indexes; migration 016 recorded on isolated test DB only |
-| Default backend test suite | 541 passed, 0 failed, 27 opt-in Neon integration tests skipped |
-| Full opt-in backend suite | 589 passed, 0 failed, 0 skipped |
+| Default backend test suite | 541 passed, 0 failed, 28 opt-in Neon integration tests skipped |
+| Latest full opt-in backend attempt | 583 tests: 581 passed, 2 failed, 0 skipped; earlier 590/590 result is historical and was not reproduced |
 | Frontend tests | 218 passed, 0 failed |
 | Frontend production build | Passed |
-| PostgreSQL marketplace and booking/dashboard integrations | Passed in the 589-test opt-in Neon suite |
-| Dashboard bundle p50/p95/p99 (ms) | Organizer 680/950/3,035; customer 2,688/2,693/2,696; vendor 1,078/1,234/3,294 |
+| PostgreSQL marketplace and booking/dashboard integrations | Passed in the 590-test opt-in Neon suite |
+| Latest dashboard bundle p50/p95/p99 (ms) | Organizer 743/1,435/3,144; customer 2,668/3,469/4,027; vendor 1,083/1,230/3,307 |
 | Production DB / deployment / GitHub | Not accessed; deployment and synchronization remain pending |
 
-Migration `016_public_oauth_registration_roles.sql` was applied only to the isolated Neon test database after a transaction rollback dry-run and post-apply checks. It was not applied to production. Migrations 011 and 013 remain unapplied; see [POSTGRESQL_MIGRATION_RECONCILIATION_REPORT.md](./POSTGRESQL_MIGRATION_RECONCILIATION_REPORT.md). No database reset or data deletion was performed.
+Migration `016_public_oauth_registration_roles.sql` was applied only to the isolated Neon test database after a transaction rollback dry-run and post-apply checks. It was not applied to production. Migrations 011 and 013 remain unapplied; the updated 011 now snapshots affected custom mappings and has a tested manual restore query against temporary Neon fixtures. Neither migration was permanently run during this pass. See [POSTGRESQL_MIGRATION_RECONCILIATION_REPORT.md](./POSTGRESQL_MIGRATION_RECONCILIATION_REPORT.md). No database reset or data deletion was performed.
 
 The ignored local `backend/.env` retains empty/unusable PostgreSQL URL configuration and obsolete variable names. It was left unchanged to preserve local configuration; only variable names were inspected. The isolated test environment is separate. No credentials were printed or copied into frontend files.
 

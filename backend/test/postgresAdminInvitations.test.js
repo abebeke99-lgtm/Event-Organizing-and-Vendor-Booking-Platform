@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import test from 'node:test';
+import bcrypt from 'bcryptjs';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import { createPostgresAdminRouter } from '../src/routes/postgresAdmin.js';
@@ -61,10 +62,13 @@ function createDatabase() {
         email: values[1],
         phone: values[2],
         password_hash: values[3],
-        status: 'pending',
+        digital_id: values[4],
+        fid_number: values[5],
+        status: 'active',
         created_at: new Date(),
       });
-      return { rows: [{ id }], rowCount: 1 };
+      const { password_hash: _passwordHash, ...createdUser } = users.get(id);
+      return { rows: [createdUser], rowCount: 1 };
     }
     if (sql.startsWith('INSERT INTO user_roles')) {
       assignments.set(values[0], values[1]);
@@ -118,12 +122,24 @@ function createDatabase() {
     assignments,
     tokens,
     audits,
+    createPendingUser(email) {
+      const id = nextId++;
+      users.set(id, {
+        id,
+        full_name: 'Existing Pending Account',
+        email,
+        status: 'pending',
+        created_at: new Date(),
+      });
+      assignments.set(id, 3);
+      return id;
+    },
     query,
     inTransaction: (work) => work({ query }),
   };
 }
 
-test('PostgreSQL admin user invitations are authorized, hashed, role-limited, and resendable', async (context) => {
+test('PostgreSQL admin creates active organizer/vendor accounts with hashed passwords and generated IDs', async (context) => {
   const database = createDatabase();
   const invitations = [];
   let configured = true;
@@ -163,34 +179,52 @@ test('PostgreSQL admin user invitations are authorized, hashed, role-limited, an
 
   const organizerResponse = await request('/users', {
     method: 'POST',
-    body: { full_name: 'Invited Organizer', email: 'organizer@example.test', role_id: 3 },
+    body: {
+      full_name: 'Created Organizer',
+      email: 'organizer@example.test',
+      phone: '+12025550123',
+      password: 'StrongPass123',
+      confirm_password: 'StrongPass123',
+      role_id: 3,
+      fid_number: 'FID-ORG-123',
+    },
   });
   assert.equal(organizerResponse.status, 201);
-  const organizerId = (await organizerResponse.json()).data.id;
+  const organizerBody = await organizerResponse.json();
+  const organizerId = organizerBody.data.id;
   const organizer = database.users.get(organizerId);
-  assert.equal(organizer.status, 'pending');
+  assert.equal(organizer.status, 'active');
   assert.equal(database.assignments.get(organizerId), 3);
   assert.equal(typeof organizer.password_hash, 'string');
-  assert.notEqual(organizer.password_hash, 'organizer@example.test');
-  assert.equal(invitations.length, 1);
-  const rawToken = new URL(invitations[0].setupUrl).searchParams.get('token');
-  assert.equal(database.tokens.get(organizerId).token_hash, hashToken(rawToken));
-  assert.notEqual(database.tokens.get(organizerId).token_hash, rawToken);
-  assert.ok(database.tokens.get(organizerId).expires_at > new Date());
-  assert.equal(JSON.stringify(database.tokens).includes(rawToken), false);
+  assert.notEqual(organizer.password_hash, 'StrongPass123');
+  assert.equal(await bcrypt.compare('StrongPass123', organizer.password_hash), true);
+  assert.match(organizer.digital_id, /^EH-[A-F0-9]{32}$/);
+  assert.equal(organizer.fid_number, 'FID-ORG-123');
+  assert.equal(organizerBody.data.digital_id, organizer.digital_id);
+  assert.equal(organizerBody.data.fid_number, organizer.fid_number);
+  assert.equal(JSON.stringify(organizerBody).includes('password_hash'), false);
+  assert.equal(JSON.stringify(organizerBody).includes('StrongPass123'), false);
+  assert.equal(invitations.length, 0);
 
   const vendorResponse = await request('/users', {
     method: 'POST',
     body: {
-      full_name: 'Invited Vendor',
+      full_name: 'Created Vendor',
       email: 'vendor@example.test',
+      phone: '+12025550124',
+      password: 'StrongPass123',
+      confirm_password: 'StrongPass123',
       role_id: 4,
       business_name: 'Test Venue',
       category_id: 7,
     },
   });
   assert.equal(vendorResponse.status, 201);
-  const vendorId = (await vendorResponse.json()).data.id;
+  const vendorBody = await vendorResponse.json();
+  const vendorId = vendorBody.data.id;
+  assert.match(vendorBody.data.digital_id, /^EH-[A-F0-9]{32}$/);
+  assert.notEqual(vendorBody.data.digital_id, organizerBody.data.digital_id);
+  assert.equal(vendorBody.data.fid_number, null);
   assert.deepEqual(database.users.get(vendorId).vendorProfile, {
     business_name: 'Test Venue',
     category_id: 7,
@@ -198,35 +232,79 @@ test('PostgreSQL admin user invitations are authorized, hashed, role-limited, an
 
   const customerResponse = await request('/users', {
     method: 'POST',
-    body: { full_name: 'Invited Customer', email: 'customer@example.test', role_id: 2 },
+    body: {
+      full_name: 'Blocked Customer',
+      email: 'customer@example.test',
+      phone: '+12025550125',
+      password: 'StrongPass123',
+      confirm_password: 'StrongPass123',
+      role_id: 2,
+    },
   });
-  assert.equal(customerResponse.status, 201);
+  assert.equal(customerResponse.status, 400);
+  assert.equal([...database.users.values()].some((user) => user.email === 'customer@example.test'), false);
 
   const adminRole = await request('/users', {
     method: 'POST',
-    body: { full_name: 'Blocked Admin', email: 'blocked-admin@example.test', role_id: 1 },
+    body: {
+      full_name: 'Blocked Admin',
+      email: 'blocked-admin@example.test',
+      phone: '+12025550126',
+      password: 'StrongPass123',
+      confirm_password: 'StrongPass123',
+      role_id: 1,
+    },
   });
   assert.equal(adminRole.status, 400);
-  const passwordInput = await request('/users', {
+  const passwordMismatch = await request('/users', {
     method: 'POST',
     body: {
       full_name: 'Rejected Password',
       email: 'rejected@example.test',
+      phone: '+12025550127',
       role_id: 3,
-      password: 'NeverAcceptThis123',
+      password: 'StrongPass123',
+      confirm_password: 'DifferentPass123',
     },
   });
-  assert.equal(passwordInput.status, 400);
+  assert.equal(passwordMismatch.status, 400);
   assert.equal([...database.users.values()].some((user) => user.email === 'blocked-admin@example.test'), false);
 
-  failDelivery = true;
-  const deliveryFailure = await request('/users', {
+  const missingRequired = await request('/users', {
     method: 'POST',
-    body: { full_name: 'Retry Invite', email: 'retry@example.test', role_id: 3 },
+    body: { full_name: 'Missing Credentials', email: 'missing@example.test', role_id: 3 },
   });
+  assert.equal(missingRequired.status, 400);
+  const invalidEmail = await request('/users', {
+    method: 'POST',
+    body: {
+      full_name: 'Invalid Email',
+      email: 'not-an-email',
+      phone: '+12025550128',
+      password: 'StrongPass123',
+      confirm_password: 'StrongPass123',
+      role_id: 3,
+    },
+  });
+  assert.equal(invalidEmail.status, 400);
+
+  const duplicateEmail = await request('/users', {
+    method: 'POST',
+    body: {
+      full_name: 'Duplicate Email',
+      email: 'ORGANIZER@example.test',
+      phone: '+12025550129',
+      password: 'StrongPass123',
+      confirm_password: 'StrongPass123',
+      role_id: 3,
+    },
+  });
+  assert.equal(duplicateEmail.status, 409);
+
+  failDelivery = true;
+  const failedInviteId = database.createPendingUser('pending@example.test');
+  const deliveryFailure = await request(`/users/${failedInviteId}/resend-invite`, { method: 'POST' });
   assert.equal(deliveryFailure.status, 503);
-  const failedInviteId = (await deliveryFailure.json()).data.id;
-  assert.equal(database.users.get(failedInviteId).status, 'pending');
   failDelivery = false;
 
   const resent = await request(`/users/${failedInviteId}/resend-invite`, { method: 'POST' });
@@ -237,6 +315,6 @@ test('PostgreSQL admin user invitations are authorized, hashed, role-limited, an
   assert.equal(pendingList.status, 200);
   const pendingBody = await pendingList.json();
   assert.ok(pendingBody.data.some((user) => user.id === failedInviteId && user.status === 'pending' && user.created_at));
-  assert.ok(database.audits.some((entry) => entry[1] === 'user.invitation_created'));
+  assert.ok(database.audits.some((entry) => entry[1] === 'user.created'));
   assert.ok(database.audits.some((entry) => entry[1] === 'user.invitation_resent'));
 });

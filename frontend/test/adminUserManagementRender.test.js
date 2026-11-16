@@ -24,6 +24,8 @@ test('AdminUserManagement renders a user row and all action icons without throwi
         full_name: 'Test User',
         email: 'test@example.test',
         phone: '+1 202 555 0100',
+        digital_id: 'EH-00000000000000000000000000000000',
+        fid_number: 'FID-12345',
         roles: 'vendor',
         status: 'active',
         created_at: '2026-01-15T12:00:00Z',
@@ -33,6 +35,10 @@ test('AdminUserManagement renders a user row and all action icons without throwi
 
     assert.match(html, /Test User/);
     assert.match(html, /test@example\.test/);
+    assert.match(html, /EH-00000000000000000000000000000000/);
+    assert.match(html, /FID-12345/);
+    assert.match(html, /Digital ID/);
+    assert.match(html, /FID Number \(D\/F\)/);
     assert.match(html, /View Test User/);
     assert.match(html, /Edit Test User/);
     assert.match(html, /Change role for Test User/);

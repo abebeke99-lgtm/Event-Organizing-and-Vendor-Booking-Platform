@@ -14,8 +14,8 @@ The application runtime is configured for React/Vite, Node.js/Express, and Neon 
 | Isolated Neon schema | 53/53 expected application tables; 58 public tables, 87 foreign keys, 169 indexes |
 | Query inventory | 1,255 total call sites: 17 certified, 566 needs-fix, 654 unverified, 18 exempt |
 | Isolated test migration ledger | 001-010, 012, 014-017 recorded; 011 and 013 remain absent |
-| Default backend tests | 541 passed, 0 failed, 27 opt-in Neon tests skipped |
-| Full opt-in backend tests | 589 passed, 0 failed, 0 skipped |
+| Default backend tests | 541 passed, 0 failed, 28 opt-in Neon tests skipped |
+| Full opt-in backend tests | 590 passed, 0 failed, 0 skipped |
 | Frontend tests | 218 passed, 0 failed |
 | Frontend production build | Passed |
 | Marketplace real-Neon integration | Clean rerun: 18/18 passed |

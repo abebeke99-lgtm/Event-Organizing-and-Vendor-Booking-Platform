@@ -7,8 +7,8 @@
 | React/Vite production build | Passed after the organizer dashboard concurrency change |
 | Frontend suite | 218 passed |
 | Backend targeted checks | Shared-avatar focused tests and Neon route test passed; Neon core/marketplace and booking workflow integration reruns passed |
-| Default backend suite | 541 passed, 0 failed, 27 opt-in Neon tests skipped |
-| Full opt-in backend suite | 589 passed, 0 failed, 0 skipped |
+| Default backend suite | 541 passed, 0 failed, 28 opt-in Neon tests skipped |
+| Full opt-in backend suite | 590 passed, 0 failed, 0 skipped |
 | Neon test connection and schema | Pooled and direct PostgreSQL 18 connections passed; 53/53 expected application tables, 58 public tables, 87 foreign keys, 169 indexes |
 | Runtime architecture | PostgreSQL is the only configured runtime; no MySQL/MariaDB/SQLite driver import was found in the selected manifests, lockfile, or backend imports |
 | Netlify/Render/production Neon | Not verified with live providers |

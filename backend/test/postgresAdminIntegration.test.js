@@ -32,7 +32,6 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
   let rosterChangeAdminId;
   let userId;
   let invitedVendorId;
-  let invitedCustomerId;
   let adminRoleId;
   let secondAdminRoleId;
   let rosterChangeAdminRoleId;
@@ -314,34 +313,57 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         full_name: 'Postgres Admin Created User',
         email: `pg-user-${suffix}@example.invalid`,
         phone: `+1555${phoneSuffix}`,
+        password: 'StrongPass123',
+        confirm_password: 'StrongPass123',
+        fid_number: `FID-${suffix}`,
         role_id: organizerRole.id,
       },
     });
     const createdUser = await createdResponse.json();
     assert.equal(createdResponse.status, 201, JSON.stringify(createdUser));
     userId = createdUser.data.id;
-    assert.equal(invitationMessages.length, 1);
-    const invitationToken = new URL(invitationMessages[0].setupUrl).searchParams.get('token');
-    const storedInvitation = await database.runtimeAdapter.query(
-      'SELECT token_hash, expires_at, used_at FROM password_reset_tokens WHERE user_id = $1',
+    assert.equal(invitationMessages.length, 0);
+    assert.equal(createdUser.data.status, 'active');
+    assert.match(createdUser.data.digital_id, /^EH-[A-F0-9]{32}$/);
+    assert.equal(createdUser.data.fid_number, `FID-${suffix}`);
+    assert.equal(JSON.stringify(createdUser).includes('password_hash'), false);
+    const storedCreatedUser = await database.runtimeAdapter.query(
+      'SELECT password_hash, digital_id, fid_number, status FROM users WHERE id = $1',
       [userId],
     );
-    assert.equal(storedInvitation.rows[0].token_hash, hashToken(invitationToken));
-    assert.notEqual(storedInvitation.rows[0].token_hash, invitationToken);
-    assert.ok(storedInvitation.rows[0].expires_at > new Date());
+    assert.equal(storedCreatedUser.rows[0].digital_id, createdUser.data.digital_id);
+    assert.equal(storedCreatedUser.rows[0].fid_number, `FID-${suffix}`);
+    assert.equal(storedCreatedUser.rows[0].status, 'active');
+    assert.notEqual(storedCreatedUser.rows[0].password_hash, 'StrongPass123');
     const apiOrigin = new URL(baseUrl).origin;
-    const setPassword = await fetch(`${apiOrigin}/api/platform/set-password`, {
+    const organizerLogin = await fetch(`${apiOrigin}/api/platform/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: invitationToken, password: 'StrongIntegrationPass123' }),
+      body: JSON.stringify({ email: `pg-user-${suffix}@example.invalid`, password: 'StrongPass123' }),
     });
-    assert.equal(setPassword.status, 200);
-    const replayedInvitation = await fetch(`${apiOrigin}/api/platform/set-password`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: invitationToken, password: 'StrongIntegrationPass123' }),
+    assert.equal(organizerLogin.status, 200);
+    const organizerCookie = organizerLogin.headers.get('set-cookie')?.split(';', 1)[0];
+    assert.ok(organizerCookie?.startsWith('platform_session='));
+    const organizerMe = await fetch(`${apiOrigin}/api/platform/me`, {
+      headers: { Cookie: organizerCookie },
     });
-    assert.equal(replayedInvitation.status, 400);
+    const organizerProfile = (await organizerMe.json()).data.user;
+    assert.equal(organizerProfile.role, 'organizer');
+    assert.equal(organizerProfile.digital_id, createdUser.data.digital_id);
+    assert.equal(organizerProfile.fid_number, `FID-${suffix}`);
+    const organizerRedirect = await fetch(`${apiOrigin}/api/platform/redirect`, {
+      headers: { Cookie: organizerCookie },
+    });
+    assert.equal((await organizerRedirect.json()).redirect, '/organizer/dashboard');
+
+    await assert.rejects(
+      database.inTransaction((client) => client.query(
+        `INSERT INTO users (full_name, email, password_hash, digital_id)
+         VALUES ('Duplicate Digital ID', $1, 'test-hash', $2)`,
+        [`pg-digital-id-duplicate-${suffix}@example.invalid`, createdUser.data.digital_id],
+      )),
+      (error) => error.code === '23505',
+    );
 
     const activeCategory = await database.runtimeAdapter.query(
       'SELECT id FROM service_categories WHERE is_active = TRUE ORDER BY id LIMIT 1',
@@ -352,23 +374,40 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       body: {
         full_name: 'Postgres Admin Created Vendor',
         email: `pg-vendor-${suffix}@example.invalid`,
+        phone: `+1666${phoneSuffix}`,
+        password: 'StrongPass123',
+        confirm_password: 'StrongPass123',
         role_id: roles.get('vendor').id,
         business_name: `Integration Vendor ${suffix}`,
         category_id: activeCategory.rows[0].id,
       },
     });
     assert.equal(vendorInvitation.status, 201);
-    invitedVendorId = (await vendorInvitation.json()).data.id;
-    const customerInvitation = await request('/users', {
+    const vendorCreated = await vendorInvitation.json();
+    invitedVendorId = vendorCreated.data.id;
+    assert.notEqual(vendorCreated.data.digital_id, createdUser.data.digital_id);
+    assert.equal(vendorCreated.data.fid_number, null);
+    const vendorLogin = await fetch(`${apiOrigin}/api/platform/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `pg-vendor-${suffix}@example.invalid`, password: 'StrongPass123' }),
+    });
+    assert.equal(vendorLogin.status, 200);
+    const vendorCookie = vendorLogin.headers.get('set-cookie')?.split(';', 1)[0];
+    const vendorMe = await fetch(`${apiOrigin}/api/platform/me`, { headers: { Cookie: vendorCookie } });
+    assert.equal((await vendorMe.json()).data.user.role, 'vendor');
+    const customerCreation = await request('/users', {
       method: 'POST',
       body: {
-        full_name: 'Postgres Admin Created Customer',
+        full_name: 'Blocked Customer',
         email: `pg-customer-${suffix}@example.invalid`,
+        phone: `+1777${phoneSuffix}`,
+        password: 'StrongPass123',
+        confirm_password: 'StrongPass123',
         role_id: roles.get('customer').id,
       },
     });
-    assert.equal(customerInvitation.status, 201);
-    invitedCustomerId = (await customerInvitation.json()).data.id;
+    assert.equal(customerCreation.status, 400);
     const forbiddenAdminInvitation = await request('/users', {
       method: 'POST',
       body: {
@@ -956,7 +995,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       try {
         await database.inTransaction(async (client) => {
           const fixtureUserIds = [
-            adminId, secondAdminId, rosterChangeAdminId, userId, invitedVendorId, invitedCustomerId,
+            adminId, secondAdminId, rosterChangeAdminId, userId, invitedVendorId,
           ].filter(Boolean);
           const fixtureRoleIds = [
             adminRoleId, secondAdminRoleId, rosterChangeAdminRoleId, testRoleId,

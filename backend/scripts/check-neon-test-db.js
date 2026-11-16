@@ -34,6 +34,23 @@ try {
   const appliedMigrations = await database.runtimeAdapter.query(
     'SELECT migration_name FROM schema_migrations ORDER BY migration_name',
   );
+  const identityColumns = await database.runtimeAdapter.query(
+    `SELECT column_name, is_nullable
+     FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'users'
+       AND column_name IN ('digital_id', 'fid_number')`,
+  );
+  const identityIntegrity = await database.runtimeAdapter.query(
+    `SELECT
+       (SELECT COUNT(*)::integer FROM users
+        WHERE digital_id IS NULL OR BTRIM(digital_id) = '') AS missing_digital_ids,
+       EXISTS (
+         SELECT 1 FROM pg_indexes
+         WHERE schemaname = 'public' AND tablename = 'users'
+           AND indexname = 'uq_users_digital_id'
+           AND indexdef ILIKE 'CREATE UNIQUE INDEX%'
+       ) AS has_unique_digital_id`,
+  );
   const actualTables = new Set(tables.rows.map((row) => row.tablename));
   const missingTables = postgresApplicationTables.filter((tableName) => !actualTables.has(tableName));
   console.log(
@@ -49,6 +66,21 @@ try {
     error.code = 'DB_SCHEMA_INCOMPLETE';
     throw error;
   }
+  const identityNullability = new Map(
+    identityColumns.rows.map((column) => [column.column_name, column.is_nullable]),
+  );
+  if (identityNullability.get('digital_id') !== 'NO'
+    || identityNullability.get('fid_number') !== 'YES'
+    || identityIntegrity.rows[0].missing_digital_ids !== 0
+    || !identityIntegrity.rows[0].has_unique_digital_id
+    || !appliedMigrations.rows.some((row) => row.migration_name === '018_user_digital_and_fid_ids.sql')) {
+    const error = new Error(
+      'The isolated Neon user identity schema is missing required columns, values, or uniqueness.',
+    );
+    error.code = 'DB_SCHEMA_INCOMPLETE';
+    throw error;
+  }
+  console.log('Neon test user identity schema: digital IDs are populated and unique; FID is nullable (PASS).');
   console.log(`Applied Neon test migrations: ${appliedMigrations.rows.map((row) => row.migration_name).join(', ')}.`);
 } catch (error) {
   const isIncompleteSchema = error.code === 'DB_SCHEMA_INCOMPLETE';

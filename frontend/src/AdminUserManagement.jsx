@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Eye, KeyRound, Mail, Pencil, Plus, Search, Shield, UserRound, X } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Eye, EyeOff, KeyRound, Mail, Pencil, Plus, Search, Shield, UserRound, X } from 'lucide-react';
 import apiClient from './api/axios.js';
 import { translate, translateText } from './language.js';
 import { validateCreateUserForm } from './adminUserManagementUtils.js';
 import './adminUserManagement.css';
 
-const emptyForm = { full_name: '', email: '', phone: '', role_id: '', business_name: '', category_id: '' };
+const emptyForm = {
+  full_name: '',
+  email: '',
+  phone: '',
+  password: '',
+  confirm_password: '',
+  role_id: '',
+  business_name: '',
+  category_id: '',
+  fid_number: '',
+};
 const statusOptions = ['active', 'suspended'];
 const userFilterStatusOptions = ['pending', ...statusOptions];
 const initialPagination = { page: 1, pageSize: 20, total: 0 };
@@ -34,6 +44,7 @@ function displayRoles(roles = '') {
 }
 
 function UserModal({ modal, roles, rolesLoading, categories, categoriesLoading, onClose, onSave, onChange, form, busy, errors }) {
+  const [showPassword, setShowPassword] = useState(false);
   if (!modal) return null;
   const isCreate = modal.type === 'create';
   const selectedRole = roles.find((role) => String(role.id) === String(form.role_id));
@@ -67,10 +78,27 @@ function UserModal({ modal, roles, rolesLoading, categories, categoriesLoading, 
           </label>
           <label className="field um-field">
             <span>{t('adminUserPhoneNumber')}</span>
-            <input type="tel" maxLength={40} autoComplete="tel" placeholder={t('adminUserPhonePlaceholder')} value={form.phone} onChange={(event) => onChange('phone', event.target.value)} aria-invalid={Boolean(errors.phone)} aria-describedby={errors.phone ? 'um-error-phone' : undefined}/>
+            <input required={isCreate} type="tel" maxLength={40} autoComplete="tel" placeholder={t('adminUserPhonePlaceholder')} value={form.phone} onChange={(event) => onChange('phone', event.target.value)} aria-invalid={Boolean(errors.phone)} aria-describedby={errors.phone ? 'um-error-phone' : undefined}/>
             {showFieldError('phone')}
           </label>
           {isCreate && <>
+            <label className="field um-field">
+              <span>{t('adminUserPassword')}</span>
+              <span className="um-password-input">
+                <input required type={showPassword ? 'text' : 'password'} minLength={12} maxLength={16} autoComplete="new-password" value={form.password} onChange={(event) => onChange('password', event.target.value)} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? 'um-error-password' : 'um-password-requirements'}/>
+                <button type="button" className="um-password-toggle" onClick={() => setShowPassword((visible) => !visible)} aria-label={t(showPassword ? 'adminUserHidePassword' : 'adminUserShowPassword')} title={t(showPassword ? 'adminUserHidePassword' : 'adminUserShowPassword')}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
+              </span>
+              <small id="um-password-requirements">{t('adminUserPasswordRequirements')}</small>
+              {showFieldError('password')}
+            </label>
+            <label className="field um-field">
+              <span>{t('adminUserConfirmPassword')}</span>
+              <span className="um-password-input">
+                <input required type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={form.confirm_password} onChange={(event) => onChange('confirm_password', event.target.value)} aria-invalid={Boolean(errors.confirm_password)} aria-describedby={errors.confirm_password ? 'um-error-confirm_password' : undefined}/>
+                <button type="button" className="um-password-toggle" onClick={() => setShowPassword((visible) => !visible)} aria-label={t(showPassword ? 'adminUserHidePassword' : 'adminUserShowPassword')} title={t(showPassword ? 'adminUserHidePassword' : 'adminUserShowPassword')}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
+              </span>
+              {showFieldError('confirm_password')}
+            </label>
             <label className="field um-field">
               <span>{t('adminUserAccountType')}</span>
               <select required value={form.role_id} onChange={(event) => onChange('role_id', event.target.value)} aria-invalid={Boolean(errors.role_id)} aria-describedby={errors.role_id ? 'um-error-role_id' : undefined} disabled={rolesLoading || roles.length === 0}>
@@ -94,10 +122,20 @@ function UserModal({ modal, roles, rolesLoading, categories, categoriesLoading, 
                 {showFieldError('category_id')}
               </label>
             </>}
+            <label className="field um-field">
+              <span>{t('adminUserDigitalId')}</span>
+              <input value={t('adminUserDigitalIdGenerated')} readOnly disabled aria-describedby="um-digital-id-help"/>
+              <small id="um-digital-id-help">{t('adminUserDigitalIdHelp')}</small>
+            </label>
+            <label className="field um-field">
+              <span>{t('adminUserFidNumber')}</span>
+              <input maxLength={120} autoComplete="off" placeholder={t('adminUserFidNumberOptional')} value={form.fid_number} onChange={(event) => onChange('fid_number', event.target.value)} aria-invalid={Boolean(errors.fid_number)} aria-describedby={errors.fid_number ? 'um-error-fid_number' : undefined}/>
+              {showFieldError('fid_number')}
+            </label>
           </>}
           <div className="um-modal-actions">
             <button type="button" className="button secondary" onClick={onClose} disabled={busy}>{t('adminUserCancel')}</button>
-            <button type="submit" className="button" disabled={busy} aria-busy={busy}>{busy ? <><span className="um-spinner" aria-hidden="true"/>{t('adminUserSaving')}</> : isCreate ? t('adminUserCreateAndInvite') : t('adminUserSaveChanges')}</button>
+            <button type="submit" className="button" disabled={busy} aria-busy={busy}>{busy ? <><span className="um-spinner" aria-hidden="true"/>{t('adminUserSaving')}</> : isCreate ? t('adminUserCreateAccount') : t('adminUserSaveChanges')}</button>
           </div>
         </form>
       </section>
@@ -152,6 +190,8 @@ function UserDetails({ user, details, loading, error, onClose }) {
           <div className="um-detail-grid">
             <div><span>Email</span><strong>{user.email}</strong></div>
             <div><span>Phone</span><strong>{user.phone || '—'}</strong></div>
+            <div><span>{translate('adminUserDigitalId')}</span><strong>{user.digital_id || '—'}</strong></div>
+            <div><span>{translate('adminUserFidNumber')}</span><strong>{user.fid_number || '—'}</strong></div>
             <div><span>Role</span><strong>{displayRoles(user.roles) || 'Unassigned'}</strong></div>
             <div><span>{translate('adminUserAccountStatus')}</span><strong><span className={`pill ${user.status}`}>{statusLabel(user.status)}</span></strong></div>
             <div><span>Registered</span><strong>{displayDateTime(user.created_at)}</strong></div>
@@ -187,6 +227,7 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [createdDigitalId, setCreatedDigitalId] = useState('');
   const [searchInput, setSearchInput] = useState(/^\d+$/.test(focusId || '') ? focusId : '');
   const [filters, setFilters] = useState({ q: /^\d+$/.test(focusId || '') ? focusId : '', status: '', role: '', dateFrom: '', dateTo: '', sortBy: 'created_at', sortDirection: 'desc' });
   const [modal, setModal] = useState(null);
@@ -236,7 +277,7 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
         const allRoles = response.data.data;
         setFilterRoles(allRoles);
         setRoles(allRoles.filter((role) => role.is_active && !role.is_admin
-          && ['customer', 'organizer', 'vendor'].includes(String(role.name).toLowerCase())));
+          && ['organizer', 'vendor'].includes(String(role.name).toLowerCase())));
       })
       .catch((issue) => setError((current) => current || issue.message || translate('adminUserRolesLoadFailed')))
       .finally(() => setRolesLoading(false));
@@ -276,6 +317,7 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
   function startCreate() {
     setForm(emptyForm);
     setFormErrors({});
+    setCreatedDigitalId('');
     setModal({ type: 'create' });
   }
 
@@ -290,9 +332,15 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
     if (busy) return;
     setError('');
     setNotice('');
+    setCreatedDigitalId('');
     if (modal.type === 'create') {
       const vendorRoleId = roles.find((role) => String(role.name).toLowerCase() === 'vendor')?.id;
-      const validationErrors = validateCreateUserForm(form, translate, vendorRoleId);
+      const validationErrors = validateCreateUserForm(
+        form,
+        translate,
+        vendorRoleId,
+        roles.map((role) => role.id),
+      );
       setFormErrors(validationErrors);
       if (Object.keys(validationErrors).length) return;
     }
@@ -305,13 +353,17 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
         if (!payload.business_name) delete payload.business_name;
         if (payload.category_id) payload.category_id = Number(payload.category_id);
         else delete payload.category_id;
-        await apiClient.post('/admin/users', payload);
-        setNotice(translate('adminUserInvitationSent'));
+        const response = await apiClient.post('/admin/users', payload);
+        setCreatedDigitalId(response.data.data.digital_id);
+        setNotice(translate('adminUserCreated'));
       } else {
         delete payload.email;
         delete payload.role_id;
         delete payload.business_name;
         delete payload.category_id;
+        delete payload.password;
+        delete payload.confirm_password;
+        delete payload.fid_number;
         await apiClient.patch(`/admin/users/${modal.user.id}`, payload);
         setNotice(translate('adminUserUpdated'));
       }
@@ -322,10 +374,6 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
         setFormErrors((current) => ({ ...current, email: translate('adminUserEmailExists') }));
       } else if (modal?.type === 'create' && issue.status === 409 && /phone|ስልክ/i.test(issue.message || '')) {
         setFormErrors((current) => ({ ...current, phone: translate('adminUserPhoneExists') }));
-      } else if (modal?.type === 'create' && issue.status === 503) {
-        setModal(null);
-        await loadUsers(1, filters, pagination.pageSize);
-        setError(translate('adminUserInviteEmailFailed'));
       } else {
         setError(issue.message || 'The user could not be saved.');
       }
@@ -430,7 +478,7 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
         <button type="button" className="button um-create-button" onClick={startCreate}><Plus size={16}/> {translate('adminUserCreate')}</button>
       </div>
       {error && <div className="alert error" role="alert">{error}<button className="dismiss" onClick={() => setError('')} aria-label="Dismiss error"><X size={15}/></button></div>}
-      {notice && <div className="alert success" role="status">{notice}<button className="dismiss" onClick={() => setNotice('')} aria-label="Dismiss notice"><X size={15}/></button></div>}
+      {notice && <div className="alert success" role="status">{notice}{createdDigitalId && <> {translate('adminUserDigitalId')}: <code>{createdDigitalId}</code></>}<button className="dismiss" onClick={() => { setNotice(''); setCreatedDigitalId(''); }} aria-label="Dismiss notice"><X size={15}/></button></div>}
       <form className="um-filters panel" onSubmit={applyFilters}>
         <label className="um-search"><Search size={16}/><input aria-label="Search users" placeholder="Search name, email, phone, or ID" value={searchInput} onChange={(event) => setSearchInput(event.target.value)}/><button type="submit">Search</button></label>
         <label className="um-filter"><span>Role</span><select value={filters.role} onChange={(event) => changeFilter('role', event.target.value)}><option value="">All roles</option>{filterRoles.map((role) => <option value={role.name} key={role.id}>{displayRoles(role.name)}</option>)}</select></label>
@@ -450,12 +498,15 @@ export default function AdminUserManagement({ initialUsers = null, currentAdminI
           setPagination((current) => ({ ...current, page: 1, pageSize }));
         }}><option value={10}>10</option><option value={20}>20</option><option value={50}>50</option><option value={100}>100</option></select></label></div>
         {loading && users.length === 0 ? <div className="um-loading"><span className="um-spinner"/>Loading registered users…</div> : users.length === 0 && !loading ? <div className="um-empty-state"><UserRound size={28}/><strong>No users found</strong><span>Try changing your search or filters.</span></div> : <>
-          <div className="um-table-scroll"><table className="um-table"><thead><tr><th>User</th><th>ID</th><th>Role</th><th>Status</th><th>Registered</th><th>Bookings</th><th>Actions</th></tr></thead>
+          <div className="um-table-scroll"><table className="um-table"><thead><tr><th>{translate('adminUserFullName')}</th><th>{translate('adminUserEmailAddress')}</th><th>{translate('adminUserPhoneNumber')}</th><th>{translate('adminUserDigitalId')}</th><th>{translate('adminUserFidNumber')}</th><th>Role</th><th>Status</th><th>Registered</th><th>Bookings</th><th>Actions</th></tr></thead>
             <tbody>{users.map((user) => {
               const isAdmin = user.roles?.toLowerCase().includes('admin');
               return <tr key={user.id}>
-                <td><strong className="um-user-name">{user.full_name}</strong><span className="um-user-email">{user.email}</span>{user.phone && <span className="um-user-phone">{user.phone}</span>}</td>
-                <td>#{user.id}</td>
+                <td><strong className="um-user-name">{user.full_name}</strong></td>
+                <td><span className="um-user-email">{user.email}</span></td>
+                <td><span className="um-user-phone">{user.phone || '—'}</span></td>
+                <td><code>{user.digital_id || '—'}</code></td>
+                <td>{user.fid_number || '—'}</td>
                 <td>{displayRoles(user.roles) || 'Unassigned'}</td>
                 <td><span className={`pill ${user.status}`}>{statusLabel(user.status)}</span></td>
                 <td>{displayDate(user.created_at)}</td>

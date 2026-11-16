@@ -66,6 +66,39 @@ SELECT id, menu_order, category_name
 FROM candidates
 WHERE candidate_rank = 1;
 
+-- Keep the original values available for a reviewed, non-destructive restore.
+CREATE TABLE IF NOT EXISTS service_category_navigation_backup (
+  category_id BIGINT PRIMARY KEY,
+  category_name VARCHAR(120) NOT NULL,
+  service_menu_order INTEGER,
+  service_menu_name VARCHAR(120),
+  is_active BOOLEAN NOT NULL,
+  captured_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO service_category_navigation_backup (
+  category_id,
+  category_name,
+  service_menu_order,
+  service_menu_name,
+  is_active
+)
+SELECT category.id,
+       category.name,
+       category.service_menu_order,
+       category.service_menu_name,
+       category.is_active
+FROM service_categories AS category
+LEFT JOIN service_navigation_selected AS selected
+  ON selected.id = category.id
+WHERE (selected.id IS NULL
+       AND (category.service_menu_order IS NOT NULL OR category.service_menu_name IS NOT NULL))
+   OR (selected.id IS NOT NULL
+       AND (category.service_menu_order IS DISTINCT FROM selected.menu_order
+            OR category.service_menu_name IS DISTINCT FROM selected.category_name
+            OR category.is_active IS DISTINCT FROM TRUE))
+ON CONFLICT (category_id) DO NOTHING;
+
 UPDATE service_categories AS category
 SET service_menu_order = NULL,
     service_menu_name = NULL

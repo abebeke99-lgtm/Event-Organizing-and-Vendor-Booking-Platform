@@ -614,7 +614,7 @@ export function createPostgresAuthRouter({
     try {
       const result = await query(
         database,
-        `SELECT u.id, u.full_name, u.email, u.password_hash, u.status,
+        `SELECT u.id, u.full_name, u.email, u.password_hash, u.digital_id, u.fid_number, u.status,
                 LOWER(r.name) AS role, r.is_admin, r.is_active AS role_is_active
          FROM users u
          JOIN user_roles ur ON ur.user_id = u.id
@@ -675,7 +675,14 @@ export function createPostgresAuthRouter({
       });
       setSessionCookie(res, token, parsed.data.rememberMe);
       return res.json({
-        user: { id: user.id, name: user.full_name, email: user.email, role },
+        user: {
+          id: user.id,
+          name: user.full_name,
+          email: user.email,
+          role,
+          digital_id: user.digital_id,
+          fid_number: user.fid_number,
+        },
       });
     } catch (error) {
       return next(error);
@@ -707,7 +714,8 @@ export function createPostgresAuthRouter({
       if (!token) return res.json({ user: null });
       const result = await query(
         database,
-        `SELECT u.id, u.full_name, u.email, u.phone, u.preferred_language, u.status,
+        `SELECT u.id, u.full_name, u.email, u.phone, u.digital_id, u.fid_number,
+                u.preferred_language, u.status,
                 CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator')
                   THEN 'admin' ELSE LOWER(r.name) END AS role,
                 r.is_admin, vp.id AS vendor_profile_id, vp.business_name, sc.name AS category_name,
@@ -753,6 +761,8 @@ export function createPostgresAuthRouter({
                 name: user.full_name,
                 email: user.email,
                 phone: user.phone,
+                digital_id: user.digital_id,
+                fid_number: user.fid_number,
                 role: 'admin',
                 status: user.status,
                 roles: (user.roles || '').split(',').map((role) => role.trim()).filter(Boolean),
@@ -771,6 +781,8 @@ export function createPostgresAuthRouter({
             name: user.full_name,
             email: user.email,
             phone: user.phone,
+            digital_id: user.digital_id,
+            fid_number: user.fid_number,
             role: user.role,
             preferred_language: user.preferred_language,
             ...(user.role === 'vendor' && user.vendor_profile_id

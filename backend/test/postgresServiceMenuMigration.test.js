@@ -34,7 +34,8 @@ test('service navigation migration defines the requested 15 categories without d
 
   assert.deepEqual(seededNames, expectedCategories);
   assert.match(sql, /ON CONFLICT \(name\) DO NOTHING/);
-  assert.match(sql, /service_menu_order = NULL/);
+  assert.match(sql, /CREATE TABLE IF NOT EXISTS service_category_navigation_backup/);
+  assert.match(sql, /ON CONFLICT \(category_id\) DO NOTHING/);
   assert.doesNotMatch(sql, /\bDELETE\s+FROM\b|\bTRUNCATE\b|\bDROP\s+TABLE\b/i);
 });
 
@@ -47,7 +48,7 @@ test('public service category seed is additive and uses the approved service tax
   assert.doesNotMatch(sql, /\bDELETE\s+FROM\b|\bTRUNCATE\b|\bDROP\s+TABLE\b|service_menu_order\s*=\s*NULL/i);
 });
 
-test('Neon service navigation migration preserves existing category IDs and selects exactly 15 entries', {
+test('Neon service category migrations preserve existing IDs and custom mappings for rollback', {
   skip: process.env.RUN_NEON_INTEGRATION === 'true' ? false : 'Set RUN_NEON_INTEGRATION=true to use the isolated Neon test database.',
 }, async () => {
   const environment = await loadNeonTestEnvironment();
@@ -60,7 +61,8 @@ test('Neon service navigation migration preserves existing category IDs and sele
     await client.query(`DROP TABLE IF EXISTS
       pg_temp.events, pg_temp.vendor_availability, pg_temp.vendor_media,
       pg_temp.service_packages, pg_temp.reviews, pg_temp.bookings,
-      pg_temp.services, pg_temp.vendor_profiles, pg_temp.users, pg_temp.service_categories`);
+      pg_temp.services, pg_temp.vendor_profiles, pg_temp.users,
+      pg_temp.service_category_navigation_backup, pg_temp.service_categories`);
     await client.query('BEGIN');
     transactionOpen = true;
     await client.query(`CREATE TEMP TABLE service_categories (
@@ -73,6 +75,14 @@ test('Neon service navigation migration preserves existing category IDs and sele
       image BYTEA,
       image_mime VARCHAR(80),
       is_active BOOLEAN NOT NULL DEFAULT TRUE
+    ) ON COMMIT PRESERVE ROWS`);
+    await client.query(`CREATE TEMP TABLE service_category_navigation_backup (
+      category_id BIGINT PRIMARY KEY,
+      category_name VARCHAR(120) NOT NULL,
+      service_menu_order INTEGER,
+      service_menu_name VARCHAR(120),
+      is_active BOOLEAN NOT NULL,
+      captured_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     ) ON COMMIT PRESERVE ROWS`);
     await client.query(`CREATE TEMP TABLE users (
       id BIGINT PRIMARY KEY,
@@ -180,6 +190,11 @@ test('Neon service navigation migration preserves existing category IDs and sele
       await client.query(statement);
     }
 
+    const additiveSql = await readFile(additiveMigrationUrl, 'utf8');
+    for (const statement of splitPostgresSqlStatements(additiveSql)) {
+      await client.query(statement);
+    }
+
     const result = await client.query(
       `SELECT id, name, service_menu_name, service_menu_order
        FROM service_categories
@@ -199,6 +214,18 @@ test('Neon service navigation migration preserves existing category IDs and sele
       name: 'Legacy Extra Menu',
       service_menu_order: null,
       service_menu_name: null,
+    });
+
+    const backup = await client.query(
+      `SELECT category_id, category_name, service_menu_order, service_menu_name, is_active
+       FROM service_category_navigation_backup WHERE category_id = 42`,
+    );
+    assert.deepEqual(backup.rows[0], {
+      category_id: '42',
+      category_name: 'Legacy Extra Menu',
+      service_menu_order: 2,
+      service_menu_name: 'Legacy Extra Menu',
+      is_active: true,
     });
 
     const app = express();
@@ -236,6 +263,23 @@ test('Neon service navigation migration preserves existing category IDs and sele
 
     const missingImage = await fetch(`${baseUrl}/api/platform/categories/308/image`);
     assert.equal(missingImage.status, 404);
+
+    const rollbackSql = await readFile(
+      new URL('../postgres/rollback/011_restore_service_category_navigation.sql', import.meta.url),
+      'utf8',
+    );
+    for (const statement of splitPostgresSqlStatements(rollbackSql)) {
+      await client.query(statement);
+    }
+    const restored = await client.query(
+      `SELECT service_menu_order, service_menu_name, is_active
+       FROM service_categories WHERE id = 42`,
+    );
+    assert.deepEqual(restored.rows[0], {
+      service_menu_order: 2,
+      service_menu_name: 'Legacy Extra Menu',
+      is_active: true,
+    });
   } finally {
     if (server?.listening) {
       server.close();
@@ -245,7 +289,8 @@ test('Neon service navigation migration preserves existing category IDs and sele
     await client.query(`DROP TABLE IF EXISTS
       pg_temp.events, pg_temp.vendor_availability, pg_temp.vendor_media,
       pg_temp.service_packages, pg_temp.reviews, pg_temp.bookings,
-      pg_temp.services, pg_temp.vendor_profiles, pg_temp.users, pg_temp.service_categories`);
+      pg_temp.services, pg_temp.vendor_profiles, pg_temp.users,
+      pg_temp.service_category_navigation_backup, pg_temp.service_categories`);
     client.release();
     await database.close();
   }

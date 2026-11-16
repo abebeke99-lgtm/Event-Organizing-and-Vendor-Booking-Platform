@@ -4,7 +4,7 @@
 
 The current full opt-in backend suite has measured organizer overview, own events, and bookings; all three concurrent endpoints returned HTTP 200 in each of 20 samples. Measured bundle latency: p50 **680 ms**, p95 **950 ms**, p99 **3,035 ms**. An organizer vendor-list request is tested separately and is not included in those percentiles.
 
-The full opt-in backend run passed the event/booking workflows, availability conflicts, quotations, rescheduling, and organizer access checks. Expected conflict and unauthorized responses are asserted, and test fixtures are isolated and cleaned up. The complete opt-in suite passed 589/589 tests.
+The full opt-in backend run passed the event/booking workflows, availability conflicts, quotations, rescheduling, and organizer access checks. Expected conflict and unauthorized responses are asserted, and test fixtures are isolated and cleaned up. The complete opt-in suite passed 590/590 tests.
 
 The organizer UI previously delayed independent requests until overview completed. The requests now start concurrently while overview remains critical, secondary failures remain partial, and duplicate dashboard requests remain deduplicated. Focused organizer tests and the full frontend suite passed.
 

@@ -18,4 +18,4 @@
 
 ## Decision
 
-**Partial verification only.** The default backend suite passed 541 tests with 27 opt-in Neon tests skipped; the full opt-in backend suite passed 589/589. These results do not prove complete application security or production readiness. See the query matrix and remaining-blockers report for unresolved evidence.
+**Partial verification only.** The default backend suite passed 541 tests with 28 opt-in Neon tests skipped; the full opt-in backend suite passed 590/590. These results do not prove complete application security or production readiness. See the query matrix and remaining-blockers report for unresolved evidence.

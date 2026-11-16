@@ -6,7 +6,7 @@
 - Neon connections are server-side, use the PostgreSQL driver, TLS, and bounded connection pooling. The isolated test environment is separate from production.
 - New vendor-list filter values are parameterized; sort SQL is chosen from fixed allowlisted fragments. User-supplied values are not interpolated into SQL identifiers or ordering clauses.
 - Public vendor results remain constrained to verified vendors with active user accounts. Existing route validation and media-owner scoping integration tests passed in the isolated-Neon marketplace suite.
-- Authentication/authorization unit tests ran as part of the backend suite. The default suite completed with 541 passed, 0 failed, and 27 opt-in Neon tests skipped; the full opt-in suite passed 589/589. A regression test also confirms the PostgreSQL admin middleware does not retry an expired session using legacy `?`-placeholder SQL.
+- Authentication/authorization unit tests ran as part of the backend suite. The default suite completed with 541 passed, 0 failed, and 28 opt-in Neon tests skipped; the full opt-in suite passed 590/590. A regression test also confirms the PostgreSQL admin middleware does not retry an expired session using legacy `?`-placeholder SQL.
 - No production database, deployment, or GitHub push was accessed.
 
 ## Not certified

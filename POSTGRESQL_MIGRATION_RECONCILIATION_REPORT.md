@@ -4,15 +4,24 @@
 
 **PARTIAL.** This report concerns only the isolated Neon test database `eventhub` on PostgreSQL 18.7. Production schema, migration ledger, and data were not accessed.
 
+## Latest 011/013 safety verification
+
+- Migration 011 now snapshots the original service-menu order/name and active state for every category it changes in `service_category_navigation_backup`, before clearing or remapping those fields. Conflict handling preserves the first snapshot across reruns.
+- `backend/postgres/rollback/011_restore_service_category_navigation.sql` restores those saved fields without deleting category rows or relationships. It is an explicit manual recovery operation, not an automatic migration rollback.
+- The isolated-Neon integration test ran 011 twice and then 013 against temporary tables inside a rolled-back transaction. It verified the curated category result, the saved custom mapping, and restoration from the snapshot; all three focused tests passed. No public categories or migration records were changed by this test.
+- A read-only check confirmed that 011 and 013 are still absent from the isolated database migration ledger. Production migration history remains unknown.
+- If an earlier, uncorrected 011 was already applied to another database, the snapshot cannot reconstruct values it already cleared. Recovery requires a separate backup or other authoritative source. Editing 011 does not replay it where the migration runner has recorded it.
+- The restore script restores category fields but intentionally does not delete categories seeded by 011/013. This avoids deleting records or breaking references; it is not a full removal of the seed migrations.
+
 ## Migration 011: service navigation categories
 
 - The migration record was absent before the review; migration 002 (which adds the required `service_menu_order` and `service_menu_name` columns) and migration 012 were already recorded.
 - A rollback-only execution of the complete migration SQL against the isolated test data increased `service_categories` from 16 to 29 rows.
 - The preview inserted 13 canonical categories and updated existing `Catering` and `Photography` mappings.
-- It also cleared the existing custom service-menu values on one unmatched custom category. That behavior is explicit in the migration's `UPDATE ... SET service_menu_order = NULL, service_menu_name = NULL`.
+- The pre-fix migration cleared the existing custom service-menu values on one unmatched custom category. The current version still clears those runtime fields but first snapshots them for restoration; see the latest safety verification above.
 - The dry-run transaction was rolled back and a before/after comparison confirmed the 16-row category snapshot was unchanged.
 
-**Decision:** Do not apply 011 to this shared test database or production yet. The custom mapping must be backed up and its desired post-migration behavior decided first. The SQL is repeatable but is not data-reversible on its own.
+**Decision:** Do not apply 011 permanently to the shared test database or production yet. The preservation and field-restore path is now implemented and exercised transactionally, but the prior state and intended handling of custom categories must still be reviewed against the target database and its backup before application.
 
 ## Migration 013: public service category seed
 
@@ -21,7 +30,7 @@
 - The transaction was rolled back; no category data or ledger entries were changed by the preview.
 - The migration is data-changing even though it uses `ON CONFLICT`; it inserts missing public categories and updates selected menu mappings.
 
-**Decision:** Keep unapplied until 011's custom mapping effect is resolved and the combined ordered result is approved on a disposable clone. 013 depends on the category columns introduced in 002; migration 012 is already present and does not replace either seed migration.
+**Decision:** Keep unapplied until the combined ordered result is approved on a disposable clone. 013 depends on the category columns introduced in 002; migration 012 is already present and does not replace either seed migration.
 
 ## Migration 016: OAuth registration roles
 
@@ -44,7 +53,7 @@ The guarded setup script `backend/scripts/migrate-neon-test.js` currently allowl
 
 1. In an authorized production review, capture a consistent backup of `service_categories` including IDs, names, active state, menu order/name, and dependent references. Do not edit `schema_migrations` directly.
 2. On a disposable clone, run a read-only preflight that identifies every category each migration will insert, update, or clear; explicitly review custom menu mappings.
-3. If preserving custom mappings is required, design and test a reversible preservation/restore migration before applying the historical seed migrations. Do not silently change the historical migration file.
-4. Apply migrations 011 and 013 in sequence through the transactional PostgreSQL migration runner only after the preview matches the approved result. Verify category/menu counts, relationships, and application reads afterward.
+3. Review the snapshot table and field-restore behavior against the target's actual custom mappings. For databases that already recorded the old 011, recover erased values only from an external backup or other authoritative source; do not fabricate them.
+4. On a disposable clone, apply the corrected 011 and 013 in sequence through the transactional PostgreSQL migration runner only after the preview matches the approved result. Verify category/menu counts, relationships, and application reads afterward.
 5. Apply to production only with separate explicit authorization; let the migration runner record successful execution. Never fabricate ledger rows.
 
