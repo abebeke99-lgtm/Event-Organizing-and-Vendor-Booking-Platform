@@ -9,8 +9,8 @@ const validForm = {
   full_name: 'Taylor Example',
   email: 'taylor@example.test',
   phone: '+1 (202) 555-0123',
-  password: 'StrongPass123',
-  confirm_password: 'StrongPass123',
+  password: 'StrongPass123!',
+  confirm_password: 'StrongPass123!',
   role_id: '4',
 };
 

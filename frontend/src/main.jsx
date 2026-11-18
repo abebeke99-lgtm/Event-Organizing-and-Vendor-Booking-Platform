@@ -1,8 +1,9 @@
-﻿import React from 'react';
+import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.jsx';
 import { translateText } from './language.js';
 import SplashScreen from './components/SplashScreen.jsx';
+import './tailwind.css';
 import './styles.css';
 import './homepage.css';
 

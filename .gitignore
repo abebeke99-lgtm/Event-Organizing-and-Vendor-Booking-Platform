@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+backend/.env
 dist/
 coverage/
 *.log
@@ -11,3 +12,5 @@ uploads/secrets/
 *.key
 
 personalportofolio/
+
+NUL

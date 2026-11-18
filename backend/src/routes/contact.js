@@ -414,7 +414,11 @@ adminRouter.delete('/:id', asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, error: 'A valid message ID is required.' });
   }
 
-  const deleted = await inTransaction(async (connection) => {
+  const database = req.app.locals.database || pool;
+  const useInTransaction = typeof database.inTransaction === 'function'
+    ? database.inTransaction.bind(database)
+    : inTransaction;
+  const deleted = await useInTransaction(async (connection) => {
     const [result] = await connection.execute('DELETE FROM contact_messages WHERE id = ?', [id.data]);
     if (!result.affectedRows) return false;
     await writeAudit(connection, {

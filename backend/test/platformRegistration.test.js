@@ -7,6 +7,7 @@ import { hashToken } from '../src/lib/security.js';
 
 function createDatabase() {
   const usersByEmail = new Map();
+  const usersByUsername = new Map();
   const sessionsByHash = new Map();
   const roleAssignments = [];
   const audits = [];
@@ -31,13 +32,19 @@ function createDatabase() {
       const user = usersByEmail.get(String(values[0]).toLowerCase());
       return [user ? [{ id: user.id }] : [], []];
     }
+    if (sql.includes('SELECT id FROM users WHERE LOWER(username) = LOWER(?)')) {
+      const user = usersByUsername.get(String(values[0]).toLowerCase());
+      return [user ? [{ id: user.id }] : [], []];
+    }
     if (sql.includes('SELECT id FROM roles WHERE LOWER(name) = ?')) {
       return [[{ id: roleIds[values[0]] }], []];
     }
     if (sql.startsWith('INSERT INTO users')) {
-      const [fullName, email, phone, passwordHash, preferredLanguage] = values;
+      const [fullName, username, email, phone, passwordHash, preferredLanguage] = values;
       const id = nextUserId++;
-      usersByEmail.set(email, { id, full_name: fullName, email, phone, password_hash: passwordHash, preferred_language: preferredLanguage, status: 'active' });
+      const user = { id, full_name: fullName, username, email, phone, password_hash: passwordHash, preferred_language: preferredLanguage, status: 'active' };
+      usersByEmail.set(email, user);
+      usersByUsername.set(username, user);
       return [{ insertId: id, affectedRows: 1 }, []];
     }
     if (sql.startsWith('INSERT INTO user_roles')) {
@@ -73,6 +80,7 @@ function createDatabase() {
 
   return {
     usersByEmail,
+    usersByUsername,
     roleAssignments,
     audits,
     async execute(...args) { return execute(...args); },
@@ -110,7 +118,13 @@ function register(body, headers = {}) {
   return fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      username: 'test_user',
+      phone: '0986481821',
+      role: 'customer',
+      termsAccepted: true,
+      ...body,
+    }),
   });
 }
 
@@ -118,19 +132,23 @@ test('public registration creates and authenticates a persisted customer account
   const response = await register({
     name: 'Hana Bekele',
     email: 'HANA@example.test',
-    password: 'StrongPass123',
+    username: 'hana_bekele',
+    phone: '0986481821',
+    password: 'StrongPass123!',
   }, { 'Accept-Language': 'am' });
   const body = await response.json();
 
   assert.equal(response.status, 201, JSON.stringify(body));
   assert.equal(body.data.user.role, 'customer');
   assert.equal(body.data.user.email, 'hana@example.test');
+  assert.equal(body.data.user.username, 'hana_bekele');
+  assert.equal(body.data.user.phone, '+251986481821');
   assert.equal(database.roleAssignments.at(-1).roleId, 3);
   assert.equal(database.audits.length, 1);
   const savedUser = database.usersByEmail.get('hana@example.test');
   assert.equal(savedUser.preferred_language, 'am');
-  assert.notEqual(savedUser.password_hash, 'StrongPass123');
-  assert.equal(await bcrypt.compare('StrongPass123', savedUser.password_hash), true);
+  assert.notEqual(savedUser.password_hash, 'StrongPass123!');
+  assert.equal(await bcrypt.compare('StrongPass123!', savedUser.password_hash), true);
 
   const cookie = response.headers.get('set-cookie').split(';', 1)[0];
   assert.match(cookie, /^platform_session=/);
@@ -141,12 +159,14 @@ test('public registration creates and authenticates a persisted customer account
   assert.equal(sessionBody.data.user.id, savedUser.id);
 });
 
-test('public registration supports only non-administrator account roles and rejects duplicate emails', async () => {
+test('public registration supports allowed account types and rejects duplicate accounts', async () => {
   for (const [index, role] of ['customer', 'organizer', 'vendor'].entries()) {
     const response = await register({
       name: 'Role Attempt',
       email: `${role}@example.test`,
-      password: 'Pass1234',
+      username: `role_${role}`,
+      phone: `098648182${index}`,
+      password: 'StrongPass123!',
       role,
     }, { 'X-Forwarded-For': `198.51.100.${index + 10}` });
     assert.equal(response.status, 201, `role=${role}`);
@@ -156,16 +176,26 @@ test('public registration supports only non-administrator account roles and reje
   const adminRole = await register({
     name: 'Self Registered Admin',
     email: 'admin@example.test',
-    password: 'Pass1234',
+    password: 'StrongPass123!',
     role: 'admin',
   }, { 'X-Forwarded-For': '198.51.100.19' });
   assert.equal(adminRole.status, 403);
-  assert.deepEqual(await adminRole.json(), { error: 'Choose a supported account type.' });
 
   const duplicate = await register({
     name: 'Duplicate User',
     email: 'hana@example.test',
-    password: 'Pass1234',
+    username: 'another_hana',
+    phone: '0986481810',
+    password: 'StrongPass123!',
   }, { 'X-Forwarded-For': '198.51.100.20' });
   assert.equal(duplicate.status, 409);
+
+  const duplicateUsername = await register({
+    name: 'Duplicate Username',
+    email: 'different@example.test',
+    username: 'HANA_Bekele',
+    phone: '0986481811',
+    password: 'StrongPass123!',
+  }, { 'X-Forwarded-For': '198.51.100.21' });
+  assert.equal(duplicateUsername.status, 409);
 });

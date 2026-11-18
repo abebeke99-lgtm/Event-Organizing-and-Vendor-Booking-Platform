@@ -10,27 +10,27 @@ test('production API URL is required', () => {
 });
 
 test('development defaults to the local API', () => {
-  assert.equal(resolveApiBaseUrl('', false), 'http://127.0.0.1:4000/api');
+  assert.equal(resolveApiBaseUrl('', false), 'http://127.0.0.1:5000/api');
 });
 
 test('development API host follows the browser hostname for loopback addresses', () => {
   assert.equal(
     resolveApiBaseUrl('', false, 'localhost'),
-    'http://localhost:4000/api',
+    'http://localhost:5000/api',
   );
   assert.equal(
-    resolveApiBaseUrl('http://127.0.0.1:4000/api', false, 'localhost'),
-    'http://localhost:4000/api',
+    resolveApiBaseUrl('http://127.0.0.1:5000/api', false, 'localhost'),
+    'http://localhost:5000/api',
   );
   assert.equal(
-    resolveApiBaseUrl('http://localhost:4000/api', false, '127.0.0.1'),
-    'http://127.0.0.1:4000/api',
+    resolveApiBaseUrl('http://localhost:5000/api', false, '127.0.0.1'),
+    'http://127.0.0.1:5000/api',
   );
 });
 
 test('API origins and /api paths normalize to one /api suffix', () => {
-  assert.equal(resolveApiBaseUrl('https://api.example.test', true), 'https://api.example.test/api');
-  assert.equal(resolveApiBaseUrl('https://api.example.test/api/', true), 'https://api.example.test/api');
+  assert.equal(resolveApiBaseUrl('https://192.0.2.10', true), 'https://192.0.2.10/api');
+  assert.equal(resolveApiBaseUrl('https://192.0.2.10/api/', true), 'https://192.0.2.10/api');
 });
 
 test('production API URL must use HTTPS', () => {
@@ -50,6 +50,21 @@ test('production API URL must not target localhost or loopback addresses', () =>
     assert.throws(
       () => resolveApiBaseUrl(value, true),
       /must not use a localhost or loopback host/,
+    );
+  }
+});
+
+test('production API URL rejects example and reserved placeholder domains', () => {
+  for (const value of [
+    'https://api.example.com/api',
+    'https://api.example.net/api',
+    'https://api.example.test/api',
+    'https://api.example.invalid/api',
+    'https://api.eventhub.test/api',
+  ]) {
+    assert.throws(
+      () => resolveApiBaseUrl(value, true),
+      /must not use an example or reserved placeholder domain/,
     );
   }
 });

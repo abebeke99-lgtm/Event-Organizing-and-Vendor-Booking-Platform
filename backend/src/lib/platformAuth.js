@@ -1,20 +1,17 @@
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { isStrongPassword, normalizeEmail } from './authFlow.js';
-
-const registrationSchema = z.object({
-  name: z.string().trim().min(2).max(160),
-  email: z.string().trim().email().max(254).transform(normalizeEmail),
-  password: z.string().min(12).max(16).refine(isStrongPassword),
-}).strict();
+import { parseLoginIdentifier, publicRegistrationSchema } from './accountValidation.js';
 
 const loginSchema = z.object({
-  email: z.string().trim().email().max(254).transform(normalizeEmail),
+  email: z.string().trim().min(1).max(254).transform((value) => parseLoginIdentifier(value)),
   password: z.string().min(1).max(256),
-}).strict();
+}).strict().refine((value) => Boolean(value.email), {
+  path: ['email'],
+  message: 'Enter a valid username or email address.',
+});
 
 export function parsePublicRegistration(value) {
-  return registrationSchema.safeParse(value);
+  return publicRegistrationSchema.safeParse(value);
 }
 
 export function parsePublicLogin(value) {
@@ -22,7 +19,7 @@ export function parsePublicLogin(value) {
 }
 
 export function isPublicRole(role) {
-  return String(role || '').toLowerCase() === 'customer';
+  return ['customer', 'organizer', 'vendor'].includes(String(role || '').trim().toLowerCase());
 }
 
 export async function hashPassword(password) {

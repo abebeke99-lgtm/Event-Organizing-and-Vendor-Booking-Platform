@@ -54,11 +54,15 @@ function createHarness({ emailConfigured = true, emailSender = async () => {}, r
             return [state.user.id === values[0] ? [{ id: state.user.id }] : [], []];
           }
           if (statement.includes('SELECT id, (last_sent_at')) {
+            assert.match(statement, /NOW\(\) - INTERVAL '60 seconds'/);
             const cooldownActive = state.challenge?.userId === values[0]
               && state.challenge.lastSentAt > Date.now() - 60_000;
             return [cooldownActive ? [{ id: 1, cooldown_active: 1 }] : [], []];
           }
           if (statement.startsWith('INSERT INTO password_reset_otp_challenges')) {
+            assert.match(statement, /NOW\(\) \+ INTERVAL '5 minutes'/);
+            assert.match(statement, /otp_hash = EXCLUDED\.otp_hash/);
+            assert.doesNotMatch(statement, /DATE_ADD|DATE_SUB|VALUES\(/);
             state.challenge = {
               id: 1,
               userId: values[0],
@@ -91,6 +95,7 @@ function createHarness({ emailConfigured = true, emailSender = async () => {}, r
             return [{ affectedRows: 1 }, []];
           }
           if (statement.includes('SET consumed_at = NOW(), reset_token_hash')) {
+            assert.match(statement, /NOW\(\) \+ INTERVAL '10 minutes'/);
             state.challenge.consumedAt = new Date();
             state.challenge.resetTokenHash = values[0];
             state.challenge.resetTokenExpiresAt = new Date(Date.now() + 10 * 60_000);

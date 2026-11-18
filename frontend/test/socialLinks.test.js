@@ -114,11 +114,9 @@ test('footer service categories link opens the service category listing', () => 
 test('footer places copyright and developer credit at the right of the Legal column', () => {
   const year = new Date().getFullYear();
   const markup = renderToStaticMarkup(React.createElement(AppFooter));
-  const legalColumn = markup.match(/class="footer-column footer-legal-column"[\s\S]*?<\/div>/)?.[0];
-  assert.ok(legalColumn?.includes(`class="footer-attribution"><span>${year} EventHub. All Rights Reserved.</span><span>Developed by Bekele Abebe</span></div>`));
-  assert.doesNotMatch(markup.match(/class="site-footer-bottom"[\s\S]*?<\/div>/)?.[0] || '', /footer-attribution/);
+  assert.match(markup, new RegExp('class="footer-column footer-legal-column[^"]*"[\\s\\S]*class="footer-attribution[^"]*"[\\s\\S]*<span>' + year + ' EventHub\\. All Rights Reserved\\.<\\/span><span>Developed by Bekele Abebe<\\/span>'));
+  assert.doesNotMatch(markup, /class="site-footer-bottom"[\s\S]*footer-attribution/);
 });
-
 test('footer credit aligns to the right of Legal without adding a divider', async () => {
   const styles = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
   const attribution = styles.match(/\.footer-legal-column \.footer-attribution\{([^}]*)\}/)?.[1];
@@ -296,7 +294,7 @@ test('top bar ignores invalid profile URLs without changing footer output', () =
   assert.equal(footerWithProfiles, footerWithoutProfiles);
 });
 
-test('example, development, and production env files expose configured social profile URLs', async () => {
+test('the checked-in env example exposes configured public social profile URLs', async () => {
   const expectedValues = {
     VITE_TELEGRAM_URL: 'https://t.me/የአንተ_ቻናል',
     VITE_YOUTUBE_URL: 'https://youtube.com/@የአንተ_ቻናል',
@@ -304,12 +302,10 @@ test('example, development, and production env files expose configured social pr
     VITE_LINKEDIN_URL: 'https://linkedin.com/company/የአንተ_ገጽ',
   };
 
-  for (const filename of ['../.env.example', '../.env.development', '../.env.production']) {
-    const contents = await readFile(new URL(filename, import.meta.url), 'utf8');
-    const lines = contents.split(/\r?\n/);
-    for (const [key, value] of Object.entries(expectedValues)) {
-      assert.ok(lines.includes(`${key}=${value}`), `${filename} should configure ${key}`);
-    }
-    assert.ok(!lines.some((line) => line.startsWith('VITE_CONTACT_PHONE=')), `${filename} should use central contact settings`);
+  const contents = await readFile(new URL('../.env.example', import.meta.url), 'utf8');
+  const lines = contents.split(/\r?\n/);
+  for (const [key, value] of Object.entries(expectedValues)) {
+    assert.ok(lines.includes(`${key}=${value}`), `.env.example should configure ${key}`);
   }
+  assert.ok(!lines.some((line) => line.startsWith('VITE_CONTACT_PHONE=')), '.env.example should use central contact settings');
 });

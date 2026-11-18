@@ -1,4 +1,4 @@
-import { getOpenAiApiKey } from './lib/openaiConfig.js';
+import { getAiProviderConfiguration } from '../services/aiProvider.js';
 import { getDatabaseDialect, getStartupConfigurationErrors } from './lib/startupConfig.js';
 
 const configuredDialect = process.env.DB_DIALECT?.trim();
@@ -12,12 +12,20 @@ if (configuredDialect === 'mysql') {
 }
 
 const configuredPort = process.env.PORT?.trim();
-const PORT = configuredPort ? Number(configuredPort) : 4000;
+const PORT = configuredPort ? Number(configuredPort) : 5000;
 const HOST = '0.0.0.0';
 const configurationErrors = getStartupConfigurationErrors();
 
-if (!getOpenAiApiKey()) {
-  console.warn('AI chat is unavailable: set OPENAI_API_KEY in backend/.env to enable the EventHub AI endpoints.');
+const aiProviderConfiguration = getAiProviderConfiguration();
+if (!aiProviderConfiguration.configured) {
+  const reason = aiProviderConfiguration.placeholderKeyDetected
+    ? 'contains a placeholder instead of a real key'
+    : 'is not configured';
+  console.warn(
+    `AI chat is unavailable because ${aiProviderConfiguration.keyName} ${reason}. `
+      + 'Set the selected provider key in backend/.env or the backend hosting provider secret settings. '
+      + 'The key is never logged or returned by the API.',
+  );
 }
 
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {

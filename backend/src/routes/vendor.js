@@ -856,7 +856,8 @@ postRoute('/availability', async (req, res) => {
   await database.execute(
     `INSERT INTO vendor_availability (vendor_id, available_date, status, note)
      VALUES (?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE status = VALUES(status), note = VALUES(note)`,
+     ON CONFLICT (vendor_id, available_date) DO UPDATE
+     SET status = EXCLUDED.status, note = EXCLUDED.note`,
     [req.vendor.id, parsed.data.date, parsed.data.status, parsed.data.note || null],
   );
   return res.status(201).json({ data: { date: parsed.data.date, status: parsed.data.status, note: parsed.data.note } });
@@ -1446,9 +1447,9 @@ patchRoute('/account', async (req, res) => {
 postRoute('/account/password', async (req, res) => {
   const parsed = z.object({
     currentPassword: z.string().min(1).max(256),
-    newPassword: z.string().min(12).max(16).refine(isStrongPassword),
+    newPassword: z.string().min(8).max(128).refine(isStrongPassword),
   }).strict().safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ error: 'Provide your current password and a 12–16 character new password with uppercase, lowercase, and a number.' });
+  if (!parsed.success) return res.status(400).json({ error: 'Use at least 8 characters with uppercase and lowercase letters, a number, and a special character.' });
   if (parsed.data.currentPassword === parsed.data.newPassword) return res.status(400).json({ error: 'Choose a new password different from your current password.' });
   const database = databaseFor(req);
   const currentTokenHash = hashToken(req.cookies.platform_session);

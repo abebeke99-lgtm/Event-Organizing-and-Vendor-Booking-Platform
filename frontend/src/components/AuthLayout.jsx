@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import authBackground from '../assets/auth-bg.jpg';
 import { translate, useLanguage } from '../language.js';
 import BrandLogo from './common/BrandLogo.jsx';
@@ -9,9 +9,9 @@ export default function AuthLayout({ children, languageSelector }) {
   const [imageUnavailable, setImageUnavailable] = useState(false);
 
   return (
-    <main className={`auth-layout${imageUnavailable ? ' auth-layout-image-unavailable' : ''}`}>
-      {languageSelector && <div className="auth-layout-language">{languageSelector}</div>}
-      <section className="auth-layout-panel" aria-label={t('authBranding')}>
+    <main className={`auth-layout min-h-screen grid grid-cols-1 lg:grid-cols-2 bg-surface-page${imageUnavailable ? ' auth-layout-image-unavailable' : ''}`}>
+      {languageSelector && <div className="auth-layout-language absolute right-4 top-4 z-20 sm:right-6 sm:top-6">{languageSelector}</div>}
+      <section className="auth-layout-panel relative hidden min-h-[320px] overflow-hidden p-8 text-white lg:flex lg:flex-col lg:justify-between" aria-label={t('authBranding')}>
         {!imageUnavailable && (
           <img
             className="auth-layout-photo"
@@ -38,7 +38,7 @@ export default function AuthLayout({ children, languageSelector }) {
           <span>{t('authTrustText')}</span>
         </div>
       </section>
-      <div className="auth-layout-content">{children}</div>
+      <div className="auth-layout-content flex items-center justify-center p-4 sm:p-6 md:p-10">{children}</div>
     </main>
   );
 }

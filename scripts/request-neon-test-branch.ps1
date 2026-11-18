@@ -1,0 +1,12 @@
+$ErrorActionPreference = 'Stop'
+
+Write-Output 'Neon test branch setup requires an administrator with access to the Neon project.'
+Write-Output ''
+Write-Output '1. In the Neon console, create a separate test branch for EventHub.'
+Write-Output '2. Copy that branch pooled and direct PostgreSQL connection strings from Neon.'
+Write-Output '3. Store DATABASE_URL and DIRECT_URL only in the ignored backend/.env.neon-test file.'
+Write-Output '4. Use the eventhub database name and require TLS on both connections.'
+Write-Output '5. Run npm run db:check:neon-test from backend. It must confirm the isolated schema.'
+Write-Output '6. Only after the branch has been independently confirmed, set RUN_NEON_INTEGRATION=true and run npm test from backend.'
+Write-Output ''
+Write-Output 'This script does not connect to Neon, change configuration, display environment files, or invent branch identifiers.'

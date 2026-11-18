@@ -88,7 +88,7 @@ test('Home hero has a gradient fallback and Admin hero page renders loading and 
     root: fileURLToPath(new URL('../', import.meta.url)),
     appType: 'custom',
     logLevel: 'error',
-    server: { middlewareMode: true },
+    server: { middlewareMode: true, hmr: false, ws: false },
   });
   try {
     const { default: HomeHeroSlider } = await server.ssrLoadModule('/src/HomeHeroSlider.jsx');

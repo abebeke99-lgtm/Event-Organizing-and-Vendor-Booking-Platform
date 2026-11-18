@@ -39,7 +39,7 @@ async function execute(sql, values = []) {
   }
   if (sql.startsWith('SELECT b.id FROM bookings b JOIN events e')) return [dateReserved ? [{ id: 200 }] : [], []];
   if (sql.startsWith('INSERT INTO vendor_availability')) {
-    writes.push({ kind: 'availability', values });
+    writes.push({ kind: 'availability', sql, values });
     return [{ affectedRows: 1 }, []];
   }
   if (sql.startsWith('SELECT id, currency FROM services WHERE id = ? AND vendor_id = ?')) {
@@ -181,6 +181,9 @@ test('availability rejects reserved dates and persists vendor date controls', as
   });
   assert.equal(saved.status, 201);
   assert.equal(writes.at(-1).kind, 'availability');
+  assert.match(writes.at(-1).sql, /VALUES \(\?, \?, \?, \?\)\s+ON CONFLICT/);
+  assert.match(writes.at(-1).sql, /SET status = EXCLUDED\.status, note = EXCLUDED\.note/);
+  assert.doesNotMatch(writes.at(-1).sql, /VALUES\(status\)|VALUES\(note\)/);
 });
 
 test('service packages require a service owned by the vendor and persist extras', async () => {

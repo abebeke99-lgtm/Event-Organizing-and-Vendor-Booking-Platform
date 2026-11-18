@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { createPostgresPoolConfig, getPostgresConfigurationErrors } from '../src/lib/postgresConfig.js';
 import {
+  assertNeonTestDatabaseIsIsolated,
   defaultNeonTestEnvironmentPath,
   loadNeonTestEnvironment,
 } from '../src/lib/neonTestEnvironment.js';
@@ -160,6 +161,79 @@ test('Neon test config loads only explicit local values without changing product
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('Neon test isolation rejects the production branch even with a different database name', () => {
+  const production = {
+    DATABASE_URL: 'postgresql://user:password@ep-production-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+    DIRECT_URL: 'postgresql://user:password@ep-production.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+  };
+  const matchingTest = {
+    DATABASE_URL: 'postgresql://test:password@ep-production-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+    DIRECT_URL: 'postgresql://test:password@ep-production.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+  };
+  assert.throws(
+    () => assertNeonTestDatabaseIsIsolated(matchingTest, production),
+    (error) => {
+      assert.match(error.message, /uses the same Neon branch as production/);
+      assert.doesNotMatch(error.message, /password|ep-production|user/i);
+      return true;
+    },
+  );
+});
+
+test('Neon isolation rejects a production branch even when only the database name differs', () => {
+  const endpoints = neonUrls();
+  const production = {
+    DATABASE_URL: endpoints.DATABASE_URL.replace('ep-test', 'ep-production'),
+    DIRECT_URL: endpoints.DIRECT_URL.replace('ep-test', 'ep-production'),
+  };
+  const sameBranchDifferentDatabase = {
+    DATABASE_URL: production.DATABASE_URL.replace('/eventhub', '/other_database'),
+    DIRECT_URL: production.DIRECT_URL.replace('/eventhub', '/other_database'),
+  };
+  assert.throws(
+    () => assertNeonTestDatabaseIsIsolated(sameBranchDifferentDatabase, production),
+    /uses the same Neon branch as production/,
+  );
+});
+
+test('Neon test isolation requires known production configuration and allows another branch', () => {
+  const testEnvironment = {
+    DATABASE_URL: 'postgresql://test:password@ep-test-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+    DIRECT_URL: 'postgresql://test:password@ep-test.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+  };
+  assert.throws(
+    () => assertNeonTestDatabaseIsIsolated(testEnvironment, {}),
+    /Production PostgreSQL configuration is required/,
+  );
+  assert.doesNotThrow(() => assertNeonTestDatabaseIsIsolated(testEnvironment, {
+    DATABASE_URL: 'postgresql://user:password@ep-production-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+    DIRECT_URL: 'postgresql://user:password@ep-production.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+  }));
+});
+
+test('Neon isolation checks production endpoints even when process configuration overrides them', () => {
+  const production = neonUrls();
+  const productionPooled = new URL(production.DATABASE_URL);
+  const productionDirect = new URL(production.DIRECT_URL);
+  productionPooled.hostname = productionPooled.hostname.replace('ep-test', 'ep-production');
+  productionDirect.hostname = productionDirect.hostname.replace('ep-test', 'ep-production');
+  production.DATABASE_URL = production.DATABASE_URL.replace('ep-test-pooler', 'ep-production-pooler');
+  production.DIRECT_URL = production.DIRECT_URL.replace('ep-test', 'ep-production');
+
+  const alternateProcess = neonUrls();
+  alternateProcess.DATABASE_URL = alternateProcess.DATABASE_URL.replace('ep-test', 'ep-other');
+  alternateProcess.DIRECT_URL = alternateProcess.DIRECT_URL.replace('ep-test', 'ep-other');
+
+  const sameProductionBranch = {
+    DATABASE_URL: productionPooled.toString().replace('/eventhub', '/other_database'),
+    DIRECT_URL: productionDirect.toString().replace('/eventhub', '/other_database'),
+  };
+  assert.throws(
+    () => assertNeonTestDatabaseIsIsolated(sameProductionBranch, [production, alternateProcess]),
+    /uses the same Neon branch as production/,
+  );
 });
 
 test('Neon test loader accepts BOM, CRLF, comments, export, spaces, quotes, and preserves channel binding', async () => {
@@ -398,6 +472,32 @@ test('PostgreSQL runtime can start without DIRECT_URL and requires it only for m
   assert.throws(() => database.verifyMigrationConnection(), /DIRECT_URL is required/);
   assert.equal(poolCalls.length, 1);
   await database.close();
+});
+
+test('Missing DIRECT_URL is rejected when migration purpose requires it', () => {
+  const environment = {
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://test-user:test-password@ep-test-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require&channel_binding=require',
+  };
+  assert.throws(
+    () => createPostgresPoolConfig(environment, { purpose: 'migration' }),
+    /DIRECT_URL is required/,
+  );
+});
+
+test('Neon test isolation rejects production branch and has no silent fallback to production credentials', () => {
+  const testEnvironment = {
+    DATABASE_URL: 'postgresql://test:password@ep-production-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+    DIRECT_URL: 'postgresql://test:password@ep-production.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+  };
+  const production = {
+    DATABASE_URL: 'postgresql://user:password@ep-production-pooler.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+    DIRECT_URL: 'postgresql://user:password@ep-production.us-east-2.aws.neon.tech/eventhub?sslmode=require',
+  };
+  assert.throws(
+    () => assertNeonTestDatabaseIsIsolated(testEnvironment, production),
+    /uses the same Neon branch as production/,
+  );
 });
 
 test('PostgreSQL check errors distinguish missing configuration without exposing URLs', () => {

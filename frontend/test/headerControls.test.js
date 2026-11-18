@@ -7,14 +7,10 @@ const appSource = await readFile(new URL('../src/App.jsx', import.meta.url), 'ut
 const navigationSource = await readFile(new URL('../src/PublicNavigation.jsx', import.meta.url), 'utf8');
 const homepageSearchSource = await readFile(new URL('../src/HomepageSearch.jsx', import.meta.url), 'utf8');
 const styleSource = await readFile(new URL('../src/styles.css', import.meta.url), 'utf8');
+const indexSource = await readFile(new URL('../index.html', import.meta.url), 'utf8');
 
-test('header and homepage search remain available', () => {
-  assert.match(appSource, /className="public-search-anchor"/);
-  assert.match(appSource, /aria-controls="header-search-panel"/);
-  assert.match(appSource, /onClick=\{\(\) => \{ setNotificationsOpen\(false\); setSearchOpen\(\(open\) => !open\); \}\}/);
-  assert.match(appSource, /searchInputRef\.current\?\.focus\(\)/);
-  assert.match(appSource, /event\.key === 'Escape'[\s\S]*?closeSearch\(\)/);
-  assert.match(appSource, /onNavigate\(`\/search\?q=\$\{encodeURIComponent\(query\)\}`\)/);
+test('header search control is removed while homepage search remains available', () => {
+  assert.doesNotMatch(appSource, /public-search-anchor|public-global-search|header-search-panel/);
   assert.match(homepageSearchSource, /className="hero-search homepage-search"/);
   assert.match(homepageSearchSource, /placeholder=\{t\('searchAll'\)\}/);
 });
@@ -35,14 +31,35 @@ test('notifications remain authenticated-only and display capped unread counts',
   assert.equal(formatNotificationBadgeCount(-2), '0');
 });
 
-test('language and theme controls persist choices and expose both localized labels', () => {
+test('language and theme controls persist choices and expose both localized labels', async () => {
   assert.match(appSource, /setLanguage\(nextLanguage\)/);
+  assert.ok(appSource.indexOf('setLanguage(nextLanguage)') < appSource.indexOf("await api(endpoint"));
+  assert.match(appSource, /if \(import\.meta\.env\.DEV\) \{\s*console\.warn\(/);
+  assert.doesNotMatch(appSource, /languagePreferenceSaveFailed|language-preference-error/);
+  assert.doesNotMatch(styleSource, /language-preference-error/);
+  assert.doesNotMatch(await readFile(new URL('../src/language.js', import.meta.url), 'utf8'), /languagePreferenceSaveFailed/);
   assert.match(appSource, /<option value="en">English<\/option>/);
   assert.match(appSource, /<option value="am">አማርኛ<\/option>/);
   assert.match(appSource, /<LanguageSelector user=\{user\} showIcon=\{false\} \/>/);
   assert.match(appSource, /function LanguageSelector\(\{ user, isAdmin = false, showIcon = true \}\)/);
   assert.match(appSource, /\{showIcon && <Languages size=\{16\} aria-hidden="true" \/>}/);
   assert.match(appSource, /aria-label=\{translate\('languageLabel', language\)\}/);
+  const flagSequences = [
+    String.fromCodePoint(0x1f1ea, 0x1f1f9),
+    String.fromCodePoint(0x1f1fa, 0x1f1f8),
+    String.fromCodePoint(0x00f0, 0x0178, 0x2021, 0x00aa, 0x00f0, 0x0178, 0x2021, 0x00b9),
+    String.fromCodePoint(0x00f0, 0x0178, 0x2021, 0x00ba, 0x00f0, 0x0178, 0x2021, 0x00b8),
+  ];
+  assert.ok(flagSequences.every((sequence) => !appSource.includes(sequence)));
+  assert.doesNotMatch(appSource, new RegExp(String.fromCodePoint(0xfffd)));
+  assert.match(appSource, /function LanguageFlag\(\{ language \}\)/);
+  assert.match(appSource, /className="language-picker-flag"/);
+  assert.match(styleSource, /\.language-picker-flag\{width:18px;height:12px/);
+  assert.match(indexSource, /<meta charset="UTF-8"/);
+  assert.match(indexSource, /Plan · Book · Celebrate/);
+  assert.match(styleSource, /\.language-picker\{[^}]*display:inline-flex/);
+  assert.match(styleSource, /\.language-picker select:focus-visible/);
+  assert.doesNotMatch(styleSource, /\.language-picker(?:-wrap)?\{[^}]*display:none/);
   assert.match(appSource, /onClick=\{\(\) => setTheme\(nextTheme\)\}/);
   assert.match(appSource, /aria-pressed=\{theme === 'dark'\}/);
   assert.match(styleSource, /html\[data-theme="dark"\] \.public-header-icon-button/);

@@ -9,14 +9,19 @@ const registrationStart = appSource.indexOf('function RegisterPage');
 const registrationEnd = appSource.indexOf('function ForgotPasswordPage', registrationStart);
 const registrationSource = appSource.slice(registrationStart, registrationEnd);
 
-test('public registration only renders customer account fields and no social signup', () => {
+test('public registration renders required account fields and no social signup', () => {
   assert.match(registrationSource, /name="name"/);
+  assert.match(registrationSource, /name="username"/);
   assert.match(registrationSource, /name="email"/);
+  assert.match(registrationSource, /name="phone"/);
+  assert.match(registrationSource, /name="role"/);
+  assert.match(registrationSource, /name="termsAccepted"/);
   assert.match(registrationSource, /name="password"/);
   assert.match(registrationSource, /name="confirm-password"/);
   assert.match(registrationSource, /registerNow/);
   assert.match(registrationSource, /alreadyHaveAccount/);
-  assert.doesNotMatch(registrationSource, /accountType|registrationRole|OAuthButtons|oauth-divider|oauthSignUp/);
+  assert.match(registrationSource, /passwordStrength/);
+  assert.doesNotMatch(registrationSource, /OAuthButtons|oauth-divider|oauthSignUp/);
 });
 
 test('successful registration navigates to login with a success notice and encoded email', () => {
@@ -27,7 +32,7 @@ test('successful registration navigates to login with a success notice and encod
 });
 
 test('signup and account-created labels are translated in English and Amharic', () => {
-  for (const key of ['createAccountHeading', 'fullName', 'emailAddress', 'password', 'confirmPassword', 'registerNow', 'alreadyHaveAccount', 'registrationSuccess', 'registrationDuplicateEmail']) {
+  for (const key of ['createAccountHeading', 'fullName', 'username', 'emailAddress', 'phoneNumber', 'accountType', 'acceptTerms', 'password', 'confirmPassword', 'registerNow', 'alreadyHaveAccount', 'registrationSuccess', 'registrationDuplicateAccount']) {
     assert.ok(translate(key, 'en'), `missing English ${key}`);
     assert.ok(translate(key, 'am'), `missing Amharic ${key}`);
   }

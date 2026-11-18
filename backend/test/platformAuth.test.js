@@ -3,42 +3,55 @@ import assert from 'node:assert/strict';
 import bcrypt from 'bcryptjs';
 import { hashPassword, isPublicRole, parsePublicLogin, parsePublicRegistration } from '../src/lib/platformAuth.js';
 
-test('public registration accepts customer accounts only', () => {
-  assert.equal(parsePublicRegistration({ name: 'Hana Bekele', email: 'HANA@example.com', password: 'StrongPass123' }).success, true);
-  for (const role of ['customer', 'organizer', 'vendor', 'admin', 'other']) {
-    assert.equal(parsePublicRegistration({ name: 'Hana Bekele', email: 'HANA@example.com', password: 'StrongPass123', role }).success, false);
+const validRegistration = (overrides = {}) => ({
+  name: 'Hana Bekele',
+  username: 'hana_bekele',
+  email: 'HANA@example.com',
+  phone: '0986481821',
+  password: 'StrongPass123!',
+  role: 'customer',
+  termsAccepted: true,
+  ...overrides,
+});
+
+test('public registration accepts supported non-administrator account types', () => {
+  for (const role of ['customer', 'organizer', 'vendor']) {
+    assert.equal(parsePublicRegistration(validRegistration({ role })).success, true);
+  }
+  for (const role of ['admin', 'other']) {
+    assert.equal(parsePublicRegistration(validRegistration({ role })).success, false);
   }
 });
 
-test('registration validates name, normalized email, and strong password', () => {
-  const result = parsePublicRegistration({ name: '  Hana Bekele ', email: ' HANA@example.com ', password: 'StrongPass123' });
+test('registration normalizes username, email, phone, and trims name', () => {
+  const result = parsePublicRegistration(validRegistration({
+    name: '  Hana Bekele ',
+    username: ' Hana_Bekele ',
+    email: ' HANA@example.com ',
+    phone: ' (098) 648-1821 ',
+  }));
   assert.equal(result.success, true);
   assert.equal(result.data.name, 'Hana Bekele');
   assert.equal(result.data.email, 'hana@example.com');
-  assert.equal('role' in result.data, false);
-  assert.equal(parsePublicRegistration({ name: 'H', email: 'bad', password: 'weak' }).success, false);
+  assert.equal(result.data.username, 'hana_bekele');
+  assert.equal(result.data.phone, '+251986481821');
+  assert.equal(parsePublicRegistration(validRegistration({ name: 'H', email: 'bad' })).success, false);
 });
 
-test('registration passwords must be 12 to 16 characters and meet complexity rules', () => {
-  const registration = (password) => parsePublicRegistration({
-    name: 'Hana Bekele',
-    email: 'hana@example.com',
-    password,
-  }).success;
-
-  assert.equal(registration('StrongPass12'), true);
-  assert.equal(registration('StrongPassword12'), true);
-  assert.equal(registration('ShortPass1'), false);
-  assert.equal(registration('StrongPassword123'), false);
-  assert.equal(registration('alllowercase12'), false);
-  assert.equal(registration('ALLUPPERCASE12'), false);
-  assert.equal(registration('NoNumbersHere'), false);
+test('registration enforces password complexity and required terms acceptance', () => {
+  for (const password of ['Short1!', 'lowercase12!', 'UPPERCASE12!', 'NoNumber!', 'NoSpecial123', '        ']) {
+    assert.equal(parsePublicRegistration(validRegistration({ password })).success, false);
+  }
+  assert.equal(parsePublicRegistration(validRegistration({ termsAccepted: false })).success, false);
+  assert.equal(parsePublicRegistration(validRegistration({ password: 'ValidPass123!' })).success, true);
 });
 
-test('login input is validated and email is normalized', () => {
+test('login accepts normalized email or username and rejects invalid identifiers', () => {
   const result = parsePublicLogin({ email: ' USER@example.com ', password: 'any-password' });
   assert.equal(result.success, true);
   assert.equal(result.data.email, 'user@example.com');
+  assert.equal(parsePublicLogin({ email: ' Hana_Bekele ', password: 'any-password' }).data.email, 'hana_bekele');
+  assert.equal(parsePublicLogin({ email: 'bad!', password: 'any-password' }).success, false);
   assert.equal(parsePublicLogin({ email: 'bad', password: '' }).success, false);
 });
 
@@ -52,7 +65,8 @@ test('password hashing uses bcrypt and does not preserve plaintext', async () =>
 
 test('public role guard rejects privileged and unknown roles', () => {
   assert.equal(isPublicRole('customer'), true);
-  assert.equal(isPublicRole('vendor'), false);
+  assert.equal(isPublicRole('vendor'), true);
+  assert.equal(isPublicRole('organizer'), true);
   assert.equal(isPublicRole('admin'), false);
   assert.equal(isPublicRole(''), false);
 });

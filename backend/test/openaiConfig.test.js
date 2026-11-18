@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import dotenv from 'dotenv';
+import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -41,13 +43,18 @@ test('OpenAI API key configuration trims a real-looking secret without logging i
   });
 });
 
-test('backend environment loads from the repository root and backend workspace', () => {
+test('backend environment loads from the repository root and backend workspace', async () => {
   const configUrl = pathToFileURL(resolve(backendDirectory, 'src', 'lib', 'openaiConfig.js')).href;
-  const source = `import { getOpenAiApiKey } from ${JSON.stringify(configUrl)};
+  const backendEnvironment = dotenv.parse(
+    await readFile(resolve(backendDirectory, '.env'), 'utf8'),
+  );
+  const expectedStatus = getOpenAiApiKeyStatus(backendEnvironment);
+  const source = `import { getOpenAiApiKey, getOpenAiApiKeyStatus } from ${JSON.stringify(configUrl)};
 const key = process.env.OPENAI_API_KEY?.trim();
+const status = getOpenAiApiKeyStatus();
 console.log(JSON.stringify({
   loaded: Boolean(key),
-  placeholder: key === 'replace_with_your_real_openai_api_key',
+  placeholder: status.placeholderKeyDetected,
   configured: Boolean(getOpenAiApiKey()),
 }));`;
 
@@ -60,8 +67,9 @@ console.log(JSON.stringify({
 
     assert.equal(result.status, 0, result.stderr);
     const report = JSON.parse(result.stdout.trim());
-    assert.equal(report.loaded, true);
-    assert.equal(report.configured, !report.placeholder);
+    assert.equal(report.loaded, Boolean(backendEnvironment.OPENAI_API_KEY?.trim()));
+    assert.equal(report.placeholder, expectedStatus.placeholderKeyDetected);
+    assert.equal(report.configured, expectedStatus.validApiKey === 'configured');
   }
 });
 
@@ -107,6 +115,14 @@ test('backend startup script loads its environment from both supported working d
 
     assert.equal(result.status, 1, output);
     assert.match(output, /PORT must be an integer between 1 and 65535\./);
+    assert.match(output, /OPENAI_API_KEY (?:is not configured|contains a placeholder instead of a real key)/);
+    assert.doesNotMatch(output, /OPENAI_API_KEY=.*(?:sk-|secret)/i);
     assert.doesNotMatch(output, /Database connected\./);
   }
+});
+
+test('backend env example uses a recognizable non-secret OpenAI placeholder', async () => {
+  const example = await readFile(resolve(backendDirectory, '.env.example'), 'utf8');
+  assert.match(example, /^OPENAI_API_KEY=your_openai_api_key_here$/m);
+  assert.doesNotMatch(example, /sk-(?:proj-)?[A-Za-z0-9]{20,}/);
 });

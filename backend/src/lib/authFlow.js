@@ -6,8 +6,9 @@ export function normalizeEmail(value = '') {
 
 export function isStrongPassword(password = '') {
   const value = String(password ?? '');
-  return value.length >= 12
-    && value.length <= 16
+  return value.length >= 8
+    && value.length <= 128
+    && Buffer.byteLength(value, 'utf8') <= 72
     && /[A-Z]/.test(value)
     && /[a-z]/.test(value)
     && /\d/.test(value);

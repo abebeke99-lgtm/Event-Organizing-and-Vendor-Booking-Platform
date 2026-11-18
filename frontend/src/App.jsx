@@ -498,25 +498,6 @@ const PUBLIC_NOTIFICATION_COUNT_ENDPOINTS = {
   vendor: '/vendor/overview',
 };
 
-function getHeaderSearchSuggestion(type, item) {
-  const id = item.id ?? item.slug ?? item.name;
-  const name = type === 'vendors'
-    ? item.business_name || item.name
-    : type === 'categories'
-      ? item.name
-      : item.title;
-  if (!name || id === undefined || id === null) return null;
-  const path = type === 'categories'
-    ? `/service-categories/${encodeURIComponent(item.slug || item.name)}`
-    : `/${type}/${encodeURIComponent(id)}`;
-  return {
-    id: `${type}-${id}`,
-    name,
-    detail: item.city || item.location || item.category || item.type || '',
-    path,
-  };
-}
-
 function isUnreadNotification(item) {
   return !(item.read || item.status === 'read');
 }
@@ -590,20 +571,12 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   const [notificationActionError, setNotificationActionError] = useState('');
   const [notificationRetry, setNotificationRetry] = useState(0);
   const [notificationBusy, setNotificationBusy] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchSuggestions, setSearchSuggestions] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState('');
-  const [searchRetry, setSearchRetry] = useState(0);
-  const [activeSearchSuggestion, setActiveSearchSuggestion] = useState(-1);
   const [siteContactInfo, setSiteContactInfo] = useState({});
   const [contactInfoError, setContactInfoError] = useState(false);
   const isAuthenticated = Boolean(user);
   const routePath = currentPath.split('?')[0];
   const accountMenuRef = useRef(null);
   const headerToolsRef = useRef(null);
-  const searchInputRef = useRef(null);
   const role = user?.role || 'customer';
   const notificationEndpoint = isAuthenticated && authSessionState.status === 'authenticated'
     ? PUBLIC_NOTIFICATION_ENDPOINTS[role]
@@ -675,59 +648,14 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   }, [notificationEndpoint, notificationRetry, role]);
 
   useEffect(() => {
-    if (!searchOpen) return undefined;
-    searchInputRef.current?.focus();
-    const term = searchQuery.trim();
-    if (term.length < 2) {
-      setSearchSuggestions([]);
-      setSearchLoading(false);
-      setSearchError('');
-      setActiveSearchSuggestion(-1);
-      return undefined;
-    }
-
-    const controller = new AbortController();
-    const timer = window.setTimeout(async () => {
-      setSearchLoading(true);
-      setSearchError('');
-      const encodedQuery = encodeURIComponent(term);
-      const responses = await Promise.allSettled([
-        api(`/platform/events?search=${encodedQuery}&page=1&limit=3`, { signal: controller.signal }),
-        api(`/platform/vendors?search=${encodedQuery}&page=1&limit=3`, { signal: controller.signal }),
-        api(`/platform/services?search=${encodedQuery}&page=1&limit=3`, { signal: controller.signal }),
-        api(`/platform/categories?search=${encodedQuery}`, { signal: controller.signal }),
-      ]);
-      if (controller.signal.aborted) return;
-
-      const suggestions = responses.flatMap((response, index) => {
-        if (response.status !== 'fulfilled') return [];
-        const type = ['events', 'vendors', 'services', 'categories'][index];
-        const records = Array.isArray(response.value?.data) ? response.value.data : [];
-        return records.map((item) => getHeaderSearchSuggestion(type, item)).filter(Boolean);
-      }).slice(0, 8);
-      setSearchSuggestions(suggestions);
-      setSearchError(responses.every((response) => response.status === 'rejected') ? 'failed' : '');
-      setSearchLoading(false);
-      setActiveSearchSuggestion(-1);
-    }, 300);
-
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [searchOpen, searchQuery, searchRetry]);
-
-  useEffect(() => {
     function handlePointerDown(event) {
       if (!headerToolsRef.current?.contains(event.target)) {
         setNotificationsOpen(false);
-        setSearchOpen(false);
       }
     }
     function handleKeyDown(event) {
       if (event.key === 'Escape') {
         setNotificationsOpen(false);
-        setSearchOpen(false);
       }
     }
     document.addEventListener('pointerdown', handlePointerDown);
@@ -737,47 +665,6 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, []);
-
-  useEffect(() => {
-    if (searchOpen) setNotificationsOpen(false);
-  }, [searchOpen]);
-
-  function closeSearch() {
-    setSearchOpen(false);
-    setActiveSearchSuggestion(-1);
-  }
-
-  function submitHeaderSearch(event) {
-    event.preventDefault();
-    const query = searchQuery.trim();
-    if (!query) {
-      searchInputRef.current?.focus();
-      return;
-    }
-    closeSearch();
-    onNavigate(`/search?q=${encodeURIComponent(query)}`);
-  }
-
-  function chooseHeaderSearchSuggestion(suggestion) {
-    closeSearch();
-    onNavigate(suggestion.path);
-  }
-
-  function handleHeaderSearchKeyDown(event) {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeSearch();
-    } else if (event.key === 'ArrowDown' && searchSuggestions.length) {
-      event.preventDefault();
-      setActiveSearchSuggestion((index) => (index + 1) % searchSuggestions.length);
-    } else if (event.key === 'ArrowUp' && searchSuggestions.length) {
-      event.preventDefault();
-      setActiveSearchSuggestion((index) => index <= 0 ? searchSuggestions.length - 1 : index - 1);
-    } else if (event.key === 'Enter' && activeSearchSuggestion >= 0 && searchSuggestions[activeSearchSuggestion]) {
-      event.preventDefault();
-      chooseHeaderSearchSuggestion(searchSuggestions[activeSearchSuggestion]);
-    }
-  }
 
   async function markNotificationRead(notification) {
     if (!notificationBasePath || notificationBusy) return;
@@ -864,46 +751,8 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
         />
         <div className="header-actions public-header-actions">
           <div className="public-header-tools" ref={headerToolsRef}>
-            <div className="public-search-anchor">
-              <button type="button" className="public-header-icon-button public-global-search" aria-label={translate('search', language)} title={translate('search', language)} aria-expanded={searchOpen} aria-controls="header-search-panel" onClick={() => { setNotificationsOpen(false); setSearchOpen((open) => !open); }}><Search size={19} aria-hidden="true"/></button>
-              {searchOpen && <section id="header-search-panel" className="public-search-panel" aria-label={translate('search', language)}>
-                <form role="search" onSubmit={submitHeaderSearch}>
-                  <label className="visually-hidden" htmlFor="header-search-input">{translate('searchAll', language)}</label>
-                  <div className="public-search-input-row">
-                    <Search size={18} aria-hidden="true"/>
-                    <input
-                      id="header-search-input"
-                      ref={searchInputRef}
-                      type="search"
-                      value={searchQuery}
-                      maxLength="120"
-                      placeholder={translate('searchAll', language)}
-                      aria-label={translate('searchAll', language)}
-                      role="combobox"
-                      aria-autocomplete="list"
-                      aria-expanded={searchLoading || searchError !== '' || searchSuggestions.length > 0}
-                      aria-controls="header-search-suggestions"
-                      aria-activedescendant={activeSearchSuggestion >= 0 ? `header-search-option-${activeSearchSuggestion}` : undefined}
-                      onChange={(event) => { setSearchQuery(event.target.value); setSearchError(''); setActiveSearchSuggestion(-1); }}
-                      onKeyDown={handleHeaderSearchKeyDown}
-                    />
-                    <button type="submit" className="public-search-submit" aria-label={translate('search', language)} title={translate('search', language)}><Search size={17} aria-hidden="true"/></button>
-                  </div>
-                  {(searchLoading || searchError || searchSuggestions.length > 0 || searchQuery.trim().length >= 2) && <ul id="header-search-suggestions" className="public-search-suggestions" role="listbox">
-                    {searchLoading ? <li className="public-search-state" role="option" aria-selected="false">{translate('searchLoading', language)}</li>
-                      : searchError ? <li className="public-search-state public-search-error" role="none"><span>{translate('searchFailed', language)}</span><button type="button" onClick={() => setSearchRetry((retry) => retry + 1)}>{translate('retry', language)}</button></li>
-                        : searchSuggestions.length ? searchSuggestions.map((suggestion, index) => <li role="none" key={suggestion.id}>
-                          <button id={`header-search-option-${index}`} type="button" role="option" aria-selected={activeSearchSuggestion === index} onClick={() => chooseHeaderSearchSuggestion(suggestion)}>
-                            <span>{suggestion.name}</span>{suggestion.detail && <small>{suggestion.detail}</small>}
-                          </button>
-                        </li>)
-                          : <li className="public-search-state" role="option" aria-selected="false">{translate('searchNoResults', language)}</li>}
-                  </ul>}
-                </form>
-              </section>}
-            </div>
             {notificationEndpoint && <div className="public-notification-anchor">
-              <button type="button" className="public-header-icon-button public-notification-toggle" aria-label={`${translate('notifications', language)}${unreadCount ? `, ${unreadCount} ${translate('unread', language)}` : ''}`} title={translate('notifications', language)} aria-expanded={notificationsOpen} aria-controls="header-notifications-panel" onClick={() => { setSearchOpen(false); setNotificationsOpen((open) => !open); }}><Bell size={19} aria-hidden="true"/>{unreadCount > 0 && <span className="notification-count" aria-label={`${unreadCount} ${translate('unread', language)}`}>{formatNotificationBadgeCount(unreadCount)}</span>}</button>
+              <button type="button" className="public-header-icon-button public-notification-toggle" aria-label={`${translate('notifications', language)}${unreadCount ? `, ${unreadCount} ${translate('unread', language)}` : ''}`} title={translate('notifications', language)} aria-expanded={notificationsOpen} aria-controls="header-notifications-panel" onClick={() => setNotificationsOpen((open) => !open)}><Bell size={19} aria-hidden="true"/>{unreadCount > 0 && <span className="notification-count" aria-label={`${unreadCount} ${translate('unread', language)}`}>{formatNotificationBadgeCount(unreadCount)}</span>}</button>
               {notificationsOpen && <section id="header-notifications-panel" className="public-notification-panel" aria-label={translate('notifications', language)} aria-live="polite">
                 <div className="public-notification-heading">
                   <div><strong>{translate('notifications', language)}</strong><span>{unreadCount ? `${unreadCount} ${translate('unread', language)}` : translate('allCaughtUp', language)}</span></div>
@@ -936,14 +785,33 @@ function AppHeader({ user, currentPath, onNavigate, onLogout, onOpenLogin, onOpe
   </>;
 }
 
+function LanguageFlag({ language }) {
+  if (language === 'en') {
+    return <svg className="language-picker-flag" viewBox="0 0 60 30" aria-hidden="true" focusable="false">
+      <rect width="60" height="30" fill="#012169" />
+      <path d="M0 0 60 30M60 0 0 30" stroke="#fff" strokeWidth="6" />
+      <path d="M0 0 60 30M60 0 0 30" stroke="#c8102e" strokeWidth="2" />
+      <path d="M30 0v30M0 15h60" stroke="#fff" strokeWidth="10" />
+      <path d="M30 0v30M0 15h60" stroke="#c8102e" strokeWidth="6" />
+    </svg>;
+  }
+
+  return <svg className="language-picker-flag" viewBox="0 0 60 30" aria-hidden="true" focusable="false">
+    <rect width="60" height="10" fill="#078930" />
+    <rect y="10" width="60" height="10" fill="#fcdd09" />
+    <rect y="20" width="60" height="10" fill="#da121a" />
+    <circle cx="30" cy="15" r="6" fill="#0f47af" />
+    <path d="M30 9v12m-5-6h10m-8.5-4.2 7 8.4m0-8.4-7 8.4" stroke="#fcdd09" strokeWidth=".45" />
+    <path d="m30 10.1 1.4 3.1 3.4.3-2.6 2.2.8 3.3-3-1.7-3 1.7.8-3.3-2.6-2.2 3.4-.3z" fill="#fcdd09" />
+  </svg>;
+}
+
 function LanguageSelector({ user, isAdmin = false, showIcon = true }) {
   const language = useLanguage();
-  const [preferenceError, setPreferenceError] = useState('');
   const [savingPreference, setSavingPreference] = useState(false);
   async function changeLanguage(event) {
     const nextLanguage = event.target.value;
     setLanguage(nextLanguage);
-    setPreferenceError('');
     if (!user || DEMO_AUTH_ENABLED) return;
     const roles = Array.isArray(user.roles) ? user.roles : String(user.roles || '').split(',');
     const adminAccount = isAdmin || user.role === 'admin' || roles.some((roleName) => roleName.trim().toLowerCase() === 'admin');
@@ -955,7 +823,9 @@ function LanguageSelector({ user, isAdmin = false, showIcon = true }) {
         body: JSON.stringify({ language: nextLanguage }),
       });
     } catch {
-      setPreferenceError(translate('languagePreferenceSaveFailed', nextLanguage));
+      if (import.meta.env.DEV) {
+        console.warn('Could not save language preference to the backend; keeping the local selection.');
+      }
     } finally {
       setSavingPreference(false);
     }
@@ -964,15 +834,14 @@ function LanguageSelector({ user, isAdmin = false, showIcon = true }) {
   return <span className="language-picker-wrap">
     <label className="language-picker">
       <span className="visually-hidden">{translate('languageLabel', language)}</span>
+      <LanguageFlag language={language} />
       {showIcon && <Languages size={16} aria-hidden="true" />}
-      <span className="language-picker-flag" aria-hidden="true">{language === 'am' ? '🇪🇹' : '🇺🇸'}</span>
       <select value={language} aria-label={translate('languageLabel', language)} onChange={changeLanguage} disabled={savingPreference}>
         <option value="en">English</option>
         <option value="am">አማርኛ</option>
       </select>
       <ChevronDown size={14} aria-hidden="true" />
     </label>
-    {preferenceError && <span className="language-preference-error" role="alert">{preferenceError}</span>}
   </span>;
 }
 
@@ -2184,7 +2053,7 @@ function PublicOverview({ user, currentPath, onNavigate, onLogout }) {
 }
 
 function PublicPageLayout({ currentPath, user, onNavigate, onLogout, children }) {
-  return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} /><div id="main-content" className="public-main-content" tabIndex="-1">{children}</div><AppFooter /><AIChatWidget user={user} onNavigate={onNavigate}/></>;
+  return <><AppHeader user={user} currentPath={currentPath} onNavigate={onNavigate} onLogout={onLogout} onOpenLogin={() => onNavigate('/login')} onOpenRegister={() => onNavigate('/register')} /><div id="main-content" className="public-main-content" tabIndex="-1"><div className="ui-page-shell">{children}</div></div><AppFooter /><AIChatWidget user={user} onNavigate={onNavigate}/></>;
 }
 
 function getBrowseEventStatus(event) {
@@ -4121,7 +3990,12 @@ function LoginPage({
     event.preventDefault();
     const nextFieldErrors = {};
     if (!email.trim()) nextFieldErrors.email = t('registrationEmailRequired');
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) nextFieldErrors.email = t('validEmailRequired');
+    else if (administrator || pendingLink
+      ? !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+      : !(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+        || /^[A-Za-z0-9_]{3,32}$/.test(email.trim()))) {
+      nextFieldErrors.email = administrator || pendingLink ? t('validEmailRequired') : t('validLoginIdentifier');
+    }
     if (!password) nextFieldErrors.password = t('registrationPasswordRequired');
     if (Object.keys(nextFieldErrors).length) {
       setFieldErrors(nextFieldErrors);
@@ -4138,8 +4012,7 @@ function LoginPage({
       else await onLogin(email, password, rememberMe);
     } catch (issue) {
       setError(issue.message);
-      setAccountNotFound(issue.status === 404
-        || issue.message === 'No account found. Please create an account first.');
+      setAccountNotFound(false);
     } finally {
       setBusy(false);
     }
@@ -4161,10 +4034,10 @@ function LoginPage({
       }}>{t('createAccountAction')}</a></>}</div>}
     <form className="login-form" noValidate onSubmit={submit}>
       <label className="auth-field" htmlFor="login-email">
-        <span>{t('emailAddress')}</span>
+        <span>{administrator || pendingLink ? t('emailAddress') : t('usernameOrEmail')}</span>
         <span className="auth-input-wrap">
           <Mail className="auth-input-icon" size={18} aria-hidden="true" />
-          <input id="login-email" type="email" name="email" autoComplete="username" autoCapitalize="none" placeholder={t('loginEmailPlaceholder')} aria-invalid={Boolean(fieldErrors.email)} aria-describedby={fieldErrors.email ? 'login-email-error' : undefined} required value={email} onChange={(event) => { setEmail(event.target.value); setFieldErrors((current) => ({ ...current, email: '' })); }} />
+          <input id="login-email" type={administrator || pendingLink ? 'email' : 'text'} name="email" autoComplete="username" autoCapitalize="none" maxLength="254" placeholder={administrator || pendingLink ? t('loginEmailPlaceholder') : t('usernameOrEmail')} aria-invalid={Boolean(fieldErrors.email)} aria-describedby={fieldErrors.email ? 'login-email-error' : undefined} required value={email} onChange={(event) => { setEmail(event.target.value); setFieldErrors((current) => ({ ...current, email: '' })); }} />
         </span>
         {fieldErrors.email && <small className="field-error" id="login-email-error" role="alert">{fieldErrors.email}</small>}
       </label>
@@ -4224,9 +4097,13 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
   const searchParams = new URLSearchParams(window.location.search);
   const [form, setForm] = useState({
     name: searchParams.get('name') || '',
+    username: '',
     email: searchParams.get('email') || '',
+    phone: '',
     password: '',
     confirmPassword: '',
+    role: 'customer',
+    termsAccepted: false,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -4249,20 +4126,35 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     return undefined;
   }, [callbackError]);
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
+  const usernameValid = /^[A-Za-z0-9_]{3,32}$/.test(form.username.trim());
+  const phoneCompact = form.phone.trim().replace(/[\s().-]/g, '');
+  const phoneValid = /^(?:0[79]\d{8}|251[79]\d{8}|\+[1-9]\d{7,14})$/.test(phoneCompact);
+  const passwordValid = form.password.length >= 8
+    && form.password.length <= 128
+    && new TextEncoder().encode(form.password).length <= 72
+    && /[A-Z]/.test(form.password)
+    && /[a-z]/.test(form.password)
+    && /\d/.test(form.password)
+    && /[^A-Za-z0-9]/.test(form.password);
+  const passwordStrength = form.password
+    ? [form.password.length >= 8, /[A-Z]/.test(form.password) && /[a-z]/.test(form.password),
+      /\d/.test(form.password), /[^A-Za-z0-9]/.test(form.password)]
+      .filter(Boolean).length
+    : 0;
   const validationErrors = {
     name: form.name.trim().length >= 2 ? '' : t('fullNameMinimum'),
+    username: usernameValid ? '' : t('usernameRequirements'),
     email: !form.email.trim()
       ? t('registrationEmailRequired')
       : emailValid ? '' : t('validEmailRequired'),
-    password: !form.password
-      ? t('registrationPasswordRequired')
-      : form.password.length < 8
-        ? t('registrationPasswordMinimum')
-        : new TextEncoder().encode(form.password).length > 72
-          ? t('registrationPasswordTooLong') : '',
+    phone: phoneValid ? '' : t('validPhoneRequired'),
+    password: !form.password ? t('registrationPasswordRequired')
+      : passwordValid ? '' : t('registrationPasswordRequirements'),
     confirmPassword: !form.confirmPassword
       ? t('registrationConfirmPasswordRequired')
       : form.confirmPassword !== form.password ? t('passwordMismatch') : '',
+    role: ['customer', 'organizer', 'vendor'].includes(form.role) ? '' : t('accountTypeRequired'),
+    termsAccepted: form.termsAccepted ? '' : t('termsAcceptanceRequired'),
   };
 
   async function submit(event) {
@@ -4273,11 +4165,17 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     if (Object.values(validationErrors).some(Boolean)) return;
     setBusy(true);
     try {
-      const result = await onRegister(form.name.trim(), form.email.trim(), form.password);
+      const result = await onRegister({
+        ...form,
+        name: form.name.trim(),
+        username: form.username.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+      });
       onRegistrationComplete(result);
     } catch (issue) {
       setError(translateText(issue.message, language));
-      setDuplicateEmail(issue.status === 409 && /email|ኢሜይል/i.test(issue.message || ''));
+      setDuplicateEmail(issue.status === 409 && /email|username|ኢሜይል|የተጠቃሚ ስም/i.test(issue.message || ''));
     } finally {
       setBusy(false);
     }
@@ -4298,7 +4196,7 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     {!callbackError && oauthNoticeFromPath(window.location.search, language)
       && <div className="alert error" role="alert">{oauthNoticeFromPath(window.location.search, language)}</div>}
     {error && <div className="alert error" role="alert">{duplicateEmail
-      ? <>{t('registrationDuplicateEmail')} <a className="text-link" href={`/login?email=${encodeURIComponent(form.email.trim())}`}>{t('login')}</a></>
+      ? <>{t('registrationDuplicateAccount')} <a className="text-link" href={`/login?email=${encodeURIComponent(form.email.trim())}`}>{t('login')}</a></>
       : error}</div>}
     <form onSubmit={submit} noValidate>
       <label className="field">
@@ -4307,9 +4205,28 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
         {validationAttempted && validationErrors.name && <small id="registration-name-error" className="field-error" role="alert">{validationErrors.name}</small>}
       </label>
       <label className="field">
+        <span>{t('username')}</span>
+        <input name="username" autoComplete="username" minLength="3" maxLength="32" pattern="[A-Za-z0-9_]+" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.username)} aria-describedby={validationAttempted && validationErrors.username ? 'registration-username-error' : undefined} />
+        {validationAttempted && validationErrors.username && <small id="registration-username-error" className="field-error" role="alert">{validationErrors.username}</small>}
+      </label>
+      <label className="field">
         <span>{t('emailAddress')}</span>
         <input name="email" type="email" autoComplete="email" maxLength="254" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.email)} aria-describedby={validationAttempted && validationErrors.email ? 'registration-email-error' : undefined} />
         {validationAttempted && validationErrors.email && <small id="registration-email-error" className="field-error" role="alert">{validationErrors.email}</small>}
+      </label>
+      <label className="field">
+        <span>{t('phoneNumber')}</span>
+        <input name="phone" type="tel" autoComplete="tel" maxLength="24" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.phone)} aria-describedby={validationAttempted && validationErrors.phone ? 'registration-phone-error' : undefined} />
+        {validationAttempted && validationErrors.phone && <small id="registration-phone-error" className="field-error" role="alert">{validationErrors.phone}</small>}
+      </label>
+      <label className="field">
+        <span>{t('accountType')}</span>
+        <select name="role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.role)} aria-describedby={validationAttempted && validationErrors.role ? 'registration-role-error' : undefined}>
+          <option value="customer">{t('customerRole')}</option>
+          <option value="organizer">{t('organizerRole')}</option>
+          <option value="vendor">{t('vendorRole')}</option>
+        </select>
+        {validationAttempted && validationErrors.role && <small id="registration-role-error" className="field-error" role="alert">{validationErrors.role}</small>}
       </label>
       <div className="registration-password-field">
         <PasswordField
@@ -4326,7 +4243,17 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
           onChange={(e) => setForm({ ...form, password: e.target.value })}
         />
         {validationAttempted && validationErrors.password && <p id="registration-password-error" className="field-error" role="alert">{validationErrors.password}</p>}
+        <small className="muted">{t('registrationPasswordRequirements')}</small>
+        <div className="password-strength" aria-live="polite">
+          <span>{t('passwordStrength')}:</span>
+          <strong>{passwordStrength < 2 ? t('passwordStrengthWeak') : passwordStrength < 4 ? t('passwordStrengthMedium') : t('passwordStrengthStrong')}</strong>
+          <progress max="4" value={passwordStrength} aria-label={t('passwordStrength')} />
+        </div>
       </div>
+      <label className="registration-terms field">
+        <span><input name="termsAccepted" type="checkbox" checked={form.termsAccepted} onChange={(e) => setForm({ ...form, termsAccepted: e.target.checked })} aria-invalid={Boolean(validationAttempted && validationErrors.termsAccepted)} aria-describedby={validationAttempted && validationErrors.termsAccepted ? 'registration-terms-error' : undefined} required /> {t('acceptTerms')} <a href="/terms">{t('termsConditions')}</a></span>
+        {validationAttempted && validationErrors.termsAccepted && <small id="registration-terms-error" className="field-error" role="alert">{validationErrors.termsAccepted}</small>}
+      </label>
       <div className="registration-confirm-field">
         <PasswordField
           name="confirm-password"
@@ -4426,7 +4353,8 @@ function ForgotPasswordPage({ onSubmit, onVerify, onReset }) {
     setValidationAttempted(true);
     const strongPassword = password.length >= 8 && password.length <= 128
       && new TextEncoder().encode(password).length <= 72
-      && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password);
+      && /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password)
+      && /[^A-Za-z0-9]/.test(password);
     if (!strongPassword) {
       setError(t('passwordInvalid'));
       return;
@@ -4501,6 +4429,8 @@ function ForgotPasswordPage({ onSubmit, onVerify, onReset }) {
     /[A-Z]/.test(password),
     /[a-z]/.test(password),
     /\d/.test(password),
+    /[^A-Za-z0-9]/.test(password),
+    new TextEncoder().encode(password).length <= 72,
   ];
   const strength = passwordRequirements.filter(Boolean).length;
   const maskedEmail = email.replace(/^(.).*(?=@)/, '$1***');
@@ -4586,8 +4516,10 @@ function SetPasswordPage({ onSubmit }) {
       setError(t('invitationLinkInvalid'));
       return;
     }
-    if (password.length < 8 || new TextEncoder().encode(password).length > 72) {
-      setError(t('registrationPasswordMinimum'));
+    if (password.length < 8 || password.length > 128 || new TextEncoder().encode(password).length > 72
+      || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)
+      || !/[^A-Za-z0-9]/.test(password)) {
+      setError(t('registrationPasswordRequirements'));
       return;
     }
     if (password !== confirmPassword) {
@@ -5018,7 +4950,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
       case 'vendors':
         return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">BROWSE VENDORS</p><h2>Discover trusted event vendors</h2><p className="muted">Search by city, category, rating, and price to compare and save the right match.</p></div></div><div className="panel" style={{ padding: '20px' }}><div className="toolbar"><input className="field-input" placeholder="Search vendor name" /><select className="filter-select"><option>All categories</option>{(data.categories || []).map((category) => <option key={category.id} value={category.name}>{category.name}</option>)}</select><select className="filter-select"><option>Any rating</option><option>4.5+</option><option>4.8+</option></select></div><div className="table-wrap"><table><thead><tr><th>Vendor</th><th>Category</th><th>Location</th><th>Verified</th><th>Rating</th><th>From</th></tr></thead><tbody>{(data.vendors || []).map((vendor) => <tr key={vendor.id}><td>{vendor.name}</td><td>{vendor.category}</td><td>{vendor.city}</td><td><span className="pill active">{vendor.verified ? 'Verified' : 'Unverified'}</span></td><td>{vendor.rating?.toFixed ? vendor.rating.toFixed(1) : '—'}★</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: 'ETB', maximumFractionDigits: 0 }).format(vendor.priceFrom || 0)}</td></tr>)}</tbody></table></div></div></section>;
       case 'services':
-        return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">SEARCH SERVICES</p><h2>Find available service packages</h2><p className="muted">Use category, price, location, and rating filters to shortlist the right suppliers.</p></div></div><div className="panel" style={{ padding: '20px' }}><div className="toolbar"><input className="field-input" placeholder="Search services or descriptions" /><select className="filter-select"><option>Location</option><option>Addis Ababa</option><option>Bahir Dar</option></select><select className="filter-select"><option>Price range</option><option>Under 50,000 ETB</option><option>50,000–100,000 ETB</option></select></div><div className="table-wrap"><table><thead><tr><th>Service</th><th>Category</th><th>Location</th><th>Price</th><th>Rating</th></tr></thead><tbody>{(data.services || []).map((service) => <tr key={service.id}><td>{service.title}</td><td>{service.category}</td><td>{service.city}</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: service.currency || 'ETB', maximumFractionDigits: 0 }).format(service.price || 0)}</td><td>{service.rating?.toFixed ? service.rating.toFixed(1) : '—'}★</td></tr>)}</tbody></table></div></div></section>;
+        return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">SEARCH SERVICES</p><h2>Find available service packages</h2><p className="muted">Use category, price, location, and rating filters to shortlist the right suppliers.</p></div></div><div className="panel" style={{ padding: '20px' }}><div className="toolbar"><input className="field-input" placeholder="Search services or descriptions" /><select className="filter-select"><option>Location</option><option>Addis Ababa</option><option>Bahir Dar</option></select><select className="filter-select"><option>Price range</option><option>Under 50,000 ETB</option><option>50,000“100,000 ETB</option></select></div><div className="table-wrap"><table><thead><tr><th>Service</th><th>Category</th><th>Location</th><th>Price</th><th>Rating</th></tr></thead><tbody>{(data.services || []).map((service) => <tr key={service.id}><td>{service.title}</td><td>{service.category}</td><td>{service.city}</td><td>{new Intl.NumberFormat('en-ET', { style: 'currency', currency: service.currency || 'ETB', maximumFractionDigits: 0 }).format(service.price || 0)}</td><td>{service.rating?.toFixed ? service.rating.toFixed(1) : '—'}★</td></tr>)}</tbody></table></div></div></section>;
       case 'categories':
         return <section className="organizer-shell"><div className="page-heading"><div><p className="eyebrow">SERVICE CATEGORIES</p><h2>Explore event service groups</h2><p className="muted">Browse active platform categories and discover all available offerings.</p></div></div><div className="list-stack">{(data.categories || []).map((category) => <div key={category.id} className="list-card"><div><strong>{category.name}</strong><small>{category.description}</small></div><span className="pill active">{category.active ? 'Active' : 'Inactive'}</span></div>)}</div></section>;
       case 'bookings':
@@ -5572,8 +5504,8 @@ function AdminServiceCategories() {
           setSortDirection(nextDirection);
         }}>
           <option value="display_order:asc">Display order</option>
-          <option value="name:asc">Name A–Z</option>
-          <option value="name:desc">Name Z–A</option>
+          <option value="name:asc">Name A“Z</option>
+          <option value="name:desc">Name Z“A</option>
           <option value="service_count:desc">Most services</option>
           <option value="created_at:desc">Newest first</option>
         </select>
@@ -5606,7 +5538,7 @@ function AdminServiceCategories() {
         </table>
       </div>
       <div className="pagination">
-        <span>Showing {data.length ? ((page - 1) * pagination.pageSize) + 1 : 0}–{Math.min(page * pagination.pageSize, pagination.total)} of {pagination.total}</span>
+        <span>Showing {data.length ? ((page - 1) * pagination.pageSize) + 1 : 0}“{Math.min(page * pagination.pageSize, pagination.total)} of {pagination.total}</span>
         <div>
           <button className="icon-button" type="button" disabled={page <= 1 || loading} onClick={() => void load(page - 1)} aria-label="Previous category page"><ChevronLeft size={18} /></button>
           <span>Page {page} of {Math.max(1, Math.ceil(pagination.total / pagination.pageSize))}</span>
@@ -6087,7 +6019,7 @@ function GenericDataPage({slug,user,onUserChange}) {
             </table>
           </div>
           <div className="pagination">
-            <span>Showing {data.length ? ((pagination.page - 1) * pagination.pageSize) + 1 : 0}–{Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total}</span>
+            <span>Showing {data.length ? ((pagination.page - 1) * pagination.pageSize) + 1 : 0}“{Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total}</span>
             <div>
               <button className="icon-button" disabled={pagination.page <= 1 || loading} onClick={() => load(pagination.page - 1)} aria-label="Previous page"><ChevronLeft size={18} /></button>
               <span>Page {pagination.page} of {Math.max(1, Math.ceil(pagination.total / pagination.pageSize))}</span>
@@ -6634,7 +6566,7 @@ function ApiSettingsPage() {
               <div className="system-settings-fields">
                 <div className="settings-status-row"><span>{t('administratorSession')}</span><strong>{configuration?.security?.administratorSessionHours || 8} {t('hours')}</strong></div>
                 <div className="settings-status-row"><span>{t('userSession')}</span><strong>{configuration?.security?.userSessionHours || 8} {t('hours')}</strong></div>
-                <div className="settings-status-row"><span>{t('passwordPolicy')}</span><strong>{configuration?.security?.passwordMinimumLength || 12}–{configuration?.security?.passwordMaximumLength || 16} {t('charactersStrongPassword')}</strong></div>
+                <div className="settings-status-row"><span>{t('passwordPolicy')}</span><strong>{configuration?.security?.passwordMinimumLength || 12}“{configuration?.security?.passwordMaximumLength || 16} {t('charactersStrongPassword')}</strong></div>
                 <p className="settings-readonly-note">{t('securityPolicyReadonlyNote')}</p>
                 <div className="settings-status-row"><span>{t('defaultRegistrationRole')}</span><strong>{t('customerRole')}</strong></div>
                 <label className="settings-toggle">
@@ -6939,17 +6871,21 @@ export default function App(){
     setGlobalError('');
     navigatePublic(`/login?registered=1&email=${encodeURIComponent(registeredUser.email)}`);
   }
-  async function registerPublic(name,email,password){
+  async function registerPublic(form){
+    const { name, username, email, phone, password, role, termsAccepted } = form;
     if (DEMO_AUTH_ENABLED) {
       if (!name || name.trim().length < 2) throw new Error('Enter your full name (at least 2 characters).');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) throw new Error('Enter a valid email address.');
-      if (!isValidDemoPassword(password)) throw new Error('Password must be at least 8 characters and no more than 72 UTF-8 bytes.');
-      const profile = saveDemoAccount({ name, email, role: 'customer' });
+      if (!username || !/^[A-Za-z0-9_]{3,32}$/.test(username.trim())) throw new Error('Use 3 to 32 letters, numbers, or underscores for your username.');
+      if (!phone || !/^(?:0[79]\d{8}|251[79]\d{8}|\+[1-9]\d{7,14})$/.test(phone.trim().replace(/[\s().-]/g, ''))) throw new Error('Enter a valid phone number.');
+      if (!isValidDemoPassword(password) || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) throw new Error('Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character.');
+      if (!termsAccepted) throw new Error('Accept the Terms and Conditions to create an account.');
+      const profile = saveDemoAccount({ name, email, role });
       return { demo: true, profile };
     }
-    const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,email,password})});
+    const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,username,email,phone,password,role,termsAccepted})});
     const registeredUser = response?.data?.user;
-    if (!registeredUser || registeredUser.role !== 'customer') throw new Error('The server did not confirm the customer account.');
+    if (!registeredUser || registeredUser.role !== role) throw new Error('The server did not confirm the requested account.');
     return response;
   }
   async function setPassword(token, password) {

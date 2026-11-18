@@ -1,4 +1,6 @@
-const LOCAL_API_URL = 'http://127.0.0.1:4000/api';
+const LOCAL_API_URL = 'http://127.0.0.1:5000/api';
+const RESERVED_HOST_SUFFIXES = ['.example', '.invalid', '.test'];
+const RESERVED_EXAMPLE_HOSTS = new Set(['example.com', 'example.net', 'example.org']);
 
 function isLoopbackHost(hostname) {
   const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
@@ -7,6 +9,13 @@ function isLoopbackHost(hostname) {
   return octets.length === 4
     && octets.every((octet) => /^\d+$/.test(octet) && Number(octet) <= 255)
     && Number(octets[0]) === 127;
+}
+
+function isReservedHost(hostname) {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  return RESERVED_EXAMPLE_HOSTS.has(host)
+    || [...RESERVED_EXAMPLE_HOSTS].some((reservedHost) => host.endsWith(`.${reservedHost}`))
+    || RESERVED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
 }
 
 export function resolveApiBaseUrl(configuredUrl, isProduction, currentHostname) {
@@ -43,6 +52,9 @@ export function resolveApiBaseUrl(configuredUrl, isProduction, currentHostname) 
   }
   if (isProduction && isLoopbackHost(parsedUrl.hostname)) {
     throw new Error('Production VITE_API_URL must not use a localhost or loopback host.');
+  }
+  if (isProduction && isReservedHost(parsedUrl.hostname)) {
+    throw new Error('Production VITE_API_URL must not use an example or reserved placeholder domain.');
   }
 
   return `${parsedUrl.origin}/api`;

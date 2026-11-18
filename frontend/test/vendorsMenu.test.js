@@ -44,7 +44,7 @@ test('VendorsMenu renders API category image URLs as images and preserves catego
     root: fileURLToPath(new URL('../', import.meta.url)),
     appType: 'custom',
     logLevel: 'error',
-    server: { middlewareMode: true },
+    server: { middlewareMode: true, hmr: false, ws: false },
   });
   try {
     const { default: apiClient } = await server.ssrLoadModule('/src/api/axios.js');
@@ -67,7 +67,7 @@ test('VendorsMenu renders an icon when a category image URL is absent', async ()
     root: fileURLToPath(new URL('../', import.meta.url)),
     appType: 'custom',
     logLevel: 'error',
-    server: { middlewareMode: true },
+    server: { middlewareMode: true, hmr: false, ws: false },
   });
   try {
     const { default: VendorsMenu } = await server.ssrLoadModule('/src/VendorsMenu.jsx');

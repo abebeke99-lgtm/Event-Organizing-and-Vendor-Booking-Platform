@@ -7,11 +7,13 @@ const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : import.met
 const browserHostname = typeof window === 'undefined' ? undefined : window.location.hostname;
 
 const apiClient = axios.create({
-  baseURL: resolveApiBaseUrl(
-    viteEnvironment.VITE_API_URL,
-    Boolean(viteEnvironment.PROD),
-    browserHostname,
-  ),
+  baseURL: viteEnvironment.DEV
+    ? '/api'
+    : resolveApiBaseUrl(
+      viteEnvironment.VITE_API_URL,
+      Boolean(viteEnvironment.PROD),
+      browserHostname,
+    ),
   withCredentials: true,
   timeout: 15_000,
 });

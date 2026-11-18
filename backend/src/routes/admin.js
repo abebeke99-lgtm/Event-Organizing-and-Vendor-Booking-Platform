@@ -689,21 +689,23 @@ router.patch('/security/lock', async (req, res, next) => {
         await db.execute(
           `INSERT INTO module_locks (module_key, is_locked, lock_reason, locked_by, locked_at)
            VALUES (?, ?, ?, ?, NOW())
-           ON DUPLICATE KEY UPDATE is_locked = VALUES(is_locked), lock_reason = VALUES(lock_reason), locked_by = VALUES(locked_by), locked_at = NOW()`,
+           ON CONFLICT (module_key) DO UPDATE
+           SET is_locked = EXCLUDED.is_locked, lock_reason = EXCLUDED.lock_reason,
+               locked_by = EXCLUDED.locked_by, locked_at = NOW()`,
           [parsed.data.module_key, value, parsed.data.lock_reason || (value ? 'Module locked by administrator' : null), req.admin.id]
         );
       }
 
       if (parsed.data.platform_status) {
         await db.execute(
-          'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
+          'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by',
           ['platform_status', parsed.data.platform_status, req.admin.id]
         );
       }
 
       if (parsed.data.maintenance_mode !== undefined) {
         await db.execute(
-          'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)',
+          'INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_by = EXCLUDED.updated_by',
           ['maintenance_mode', String(parsed.data.maintenance_mode), req.admin.id]
         );
       }

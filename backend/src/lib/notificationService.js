@@ -2,6 +2,10 @@ import nodemailer from 'nodemailer';
 import { getPasswordResetEmailConfig } from './passwordResetEmail.js';
 import { loadSystemSettings } from './systemSettings.js';
 
+function buildPlaceholders(count) {
+  return Array.from({ length: count }, (_, index) => `$${index + 1}`).join(', ');
+}
+
 export async function createNotification(database, {
   userId,
   title,
@@ -13,20 +17,41 @@ export async function createNotification(database, {
   channel = 'in_app',
   actorId = null,
 }) {
-  const [result] = await database.execute(
+  const values = [
+    userId,
+    title,
+    message,
+    type,
+    relatedType,
+    relatedId === null ? null : String(relatedId),
+    idempotencyKey,
+    channel,
+    channel === 'in_app' ? 'delivered' : 'pending',
+  ];
+  const result = await database.execute(
     `INSERT INTO notifications
        (user_id, title, message, notification_type, related_entity_type, related_entity_id,
         idempotency_key, delivery_channel, delivery_status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`,
-    [userId, title, message, type, relatedType, relatedId === null ? null : String(relatedId),
-      idempotencyKey, channel, channel === 'in_app' ? 'delivered' : 'pending'],
+      VALUES (${buildPlaceholders(values.length)})
+      ON CONFLICT (idempotency_key) DO NOTHING
+      RETURNING id`,
+    values,
   );
-  const notification = { id: Number(result.insertId), created: Number(result.affectedRows) === 1 };
+  const pgRow = Array.isArray(result.rows) ? result.rows[0] : undefined;
+  const legacyRow = Array.isArray(result) ? result[0] : undefined;
+  const row = pgRow ?? legacyRow ?? result;
+  const notification = {
+    id: Number(row?.id ?? row?.insertId),
+    created: Array.isArray(result.rows)
+      ? result.rows.length === 1
+      : Array.isArray(result)
+        ? Number(result[0]?.affectedRows) === 1
+        : Number(result.affectedRows) === 1,
+  };
   if (notification.created) {
     await database.execute(
       `INSERT INTO notification_history (notification_id, actor_id, action, details)
-       VALUES (?, ?, 'created', ?)`,
+       VALUES ($1, $2, 'created', $3)`,
       [notification.id, actorId, JSON.stringify({ source: type, channel })],
     );
   }

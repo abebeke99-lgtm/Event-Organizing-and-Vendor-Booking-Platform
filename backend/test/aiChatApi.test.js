@@ -375,11 +375,12 @@ test('provider failures are sanitized and classified without exposing provider d
     console[method] = (...values) => loggedMessages.push(values.join(' '));
   }
   const failures = [
-    { status: 401, code: 'invalid_api_key', expected: 'OpenAI rejected the server API key.' },
-    { status: 429, code: 'insufficient_quota', expected: 'OpenAI account quota is exhausted.' },
-    { status: 429, code: 'rate_limit_exceeded', expected: 'OpenAI is rate limiting requests.' },
-    { status: 404, code: 'model_not_found', expected: 'The configured OpenAI model is unavailable.' },
-    { name: 'APIConnectionError', expected: 'Could not reach OpenAI.' },
+    { status: 401, code: 'invalid_api_key', expected: 'AI provider rejected the configured credentials.' },
+    { status: 403, code: 'permission_denied', expected: 'AI provider rejected the configured credentials.' },
+    { status: 429, code: 'insufficient_quota', expected: 'AI provider is busy or quota-limited.' },
+    { status: 429, code: 'rate_limit_exceeded', expected: 'AI provider is busy or quota-limited.' },
+    { status: 404, code: 'model_not_found', expected: 'AI provider request failed.' },
+    { name: 'APIConnectionError', expected: 'Could not reach the AI provider.' },
   ];
 
   try {
@@ -412,7 +413,7 @@ test('streaming network failures become sanitized SSE errors', async () => {
     assert.equal(response.status, 200);
     const body = await response.text();
     assert.match(body, /event: error/);
-    assert.match(body, /Could not reach OpenAI/);
+    assert.match(body, /Could not reach the AI provider/);
     assert.equal(body.includes('private upstream response'), false);
   } finally {
     streamIterationError = null;

@@ -465,6 +465,40 @@ test('both local frontend origins are allowed without extra development CORS con
   }
 });
 
+test('local CORS preflight permits credentialed API methods and required headers', async () => {
+  const previousEnvironment = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'development';
+  const corsApp = createApp({ database: { async query() {} } });
+  if (previousEnvironment === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = previousEnvironment;
+  const corsServer = corsApp.listen(0, '127.0.0.1');
+  await once(corsServer, 'listening');
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${corsServer.address().port}/api/auth/login`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://127.0.0.1:5173',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type,accept-language,x-language',
+      },
+    });
+
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'http://127.0.0.1:5173');
+    assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+    assert.match(response.headers.get('access-control-allow-methods') || '', /\b(GET|POST|PUT|PATCH|DELETE)\b/);
+    assert.match(response.headers.get('access-control-allow-headers') || '', /content-type/i);
+    assert.match(response.headers.get('access-control-allow-headers') || '', /accept-language/i);
+    assert.match(response.headers.get('access-control-allow-headers') || '', /x-language/i);
+  } finally {
+    await new Promise((resolve, reject) => {
+      corsServer.close((error) => error ? reject(error) : resolve());
+      corsServer.closeAllConnections();
+    });
+  }
+});
+
 test('production CORS does not allow local development origins', async () => {
   const previousOrigin = process.env.WEB_ORIGIN;
   const previousEnvironment = process.env.NODE_ENV;
@@ -515,7 +549,15 @@ test('database health route returns ready only after a successful database query
   assert.equal(healthQueryCount, 1);
 });
 
-test('database health route returns unavailable and a safe failure code when the query fails', async () => {
+test('database readiness route succeeds only after a successful database query', async () => {
+  const response = await fetch(`${baseUrl}/api/ready`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { status: 'ok', db: true });
+  assert.equal(healthQueryCount, 2);
+});
+
+test('database readiness route returns unavailable and a safe failure code when the query fails', async () => {
   const unavailableApp = createApp({
     database: {
       async query() {
@@ -536,7 +578,7 @@ test('database health route returns unavailable and a safe failure code when the
     let response;
     let body;
     try {
-      response = await fetch(`http://127.0.0.1:${unavailableServer.address().port}/api/health`);
+      response = await fetch(`http://127.0.0.1:${unavailableServer.address().port}/api/ready`);
       body = await response.json();
     } finally {
       console.error = originalConsoleError;

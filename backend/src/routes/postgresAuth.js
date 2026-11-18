@@ -2,7 +2,13 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
-import { buildRoleRedirect, hashToken, normalizeEmail } from '../lib/authFlow.js';
+import { buildRoleRedirect, hashToken } from '../lib/authFlow.js';
+import {
+  emailSchema,
+  parseLoginIdentifier,
+  publicRegistrationSchema,
+  strongPasswordSchema,
+} from '../lib/accountValidation.js';
 import { getCookieOptions } from '../lib/cookieOptions.js';
 import {
   REMEMBERED_SESSION_LIFETIME_MS,
@@ -27,7 +33,6 @@ import {
   verifyPasswordResetCode,
 } from '../lib/passwordResetSecurity.js';
 
-const emailSchema = z.string().trim().email().max(254).transform(normalizeEmail);
 const publicRegistrationRoles = new Set(['customer', 'organizer', 'vendor']);
 const registrationLimiter = createAuthRateLimiter({
   windowMs: 15 * 60 * 1000,
@@ -194,20 +199,12 @@ export function createPostgresAuthRouter({
   });
 
   router.post('/register', registrationLimiter, async (req, res, next) => {
-    const schema = z.object({
-      name: z.string().trim().min(2).max(160),
-      email: emailSchema,
-      password: z.string()
-        .min(8, 'Password must be at least 8 characters.')
-        .max(128, 'Password must be 128 characters or fewer.')
-        .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
-          message: 'Password must use 72 UTF-8 bytes or fewer.',
-        }),
-      role: z.string().optional(),
-    }).strict();
-    const parsed = schema.safeParse(req.body || {});
+    const parsed = publicRegistrationSchema.safeParse(req.body || {});
     if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration.' });
+      const invalidRole = parsed.error.issues.some((issue) => issue.path[0] === 'role');
+      return res.status(invalidRole ? 403 : 400).json({
+        error: parsed.error.issues[0]?.message || 'Invalid registration.',
+      });
     }
 
     try {
@@ -221,14 +218,15 @@ export function createPostgresAuthRouter({
       if (!registrationSettings.public_registration_enabled) {
         return res.status(403).json({ error: 'Public registration is currently disabled.' });
       }
-      const requestedRole = parsed.data.role?.trim().toLowerCase();
-      if (requestedRole && !publicRegistrationRoles.has(requestedRole)) {
+      const requestedRole = parsed.data.role;
+      if (!publicRegistrationRoles.has(requestedRole)) {
         return res.status(403).json({ error: 'The selected account type is unavailable.' });
       }
 
       const passwordHash = await bcrypt.hash(parsed.data.password, 12);
       const preferredLanguage = req.language === 'am' ? 'am' : 'en';
       const normalizedEmail = parsed.data.email;
+      const { username, phone } = parsed.data;
       const roleName = requestedRole || registrationSettings.default_registration_role;
       const created = await inTransaction(database, async (tx) => {
         const role = await tx.query(
@@ -243,10 +241,11 @@ export function createPostgresAuthRouter({
           throw error;
         }
         const inserted = await tx.query(
-          `INSERT INTO users (full_name, email, password_hash, status, preferred_language)
-           VALUES ($1, $2, $3, 'active', $4)
+          `INSERT INTO users
+             (full_name, username, email, phone, password_hash, status, preferred_language, terms_accepted_at)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6, CURRENT_TIMESTAMP)
            RETURNING id`,
-          [parsed.data.name, normalizedEmail, passwordHash, preferredLanguage],
+          [parsed.data.name, username, normalizedEmail, phone, passwordHash, preferredLanguage],
         );
         const userId = inserted.rows[0].id;
         await tx.query(
@@ -270,7 +269,9 @@ export function createPostgresAuthRouter({
             id: created.id,
             name: parsed.data.name,
             full_name: parsed.data.name,
+            username,
             email: normalizedEmail,
+            phone,
             role: roleName,
             preferred_language: preferredLanguage,
           },
@@ -279,7 +280,7 @@ export function createPostgresAuthRouter({
     } catch (error) {
       if (error.status) return res.status(error.status).json({ error: error.message });
       if (error.code === '23505') {
-        return res.status(409).json({ error: 'An account with this email or phone number already exists.' });
+        return res.status(409).json({ error: 'That username or email address is already in use.' });
       }
       return next(error);
     }
@@ -288,12 +289,7 @@ export function createPostgresAuthRouter({
   router.post('/set-password', setPasswordLimiter, async (req, res, next) => {
     const parsed = z.object({
       token: z.string().min(32).max(128),
-      password: z.string()
-        .min(8, 'Password must be at least 8 characters.')
-        .max(128, 'Password must be 128 characters or fewer.')
-        .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
-          message: 'Password must use 72 UTF-8 bytes or fewer.',
-        }),
+      password: strongPasswordSchema,
     }).strict().safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid password setup request.' });
@@ -604,12 +600,15 @@ export function createPostgresAuthRouter({
 
   router.post('/login', loginLimiter, async (req, res, next) => {
     const schema = z.object({
-      email: emailSchema,
+      email: z.string().trim().min(1).max(254),
       password: z.string().min(1).max(128),
       rememberMe: z.boolean().optional().default(false),
-    });
+    }).strict();
     const parsed = schema.safeParse(req.body || {});
-    if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
+    const identifier = parsed.success ? parseLoginIdentifier(parsed.data.email) : null;
+    if (!parsed.success || !identifier) {
+      return res.status(400).json({ error: 'Enter a valid username or email and password.' });
+    }
 
     try {
       const result = await query(
@@ -619,21 +618,18 @@ export function createPostgresAuthRouter({
          FROM users u
          JOIN user_roles ur ON ur.user_id = u.id
          JOIN roles r ON r.id = ur.role_id
-         WHERE LOWER(u.email) = $1
+         WHERE LOWER(u.email) = $1 OR LOWER(u.username) = $1
          ORDER BY r.is_active DESC,
            CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN 1
                 WHEN LOWER(r.name) = 'organizer' THEN 2
                 WHEN LOWER(r.name) = 'vendor' THEN 3
                 WHEN LOWER(r.name) = 'customer' THEN 4 ELSE 5 END
          LIMIT 1`,
-        [parsed.data.email],
+        [identifier],
       );
       const user = result.rows[0];
-      if (!user) {
-        return res.status(404).json({ error: 'No account found. Please create an account first.' });
-      }
-      if (!await bcrypt.compare(parsed.data.password, user.password_hash)) {
-        return res.status(401).json({ error: 'Invalid email or password.' });
+      if (!user || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
+        return res.status(401).json({ error: 'Invalid username/email or password.' });
       }
       if (user.status !== 'active') {
         const message = user.status === 'pending'

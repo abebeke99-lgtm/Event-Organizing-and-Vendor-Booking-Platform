@@ -85,7 +85,7 @@ function UserModal({ modal, roles, rolesLoading, categories, categoriesLoading, 
             <label className="field um-field">
               <span>{t('adminUserPassword')}</span>
               <span className="um-password-input">
-                <input required type={showPassword ? 'text' : 'password'} minLength={12} maxLength={16} autoComplete="new-password" value={form.password} onChange={(event) => onChange('password', event.target.value)} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? 'um-error-password' : 'um-password-requirements'}/>
+                <input required type={showPassword ? 'text' : 'password'} minLength={8} maxLength={128} autoComplete="new-password" value={form.password} onChange={(event) => onChange('password', event.target.value)} aria-invalid={Boolean(errors.password)} aria-describedby={errors.password ? 'um-error-password' : 'um-password-requirements'}/>
                 <button type="button" className="um-password-toggle" onClick={() => setShowPassword((visible) => !visible)} aria-label={t(showPassword ? 'adminUserHidePassword' : 'adminUserShowPassword')} title={t(showPassword ? 'adminUserHidePassword' : 'adminUserShowPassword')}>{showPassword ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
               </span>
               <small id="um-password-requirements">{t('adminUserPasswordRequirements')}</small>

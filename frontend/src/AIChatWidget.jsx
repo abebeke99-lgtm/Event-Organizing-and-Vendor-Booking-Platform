@@ -28,6 +28,8 @@ const copy = {
     services: 'Browse services',
     failed: 'I could not get a response right now. Please try again shortly.',
     noProvider: 'AI chat is temporarily unavailable. Please try again later.',
+    unconfigured: 'AI chat is unavailable because the backend has no valid OpenAI API key. Add one to backend/.env and restart the backend.',
+    placeholderKey: 'The backend OpenAI API key is a placeholder. Replace it with a valid key in backend/.env and restart the backend.',
     retry: 'Retry',
     rateLimited: 'Too many chat requests. Please wait a minute and try again.',
     timedOut: 'The chat took too long to respond. Please try again.',
@@ -57,6 +59,8 @@ const copy = {
     services: 'አገልግሎቶችን ይመልከቱ',
     failed: 'አሁን ምላሽ ማግኘት አልቻልኩም። እባክዎ ቆይተው ይሞክሩ።',
     noProvider: 'የAI ውይይት ለጊዜው አይገኝም። እባክዎ ቆይተው ይሞክሩ።',
+    unconfigured: 'ትክክለኛ የOpenAI API ቁልፍ ስለሌለ የAI ውይይት አይገኝም። በbackend/.env ውስጥ ጨምረው backend እንደገና ያስጀምሩ።',
+    placeholderKey: 'የbackend OpenAI API ቁልፍ ምሳሌ ነው። በbackend/.env ውስጥ ትክክለኛ ቁልፍ ያስገቡና backend እንደገና ያስጀምሩ።',
     retry: 'እንደገና ይሞክሩ',
     rateLimited: 'ብዙ የውይይት ጥያቄዎች ተልከዋል። እባክዎ አንድ ደቂቃ ጠብቀው ይሞክሩ።',
     timedOut: 'ውይይቱ ምላሽ ለመስጠት ብዙ ጊዜ ወስዷል። እባክዎ እንደገና ይሞክሩ።',
@@ -100,6 +104,8 @@ export default function AIChatWidget({ user, onNavigate }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState('checking');
+  const [providerConfigured, setProviderConfigured] = useState(null);
+  const [placeholderKeyDetected, setPlaceholderKeyDetected] = useState(false);
   const [error, setError] = useState('');
   const [retryPrompt, setRetryPrompt] = useState('');
   const inputRef = useRef(null);
@@ -112,8 +118,12 @@ export default function AIChatWidget({ user, onNavigate }) {
     setStatus('checking');
     try {
       const response = await apiClient.get('/ai/health', { timeout: 7000 });
+      setProviderConfigured(response.data?.configured === true);
+      setPlaceholderKeyDetected(response.data?.placeholderKeyDetected === true);
       setStatus(response.data?.online === true ? 'online' : 'offline');
     } catch {
+      setProviderConfigured(null);
+      setPlaceholderKeyDetected(false);
       setStatus('offline');
     }
   }
@@ -144,7 +154,7 @@ export default function AIChatWidget({ user, onNavigate }) {
   async function sendMessage(event, selectedText = draft, { retry = false } = {}) {
     event?.preventDefault();
     const message = selectedText.trim();
-    if (!message || message.length > 2000 || sending) return;
+    if (!message || message.length > 1000 || sending || status === 'checking' || providerConfigured === false) return;
     const previousMessages = messagesRef.current;
     if (!retry) setMessages((current) => [...current, createMessage('user', message)]);
     setDraft('');
@@ -158,9 +168,9 @@ export default function AIChatWidget({ user, onNavigate }) {
         && previousMessages.at(-1)?.content === message
         ? previousMessages.slice(0, -1)
         : previousMessages;
-      const history = priorMessages.slice(-(19));
+      const history = priorMessages.slice(-(9));
       const response = await apiClient.post('/ai/chat', {
-        messages: [...history.map(({ role, content }) => ({ role, content: content.slice(0, 2000) })), { role: 'user', content: message }],
+        messages: [...history.map(({ role, content }) => ({ role, content: content.slice(0, 1000) })), { role: 'user', content: message }],
         language,
       }, { timeout: 35000, signal: controller.signal });
       const reply = response.data?.reply;
@@ -230,7 +240,7 @@ export default function AIChatWidget({ user, onNavigate }) {
             <span className="ai-widget-welcome-icon"><Bot size={23}/></span>
             <p>{text.welcome}</p>
             <div className="ai-widget-suggestions">
-              {text.suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => void sendMessage(undefined, suggestion)} disabled={sending}>{suggestion}</button>)}
+              {text.suggestions.map((suggestion) => <button key={suggestion} type="button" onClick={() => void sendMessage(undefined, suggestion)} disabled={sending || status === 'checking' || providerConfigured === false}>{suggestion}</button>)}
             </div>
           </div>}
           {messages.map((message) => <article className={`ai-widget-message ${message.role}`} key={message.id}>
@@ -245,7 +255,10 @@ export default function AIChatWidget({ user, onNavigate }) {
           </article>)}
           {sending && <div className="ai-widget-typing" role="status" aria-label={text.assistant}><i/><i/><i/></div>}
         </div>
-        {error && <div className="ai-widget-error" role="alert">{error}{retryPrompt && <button className="ai-widget-retry" type="button" onClick={() => void sendMessage(undefined, retryPrompt, { retry: true })} disabled={sending}>{text.retry}</button>}<button type="button" aria-label={text.close} onClick={() => setError('')}><X size={14}/></button></div>}
+        {providerConfigured === false && <p className="ai-widget-config-notice" role="status">
+          {placeholderKeyDetected ? text.placeholderKey : text.unconfigured}
+        </p>}
+        {error && <div className="ai-widget-error" role="alert">{error}{retryPrompt && <button className="ai-widget-retry" type="button" onClick={() => void sendMessage(undefined, retryPrompt, { retry: true })} disabled={sending || status === 'checking' || providerConfigured === false}>{text.retry}</button>}<button type="button" aria-label={text.close} onClick={() => setError('')}><X size={14}/></button></div>}
         <div className="ai-widget-quick-actions">
           <button type="button" onClick={() => onNavigate('/events')}><CalendarDays size={14}/>{text.events}</button>
           <button type="button" onClick={() => onNavigate('/vendors')}><Store size={14}/>{text.vendors}</button>
@@ -264,11 +277,11 @@ export default function AIChatWidget({ user, onNavigate }) {
             }}
             placeholder={text.placeholder}
             aria-label={text.placeholder}
-            maxLength={2000}
+            maxLength={1000}
             rows={1}
-            disabled={sending}
+            disabled={sending || status === 'checking' || providerConfigured === false}
           />
-          <button type="submit" aria-label={text.send} disabled={!draft.trim() || sending}><Send size={17}/></button>
+          <button type="submit" aria-label={text.send} disabled={!draft.trim() || sending || status === 'checking' || providerConfigured === false}><Send size={17}/></button>
         </form>
       </>}
     </section>}

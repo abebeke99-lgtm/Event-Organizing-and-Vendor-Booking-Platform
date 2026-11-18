@@ -552,12 +552,10 @@ export function createPostgresAdminRouter({
       email: emailSchema,
       phone: phoneSchema,
       role_id: z.coerce.number().int().positive(),
-      password: z.string()
-        .min(12, 'Password must be 12–16 characters and include uppercase, lowercase, and a number.')
-        .max(16, 'Password must be 12–16 characters and include uppercase, lowercase, and a number.')
-        .refine(isStrongPassword, 'Password must be 12–16 characters and include uppercase, lowercase, and a number.')
+      password: z.string().min(8).max(128)
+        .refine(isStrongPassword, 'Use uppercase and lowercase letters, a number, and a special character.')
         .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, 'Password is too long.'),
-      confirm_password: z.string().min(1).max(16),
+      confirm_password: z.string().min(1).max(128),
       fid_number: z.string().trim().max(120).nullable().optional()
         .transform((value) => value || null),
       business_name: z.string().trim().min(1).max(160).optional(),

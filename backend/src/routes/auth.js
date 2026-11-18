@@ -38,11 +38,8 @@ const verifyOtpSchema = emailSchema.extend({
   otp: z.string().regex(/^[0-9]{6}$/),
 }).strict();
 const resetPasswordSchema = z.object({
-  newPassword: z.string().min(1).max(256),
+  newPassword: z.string().min(8).max(128).refine(isStrongPassword),
 }).strict();
-const isStrongAdminPassword = (password) => Array.from(password).length >= 12
-  && Array.from(password).length <= 16
-  && Buffer.byteLength(password, 'utf8') <= 72;
 
 export function createAuthRouter({
   database = pool,
@@ -103,7 +100,7 @@ export function createAuthRouter({
       await connection.beginTransaction();
       await connection.execute('SELECT id FROM users WHERE id = ? LIMIT 1 FOR UPDATE', [user.id]);
       const [challenges] = await connection.execute(
-        `SELECT id, (last_sent_at > DATE_SUB(NOW(), INTERVAL ${RESEND_COOLDOWN_SECONDS} SECOND)) AS cooldown_active
+        `SELECT id, (last_sent_at > NOW() - INTERVAL '${RESEND_COOLDOWN_SECONDS} seconds') AS cooldown_active
          FROM password_reset_otp_challenges WHERE user_id = ? LIMIT 1 FOR UPDATE`,
         [user.id]
       );
@@ -116,12 +113,12 @@ export function createAuthRouter({
         `INSERT INTO password_reset_otp_challenges
           (user_id, otp_hash, otp_salt, expires_at, failed_attempts, consumed_at,
            reset_token_hash, reset_token_expires_at, reset_token_used_at, last_sent_at)
-         VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ${OTP_EXPIRY_MINUTES} MINUTE), 0, NULL,
+         VALUES (?, ?, ?, NOW() + INTERVAL '${OTP_EXPIRY_MINUTES} minutes', 0, NULL,
            NULL, NULL, NULL, NOW())
-         ON DUPLICATE KEY UPDATE otp_hash = VALUES(otp_hash), otp_salt = VALUES(otp_salt),
-           expires_at = VALUES(expires_at), failed_attempts = 0, consumed_at = NULL,
-           reset_token_hash = NULL, reset_token_expires_at = NULL, reset_token_used_at = NULL,
-           last_sent_at = NOW()`,
+         ON CONFLICT (user_id) DO UPDATE SET otp_hash = EXCLUDED.otp_hash, otp_salt = EXCLUDED.otp_salt,
+            expires_at = EXCLUDED.expires_at, failed_attempts = 0, consumed_at = NULL,
+            reset_token_hash = NULL, reset_token_expires_at = NULL, reset_token_used_at = NULL,
+            last_sent_at = NOW()`,
         [user.id, otpHash, otpSalt]
       );
       await connection.execute('DELETE FROM password_reset_tokens WHERE user_id = ?', [user.id]);
@@ -188,7 +185,7 @@ export function createAuthRouter({
       authorizationToken = randomBytes(32).toString('base64url');
       await connection.execute(
         `UPDATE password_reset_otp_challenges
-         SET consumed_at = NOW(), reset_token_hash = ?, reset_token_expires_at = DATE_ADD(NOW(), INTERVAL ${RESET_AUTHORIZATION_MINUTES} MINUTE),
+         SET consumed_at = NOW(), reset_token_hash = ?, reset_token_expires_at = NOW() + INTERVAL '${RESET_AUTHORIZATION_MINUTES} minutes',
            reset_token_used_at = NULL
          WHERE id = ?`,
         [hashToken(authorizationToken), challenge.id]
@@ -230,21 +227,6 @@ export function createAuthRouter({
         await connection.rollback();
         res.clearCookie(resetCookieName, getCookieOptions({ path: '/api/auth' }));
         return res.status(400).json({ error: resetAuthorizationMessage });
-      }
-
-      const [roles] = await connection.execute(
-        `SELECT MAX(r.is_admin = TRUE) AS has_admin_role
-         FROM user_roles ur JOIN roles r ON r.id = ur.role_id
-         WHERE ur.user_id = ?`,
-        [reset.user_id]
-      );
-      const isAdmin = Number(roles[0]?.has_admin_role) === 1;
-      const passwordValid = isAdmin
-        ? isStrongAdminPassword(parsed.data.newPassword)
-        : isStrongPassword(parsed.data.newPassword);
-      if (!passwordValid) {
-        await connection.rollback();
-        return res.status(400).json({ error: 'Enter a password that meets the password requirements.' });
       }
 
       const [updated] = await connection.execute(

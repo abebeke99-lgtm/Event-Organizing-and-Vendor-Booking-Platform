@@ -320,15 +320,16 @@ test('public chat accepts guest messages, grounds the prompt, and returns a repl
     reply: 'I found a published service in the EventHub catalogue.',
   });
   assert.equal(completionRequests.length, before + 1);
-  assert.match(completionRequests.at(-1).messages[0].content, /^You are EventHub AI, an assistant for an event planning and vendor booking platform\./);
+  assert.match(completionRequests.at(-1).messages[0].content, /^You are EventHub AI for event organizing and vendor booking/);
+  assert.match(completionRequests.at(-1).messages[0].content, /Reply in the latest user message language \(Amharic or English\)/);
   assert.match(completionRequests.at(-1).messages[0].content, /Published catering service/);
   assert.match(completionRequests.at(-1).messages[0].content, /The user is a visitor/);
   assert.match(completionRequests.at(-1).messages[0].content, /Addis Ababa/);
   assert.equal(completionRequests.at(-1).messages.at(-1).content, 'Find a vendor near me');
-  assert.equal(completionOptions.at(-1).timeout, 30_000);
+  assert.equal(completionOptions.at(-1).timeout, 20_000);
   const statusResponse = await request('/api/ai/status');
   assert.equal((await statusResponse.json()).data.liveChatVerified, true);
-  assert.equal(completionOptions.at(-1).timeout, 30_000);
+  assert.equal(completionOptions.at(-1).timeout, 20_000);
 });
 
 test('public chat retains authenticated role context for signed-in users', async () => {
@@ -379,11 +380,11 @@ test('public chat validates message count, size, and final user role', async () 
   const before = completionRequests.length;
   const tooManyMessages = await request('/api/ai/chat', {
     method: 'POST',
-    body: { messages: Array.from({ length: 21 }, () => ({ role: 'user', content: 'Hello' })) },
+    body: { messages: Array.from({ length: 11 }, () => ({ role: 'user', content: 'Hello' })) },
   });
   const tooLong = await request('/api/ai/chat', {
     method: 'POST',
-    body: { messages: [{ role: 'user', content: 'x'.repeat(2001) }] },
+    body: { messages: [{ role: 'user', content: 'x'.repeat(1001) }] },
   });
   const wrongLastRole = await request('/api/ai/chat', {
     method: 'POST',
@@ -402,8 +403,8 @@ test('provider failures are returned as errors rather than success-shaped answer
       method: 'POST',
       body: { message: 'Find an event' },
     });
-    assert.equal(response.status, 503);
-    assert.match((await response.json()).error, /temporarily unavailable/i);
+    assert.equal(response.status, 502);
+    assert.match((await response.json()).error, /provider request failed/i);
   } finally {
     completionError = null;
   }
@@ -413,14 +414,14 @@ test('invalid keys, rate limits, timeouts, and network failures are surfaced saf
   const failures = [
     {
       failure: { status: 401, code: 'invalid_api_key' },
-      expectedStatus: 503,
-      expectedMessage: 'OpenAI rejected the server API key.',
+      expectedStatus: 502,
+      expectedMessage: 'AI provider rejected the configured credentials.',
       validApiKey: 'invalid',
     },
     {
       failure: { status: 429, code: 'rate_limit_exceeded' },
       expectedStatus: 429,
-      expectedMessage: 'OpenAI is rate limiting requests.',
+      expectedMessage: 'AI provider is busy or quota-limited.',
       validApiKey: 'configured',
     },
     {
@@ -431,8 +432,8 @@ test('invalid keys, rate limits, timeouts, and network failures are surfaced saf
     },
     {
       failure: { name: 'APIConnectionError' },
-      expectedStatus: 503,
-      expectedMessage: 'Could not reach OpenAI.',
+      expectedStatus: 502,
+      expectedMessage: 'Could not reach the AI provider.',
       validApiKey: 'configured',
     },
   ];

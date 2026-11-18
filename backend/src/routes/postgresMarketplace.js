@@ -122,16 +122,25 @@ export function createPostgresMarketplaceRouter({ database }) {
         `SELECT sc.id, ${serviceScope ? 'COALESCE(sc.service_menu_name, sc.name)' : 'sc.name'} AS name,
                 sc.name AS database_name, sc.description, sc.display_order, sc.image_mime,
                 ${serviceScope ? 'sc.service_menu_order,' : ''}
-                COUNT(DISTINCT CASE WHEN vp.verification_status = 'verified' AND u.status = 'active'
-                  THEN vp.id END) AS vendor_count,
-                COUNT(DISTINCT CASE WHEN vp.verification_status = 'verified' AND u.status = 'active'
-                  AND s.status = 'active' AND s.category_id = sc.id THEN s.id END) AS service_count
+                COALESCE(vendor_counts.vendor_count, 0) AS vendor_count,
+                COALESCE(service_counts.service_count, 0) AS service_count
          FROM service_categories sc
-         LEFT JOIN vendor_profiles vp ON vp.category_id = sc.id
-         LEFT JOIN users u ON u.id = vp.user_id
-         LEFT JOIN services s ON s.vendor_id = vp.id
+         LEFT JOIN (
+           SELECT vp.category_id, COUNT(DISTINCT vp.id) AS vendor_count
+           FROM vendor_profiles vp
+           JOIN users u ON u.id = vp.user_id
+           WHERE vp.verification_status = 'verified' AND u.status = 'active'
+           GROUP BY vp.category_id
+         ) vendor_counts ON vendor_counts.category_id = sc.id
+         LEFT JOIN (
+           SELECT s.category_id, COUNT(DISTINCT s.id) AS service_count
+           FROM services s
+           JOIN vendor_profiles vp ON vp.id = s.vendor_id
+           JOIN users u ON u.id = vp.user_id
+           WHERE s.status = 'active' AND vp.verification_status = 'verified' AND u.status = 'active'
+           GROUP BY s.category_id
+         ) service_counts ON service_counts.category_id = sc.id
          WHERE sc.is_active = TRUE ${filters.length ? `AND ${filters.join(' AND ')}` : ''}
-         GROUP BY sc.id
          ORDER BY ${serviceScope ? 'sc.service_menu_order ASC' : 'name ASC'}, sc.name ASC`,
         values,
       );

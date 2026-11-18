@@ -124,7 +124,7 @@ export const vendorWorkspaceMessages = {
     vendorPersonalInformation: 'Personal information',
     vendorChangePassword: 'Change password',
     vendorCurrentPassword: 'Current password',
-    vendorPasswordRequirements: 'Use 12-16 characters with uppercase, lowercase, and a number.',
+    vendorPasswordRequirements: 'Use at least 8 characters with uppercase and lowercase letters, a number, and a special character.',
     vendorBusinessPreferences: 'Business and booking preferences',
     vendorOperatingHours: 'Operating hours',
     vendorClosedHoursExample: 'Closed or 09:00-17:00',

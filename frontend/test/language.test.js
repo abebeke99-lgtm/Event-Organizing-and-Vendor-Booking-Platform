@@ -168,6 +168,68 @@ test('ignores unsupported language changes and preserves the active preference',
   setLanguage('en');
 });
 
+test('language changes update localStorage immediately and survive storage write failures', () => {
+  const originalWindow = globalThis.window;
+  const stored = new Map([['eventhub-language', 'invalid']]);
+  const writes = [];
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => stored.get(key) ?? null,
+      setItem(key, value) {
+        writes.push([key, value]);
+        stored.set(key, value);
+      },
+    },
+  };
+  try {
+    setLanguage('am');
+    assert.equal(getLanguage(), 'am');
+    assert.equal(stored.get('eventhub-language'), 'am');
+    setLanguage('en');
+    assert.equal(getLanguage(), 'en');
+    assert.equal(stored.get('eventhub-language'), 'en');
+    assert.deepEqual(writes, [
+      ['eventhub-language', 'am'],
+      ['eventhub-language', 'en'],
+    ]);
+
+    globalThis.window.localStorage.setItem = () => {
+      throw new Error('Storage unavailable');
+    };
+    setLanguage('am');
+    assert.equal(getLanguage(), 'am');
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    setLanguage('en');
+  }
+});
+
+test('missing and unsupported stored language values initialize as English', async () => {
+  const stateKey = Symbol.for('eventflow.language-state');
+  const originalState = globalThis[stateKey];
+  const originalWindow = globalThis.window;
+
+  try {
+    for (const storedLanguage of [null, 'unsupported']) {
+      delete globalThis[stateKey];
+      globalThis.window = {
+        localStorage: {
+          getItem: () => storedLanguage,
+        },
+      };
+      const isolatedRuntime = await import(`../src/language.js?stored-language=${Date.now()}-${String(storedLanguage)}`);
+      assert.equal(isolatedRuntime.getLanguage(), 'en');
+    }
+  } finally {
+    if (originalState === undefined) delete globalThis[stateKey];
+    else globalThis[stateKey] = originalState;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    setLanguage('en');
+  }
+});
+
 test('English and Amharic resources contain the same translation keys', () => {
   assert.deepEqual(getMissingTranslationKeys('am'), []);
 });

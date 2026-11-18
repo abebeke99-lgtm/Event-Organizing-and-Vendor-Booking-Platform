@@ -94,21 +94,27 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 
 ## Deployment checklist
 
+### Neon integration-test setup
+
+Neon integration tests can create, update, and roll back database fixtures. Do not enable them until an administrator has created a separate Neon test branch and configured its pooled `DATABASE_URL` and direct `DIRECT_URL` in the ignored `backend/.env.neon-test` file. Never copy production connection strings into that file or share connection strings in chat, logs, or tracked files.
+
+The test environment loader compares the configured test host with both production endpoints from `backend/.env` and the backend process environment. It refuses to connect if either test endpoint uses the production Neon branch, even if a different database name is supplied, and fails closed if production identity cannot be verified. `npm run db:check:neon-test` checks connectivity and schema; only after the branch has been independently confirmed should Neon integration tests be enabled with `$env:RUN_NEON_INTEGRATION = 'true'` before running `npm test` from `backend`. The normal backend test command leaves these integration tests skipped.
+
 ### Render backend
 
-- Blueprint: the existing GitHub repository's `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/health`.
+- Blueprint: the existing GitHub repository's `main` branch, repository-root directory, Node 20 (`.node-version` and `engines.node`), build command `npm ci`, start command `npm run start`, health path `/api/ready`.
 - Required Render variables: `NODE_ENV=production`, `WEB_ORIGIN` (exact HTTPS frontend origin), `DB_DIALECT=postgres`, Neon pooled `DATABASE_URL`, `DB_SSL=true`, `COOKIE_SECURE=true`, and `COOKIE_SAME_SITE=none`. Render supplies `PORT`; Express binds to `0.0.0.0`. Set secrets only in the Render Dashboard.
 - Optional Render variables: `FRONTEND_URL` for email links; `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, and `SMTP_SECURE` for password-reset email; `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_CHAT_MODELS` for AI Assistant; `PAYMENT_PROVIDER_ADAPTER` only when a real payment adapter is configured; `PLATFORM_STATUS` and `MAINTENANCE_MODE` for explicit platform status overrides. Do not set `SESSION_SECRET`; it is reserved and unused. Do not create fake administrator accounts or run database initialization, migration, or seed commands against production.
 - To enable AI, configure the secret `OPENAI_API_KEY` in Render's **Environment** settings, then save and redeploy. Verify provider access with `GET /api/ai/health` and configuration with `GET /api/ai/status`. TLS certificate verification remains enabled, with Node's system CA store or the optional provider CA.
 - Hero slide files are stored under `backend/uploads/hero-slides`. Configure persistent shared storage for this directory in production (especially across deploys or multiple API instances); the database stores only generated filenames and the API serves the image bytes.
-- `GET /` is a liveness response. `GET /api/health` runs `SELECT 1` and returns HTTP 200 with `db: true` when Neon PostgreSQL is available, or HTTP 503 with `db: false` and a safe `reason` code when it is unavailable. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
+- `GET /` is a liveness response. Both `GET /api/health` and `GET /api/ready` run `SELECT 1` and return HTTP 200 with `db: true` only when Neon PostgreSQL is available; on database failure they return HTTP 503 with `db: false` and no database credentials or connection details. Render uses `/api/ready` as its service health check. `GET /api/version` reports the commit from `RENDER_GIT_COMMIT` and the runtime environment.
 - Run `npm run db:check` only in an environment configured with the real DB credentials and CA. It performs read-only checks and no schema/data changes.
 - Confirm deploy version at `/api/version`. To rebuild without cached artifacts, use **Clear build cache & deploy** in Render.
 
 ### Netlify frontend
 
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
-- Required: `VITE_API_URL` set in Netlify to the actual Render service HTTPS URL confirmed in the Render Dashboard, ending in `/api`. This is a public build-time setting, not a secret. No unverified Render hostname is baked into the repository. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
+- Before the production build, open the deployed backend service in the Render Dashboard and copy its actual HTTPS service URL. In Netlify, set the build environment variable `VITE_API_URL` to that confirmed URL, with `/api` appended (for example, copy the real hostname from Render; do not use a placeholder or localhost). `VITE_API_URL` is a public build-time setting, not a secret. No production hostname is baked into the repository. Production Vite builds reject missing, non-HTTPS, and loopback API URLs; after changing the value, trigger a fresh Netlify deploy. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
 - Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
 - The public header's phone and email are configured centrally in `frontend/src/siteSettings.js`; social profile links remain build-time settings. For local development, set the social profile URLs in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
@@ -139,7 +145,7 @@ The public **Find Vendors** menu provides a direct link to the complete vendor d
 `GET /api/platform/categories` returns every active category alphabetically. Its `categories` field is the current shape; `data` is retained as a compatibility alias for existing consumers.
 
 ```sh
-curl.exe "http://localhost:4000/api/platform/categories"
+curl.exe "http://localhost:5000/api/platform/categories"
 ```
 
 Example response:
@@ -182,7 +188,7 @@ Example response:
 `GET /api/platform/vendors` supports search, category slug, location, price, rating, availability, sorting, and pagination. For example:
 
 ```sh
-curl.exe "http://localhost:4000/api/platform/vendors?category=photography&page=1&limit=12"
+curl.exe "http://localhost:5000/api/platform/vendors?category=photography&page=1&limit=12"
 ```
 
 ### Database and seed data
@@ -282,14 +288,14 @@ For a real local reset flow, configure the isolated Neon test database and SMTP 
 
 ```powershell
 npm run migrate --prefix backend
-$env:VITE_API_URL = 'http://127.0.0.1:4000'
+$env:VITE_API_URL = 'http://127.0.0.1:5000/api'
 npm run dev --prefix backend
 ```
 
 In a second PowerShell terminal from the repository root, start the frontend:
 
 ```powershell
-$env:VITE_API_URL = 'http://127.0.0.1:4000'
+$env:VITE_API_URL = 'http://127.0.0.1:5000/api'
 npm run dev --prefix frontend
 ```
 

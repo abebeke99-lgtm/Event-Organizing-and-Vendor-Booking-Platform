@@ -15,18 +15,16 @@ test('public header uses a scroll-away utility bar and a sticky main bar', () =>
   assert.match(styleSource, /--public-utility:#12376b/);
 });
 
-test('main header retains logo, navigation, and its search control', () => {
+test('main header retains its logo and navigation without the search control', () => {
   assert.match(styleSource, /\.site-header-inner\{[^}]*max-width:1560px[^}]*display:grid;grid-template-columns/);
   assert.match(appSource, /className="header-actions public-header-actions"/);
-  assert.match(appSource, /className="public-search-anchor"/);
-  assert.match(appSource, /aria-controls="header-search-panel"/);
-  assert.match(styleSource, /\.public-search-panel/);
+  assert.doesNotMatch(appSource, /public-search-anchor|public-global-search|header-search-panel/);
   assert.doesNotMatch(styleSource, /\.site-header[^}]*width:100vw/);
 });
 
-test('tablet and mobile breakpoints use the drawer and keep search controls available', () => {
+test('tablet and mobile breakpoints keep the navigation drawer available', () => {
   assert.match(styleSource, /@media\(min-width:768px\) and \(max-width:1099px\)\{[\s\S]*?\.site-nav\{[^}]*position:fixed/);
-  assert.match(styleSource, /@media\(max-width:767px\)\{[\s\S]*?\.contact-top-bar-left\{width:100%;min-height:44px;flex-wrap:wrap;justify-content:center;gap:8px\}[\s\S]*?\.site-nav\{[^}]*position:fixed/);
+  assert.match(styleSource, /@media\(max-width:767px\)\{[\s\S]*?\.contact-top-bar-left\{width:100%;min-height:44px;flex-wrap:wrap;justify-content:center;gap:0\}[\s\S]*?\.site-nav\{[^}]*position:fixed/);
   assert.match(styleSource, /\.public-nav-backdrop\{position:fixed;inset:0/);
   assert.match(navigationSource, /document\.body\.style\.overflow = 'hidden'/);
 });
@@ -34,6 +32,7 @@ test('tablet and mobile breakpoints use the drawer and keep search controls avai
 test('skip-to-content and primary content targets are present on public pages', () => {
   assert.match(appSource, /className="skip-to-content" href="#main-content"/);
   assert.match(appSource, /className="platform-landing" id="main-content"/);
-  assert.match(appSource, /id="main-content" className="public-main-content"/);
+  assert.match(appSource, /id="main-content"/);
+  assert.match(appSource, /className="public-main-content[^\"]*"/);
   assert.match(styleSource, /\.skip-to-content:focus\{transform:translateY\(0\)/);
 });
