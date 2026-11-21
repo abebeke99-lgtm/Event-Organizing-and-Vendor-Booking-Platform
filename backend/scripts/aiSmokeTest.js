@@ -1,5 +1,5 @@
 import '../src/lib/environment.js';
-import { createAiProvider } from '../services/aiProvider.js';
+import { createAiProvider } from '../src/services/aiProvider.js';
 import { redactSensitiveContent } from '../src/lib/aiChatSecurity.js';
 
 const REQUEST_TIMEOUT_MS = 20_000;

@@ -4,45 +4,58 @@ import bcrypt from 'bcryptjs';
 import { hashPassword, isPublicRole, parsePublicLogin, parsePublicRegistration } from '../src/lib/platformAuth.js';
 
 const validRegistration = (overrides = {}) => ({
-  name: 'Hana Bekele',
+  fullName: 'Hana Bekele',
   username: 'hana_bekele',
   email: 'HANA@example.com',
   phone: '0986481821',
   password: 'StrongPass123!',
-  role: 'customer',
-  termsAccepted: true,
+  accountType: 'Customer',
+  acceptedTerms: true,
   ...overrides,
 });
 
 test('public registration accepts supported non-administrator account types', () => {
-  for (const role of ['customer', 'organizer', 'vendor']) {
-    assert.equal(parsePublicRegistration(validRegistration({ role })).success, true);
+  for (const accountType of ['Customer', 'Organizer', 'Vendor']) {
+    assert.equal(parsePublicRegistration(validRegistration({ accountType })).success, true);
   }
-  for (const role of ['admin', 'other']) {
-    assert.equal(parsePublicRegistration(validRegistration({ role })).success, false);
+  for (const accountType of ['Admin', 'Other']) {
+    assert.equal(parsePublicRegistration(validRegistration({ accountType })).success, false);
   }
 });
 
 test('registration normalizes username, email, phone, and trims name', () => {
   const result = parsePublicRegistration(validRegistration({
-    name: '  Hana Bekele ',
+    fullName: '  Hana Bekele ',
     username: ' Hana_Bekele ',
     email: ' HANA@example.com ',
     phone: ' (098) 648-1821 ',
   }));
   assert.equal(result.success, true);
-  assert.equal(result.data.name, 'Hana Bekele');
+  assert.equal(result.data.fullName, 'Hana Bekele');
   assert.equal(result.data.email, 'hana@example.com');
   assert.equal(result.data.username, 'hana_bekele');
   assert.equal(result.data.phone, '+251986481821');
-  assert.equal(parsePublicRegistration(validRegistration({ name: 'H', email: 'bad' })).success, false);
+  assert.equal(parsePublicRegistration(validRegistration({ fullName: 'H', email: 'bad' })).success, false);
+});
+
+test('registration requires a username, valid phone, and accepted terms and defaults to customer', () => {
+  for (const invalid of [
+    { username: '' },
+    { phone: '' },
+    { phone: 'not-a-phone' },
+    { acceptedTerms: false },
+  ]) {
+    assert.equal(parsePublicRegistration(validRegistration(invalid)).success, false);
+  }
+  assert.equal(parsePublicRegistration(validRegistration({ accountType: undefined })).data.accountType, 'customer');
 });
 
 test('registration enforces password complexity and required terms acceptance', () => {
-  for (const password of ['Short1!', 'lowercase12!', 'UPPERCASE12!', 'NoNumber!', 'NoSpecial123', '        ']) {
+  for (const password of ['Short1!', 'lowercase12!', 'UPPERCASE12!', 'NoNumber!', '        ']) {
     assert.equal(parsePublicRegistration(validRegistration({ password })).success, false);
   }
-  assert.equal(parsePublicRegistration(validRegistration({ termsAccepted: false })).success, false);
+  assert.equal(parsePublicRegistration(validRegistration({ acceptedTerms: false })).success, false);
+  assert.equal(parsePublicRegistration(validRegistration({ password: 'NoSpecial123' })).success, true);
   assert.equal(parsePublicRegistration(validRegistration({ password: 'ValidPass123!' })).success, true);
 });
 

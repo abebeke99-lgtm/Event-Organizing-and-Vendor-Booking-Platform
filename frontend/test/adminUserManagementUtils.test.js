@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { validateCreateUserForm } from '../src/adminUserManagementUtils.js';
+import {
+  parseUserManagementQuery,
+  updateUserManagementQuery,
+  validateCreateUserForm,
+} from '../src/adminUserManagementUtils.js';
 import { translate } from '../src/language.js';
 
 const key = (value) => value;
 const validForm = {
   full_name: 'Taylor Example',
+  username: 'taylor_example',
   email: 'taylor@example.test',
   phone: '+1 (202) 555-0123',
   password: 'StrongPass123!',
@@ -14,10 +19,54 @@ const validForm = {
   role_id: '4',
 };
 
+test('user-management query parsing applies defaults and rejects invalid filters safely', () => {
+  assert.deepEqual(parseUserManagementQuery(''), {
+    focusId: '',
+    q: '',
+    status: '',
+    role: '',
+    dateFrom: '',
+    dateTo: '',
+    sortBy: 'created_at',
+    sortDirection: 'desc',
+  });
+  assert.deepEqual(parseUserManagementQuery(
+    '?q=vendor&status=unknown&role=vendor&dateFrom=2026-02-31&sortBy=unsafe&sortDirection=up&focus=bad',
+  ), {
+    focusId: '',
+    q: 'vendor',
+    status: '',
+    role: 'vendor',
+    dateFrom: '',
+    dateTo: '',
+    sortBy: 'created_at',
+    sortDirection: 'desc',
+  });
+});
+
+test('user-management query parsing and updates preserve valid filters and unrelated parameters', () => {
+  const filters = parseUserManagementQuery(
+    '?q=vendor&status=active&role=vendor&dateFrom=2026-01-01&dateTo=2026-01-31&sortBy=email&sortDirection=asc&focus=42&tab=users',
+  );
+  assert.deepEqual(filters, {
+    focusId: '42',
+    q: 'vendor',
+    status: 'active',
+    role: 'vendor',
+    dateFrom: '2026-01-01',
+    dateTo: '2026-01-31',
+    sortBy: 'email',
+    sortDirection: 'asc',
+  });
+  assert.equal(updateUserManagementQuery('?focus=42&tab=users', filters),
+    'focus=42&tab=users&q=vendor&status=active&role=vendor&dateFrom=2026-01-01&dateTo=2026-01-31&sortBy=email&sortDirection=asc');
+});
+
 test('create-user validation reports required, format, password, and phone errors', () => {
   const errors = validateCreateUserForm({
     ...validForm,
     full_name: ' ',
+    username: '',
     email: 'not-an-email',
     phone: '12x',
     password: 'weak',
@@ -27,6 +76,7 @@ test('create-user validation reports required, format, password, and phone error
 
   assert.deepEqual(errors, {
     full_name: 'adminUserFullNameRequired',
+    username: 'adminUserUsernameRequired',
     email: 'adminUserEmailInvalid',
     phone: 'adminUserPhoneInvalid',
     password: 'adminUserPasswordRequirements',
@@ -62,12 +112,9 @@ test('vendor fields validate with localized messages', () => {
   assert.match(errors.category_id, /ምድብ/);
 });
 
-test('customer and administrator roles are rejected by create-user form validation', () => {
+test('authorized user management permits customer and administrator roles', () => {
   for (const roleId of ['2', '1']) {
-    assert.equal(
-      validateCreateUserForm({ ...validForm, role_id: roleId }, key, undefined, ['3', '4']).role_id,
-      'adminUserRoleNotAllowed',
-    );
+    assert.equal(validateCreateUserForm({ ...validForm, role_id: roleId }, key, undefined, ['1', '2', '3', '4']).role_id, undefined);
   }
 });
 

@@ -192,7 +192,14 @@ test('registration uses the shared layout and validates required fields, email, 
   assert.match(registerSource, /registrationPasswordRequired/);
   assert.match(registerSource, /registrationPasswordMinimum/);
   assert.match(registerSource, /registrationConfirmPasswordRequired/);
-  assert.doesNotMatch(registerSource, /name="role"|registrationRole|OAuthButtons|oauth-divider/);
+  assert.match(registerSource, /name="accountType"/);
+  assert.match(registerSource, /option value="Customer"/);
+  assert.match(registerSource, /option value="Organizer"/);
+  assert.match(registerSource, /option value="Vendor"/);
+  assert.doesNotMatch(registerSource, /OAuthButtons|oauth-divider/);
+  assert.match(registerSource, /registrationPasswordMinimum/);
+  assert.match(registerSource, /registrationPasswordTooLong/);
+  assert.doesNotMatch(registerSource, /\/\[\^A-Za-z0-9\]\//);
   assert.match(registerSource, /passwordMismatch/);
   assert.match(registerSource, /disabled=\{busy \|\| !registrationEnabled\}/);
   assert.match(registerSource, /registration-login-link/);

@@ -21,6 +21,12 @@ export const phoneSchema = z.string()
   .transform(normalizePhoneNumber)
   .optional();
 
+const registrationPhoneSchema = z.string()
+  .trim()
+  .max(24)
+  .transform(normalizePhoneNumber)
+  .refine((phone) => /^\+[1-9]\d{7,14}$/.test(phone), 'Enter a valid phone number.');
+
 export const emailSchema = z.string()
   .trim()
   .email('Enter a valid email address.')
@@ -39,18 +45,40 @@ export const strongPasswordSchema = z.string()
   .refine((password) => /\d/.test(password), {
     message: 'Password must include a number.',
   })
+  .refine((password) => /[^A-Za-z0-9]/.test(password), {
+    message: 'Password must include a special character.',
+  })
+  .refine((password) => Buffer.byteLength(password, 'utf8') <= 72, {
+    message: 'Password must use 72 UTF-8 bytes or fewer.',
+  });
+
+export const publicRegistrationPasswordSchema = z.string()
+  .min(8, 'Password must be at least 8 characters.')
+  .max(128, 'Password must be 128 characters or fewer.')
+  .refine((password) => /[A-Z]/.test(password), {
+    message: 'Password must include an uppercase letter.',
+  })
+  .refine((password) => /[a-z]/.test(password), {
+    message: 'Password must include a lowercase letter.',
+  })
+  .refine((password) => /\d/.test(password), {
+    message: 'Password must include a number.',
+  })
   .refine((password) => Buffer.byteLength(password, 'utf8') <= 72, {
     message: 'Password must use 72 UTF-8 bytes or fewer.',
   });
 
 export const publicRegistrationSchema = z.object({
-  name: z.string().trim().min(2, 'Enter your full name using at least 2 characters.').max(160),
+  fullName: z.string().trim().min(2, 'Enter your full name using at least 2 characters.').max(160),
   username: usernameSchema.optional(),
   email: emailSchema,
-  phone: phoneSchema.optional(),
-  password: strongPasswordSchema,
-  role: z.enum(['customer', 'organizer', 'vendor']).optional(),
-  termsAccepted: z.literal(true).optional(),
+  phone: registrationPhoneSchema,
+  password: publicRegistrationPasswordSchema,
+  accountType: z.enum(['Customer', 'Organizer', 'Vendor']).default('Customer')
+    .transform((accountType) => accountType.toLowerCase()),
+  acceptedTerms: z.literal(true, {
+    error: 'You must accept the terms and privacy policy.',
+  }),
 }).strict();
 
 export function parseLoginIdentifier(value) {

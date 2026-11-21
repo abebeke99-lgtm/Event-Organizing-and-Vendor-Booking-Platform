@@ -32,3 +32,15 @@ test('dashboard presets handle month and year boundaries and custom dates', () =
     endDate: '2026-10-16',
   });
 });
+
+test('dashboard monthly and yearly presets use local calendar boundaries', () => {
+  const now = new Date(2026, 10, 18);
+  assert.deepEqual(getDashboardDateRange('monthly', now), {
+    startDate: '2026-11-01',
+    endDate: '2026-11-18',
+  });
+  assert.deepEqual(getDashboardDateRange('yearly', now), {
+    startDate: '2026-01-01',
+    endDate: '2026-11-18',
+  });
+});

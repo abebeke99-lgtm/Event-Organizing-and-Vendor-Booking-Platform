@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import express from 'express';
 import { resolve } from 'node:path';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { createAiChatRouter } from '../src/routes/aiChat.js';
-import { createAiProvider, getAiProviderConfiguration } from '../services/aiProvider.js';
+import { createAiProvider, getAiProviderConfiguration } from '../src/services/aiProvider.js';
 
 const providers = [
   {
@@ -359,7 +361,7 @@ test('public chat is limited to 20 requests per minute per IP', async () => {
 });
 
 test('AI smoke test reports missing keys without printing environment values', () => {
-  const script = resolve(process.cwd(), 'scripts', 'aiSmokeTest.js');
+  const script = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'aiSmokeTest.js');
   const result = spawnSync(process.execPath, [script], {
     cwd: resolve(process.cwd()),
     encoding: 'utf8',

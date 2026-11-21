@@ -26,6 +26,7 @@ import { getPublicVendorById, listPublicVendors } from '../lib/vendorCatalog.js'
 import { createEventSchema, dateTimeSchema, toMysqlDateTime } from '../lib/eventInput.js';
 import { partialEventSchema } from '../lib/eventInput.js';
 import { isEventOpenForBookings } from '../lib/adminEvents.js';
+import { parseLoginIdentifier, publicRegistrationSchema } from '../lib/accountValidation.js';
 import {
   checkBookingDateAvailability,
   lockBookingVendor,
@@ -1003,6 +1004,65 @@ router.patch('/events/:id', requirePlatformUser, async (req, res) => {
   });
   if (updateResult.error) return res.status(updateResult.status).json({ error: updateResult.error });
   return res.json({ data: { id: Number(current.id), ...value, status: current.status } });
+});
+
+router.delete('/events/:id', requirePlatformUser, async (req, res) => {
+  if (!['organizer', 'customer'].includes(req.platformUser.role)) {
+    return res.status(403).json({ error: 'Only event owners can delete events.' });
+  }
+  const id = z.coerce.number().int().positive().safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'Event ID is invalid.' });
+
+  const database = databaseFor(req);
+  const result = await inDatabaseTransaction(database, async (connection) => {
+    const [rows] = await connection.execute(
+      'SELECT id, organizer_id, status FROM events WHERE id = ? FOR UPDATE',
+      [id.data],
+    );
+    const event = rows[0];
+    if (!event || Number(event.organizer_id) !== Number(req.platformUser.id)) {
+      return { status: 404, error: 'Event not found.' };
+    }
+    if (event.status !== 'draft') {
+      return { status: 409, error: 'Only draft events can be deleted.' };
+    }
+
+    for (const [table, message] of [
+      ['bookings', 'Events with bookings cannot be deleted.'],
+      ['event_history', 'Events with planning history cannot be deleted.'],
+      ['event_budget_categories', 'Events with budget records cannot be deleted.'],
+      ['event_expenses', 'Events with expenses cannot be deleted.'],
+      ['event_vendor_tasks', 'Events with vendor tasks cannot be deleted.'],
+      ['event_ticket_bookings', 'Events with ticket bookings cannot be deleted.'],
+    ]) {
+      const [references] = await connection.execute(
+        `SELECT COUNT(*) AS total FROM ${table} WHERE event_id = ?`,
+        [id.data],
+      );
+      if (Number(references[0]?.total || 0) > 0) {
+        return { status: 409, error: message };
+      }
+    }
+
+    const [deleted] = await connection.execute(
+      `DELETE FROM events WHERE id = ? AND organizer_id = ? AND status = 'draft'`,
+      [id.data, req.platformUser.id],
+    );
+    if (!Number(deleted.affectedRows || 0)) {
+      return { status: 409, error: 'Event changed before it could be deleted. Refresh and try again.' };
+    }
+    await writeAudit(connection, {
+      actorId: req.platformUser.id,
+      action: 'event.deleted',
+      entityType: 'event',
+      entityId: id.data,
+      details: { previousStatus: event.status },
+      ip: req.ip,
+    });
+    return { status: 204 };
+  });
+  if (result.error) return res.status(result.status).json({ error: result.error });
+  return res.status(204).end();
 });
 
 router.patch('/events/:id/publish', requirePlatformUser, async (req, res) => {
@@ -2137,31 +2197,28 @@ router.patch('/quotations/:id/respond', requirePlatformUser, asyncHandler(async 
 }));
 
 router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
-  if (req.body && Object.hasOwn(req.body, 'role')
-    && !['customer', 'organizer', 'vendor'].includes(req.body.role)) {
-    return res.status(403).json({ error: 'Choose a supported account type.' });
+  if (String(req.body?.accountType || '').toLowerCase() === 'admin') {
+    return res.status(403).json({ error: 'Admin accounts can only be created by an authorized administrator.' });
   }
-  const schema = z.object({
-    name: z.string().trim().min(2).max(160),
-    email: emailSchema,
-    password: z.string()
-      .min(8, 'Password must be at least 8 characters.')
-      .max(128, 'Password must be 128 characters or fewer.')
-      .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, {
-        message: 'Password must use 72 UTF-8 bytes or fewer.',
-      }),
-    role: z.enum(['customer', 'organizer', 'vendor']).default('customer'),
-  }).strict();
-  const parsed = schema.safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid registration.' });
+  const parsed = publicRegistrationSchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: parsed.error.issues[0]?.message || 'Invalid registration.',
+    });
+  }
+
+  if (!parsed.data.acceptedTerms) {
+    return res.status(400).json({ error: 'You must accept the terms and privacy policy.' });
+  }
 
   const database = databaseFor(req);
   const systemSettings = await loadSystemSettings(database, ['public_registration_enabled']);
   if (!systemSettings.public_registration_enabled) {
     return res.status(403).json({ error: 'Public registration is currently disabled.' });
   }
-  const normalizedEmail = parsed.data.email.toLowerCase();
-  const roleName = parsed.data.role;
+  const normalizedEmail = parsed.data.email;
+  const { phone } = parsed.data;
+  const roleName = parsed.data.accountType;
   const passwordHash = await bcrypt.hash(parsed.data.password, 12);
   const preferredLanguage = req.language === 'am' ? 'am' : 'en';
   let created;
@@ -2171,7 +2228,7 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
         'SELECT id FROM users WHERE LOWER(email) = LOWER(?) LIMIT 1 FOR UPDATE',
         [normalizedEmail],
       );
-      if (existingEmail) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
+      if (existingEmail) throw Object.assign(new Error('That email address is already in use.'), { status: 409 });
       const [[role]] = await connection.execute(
         'SELECT id FROM roles WHERE LOWER(name) = ? AND is_active = TRUE AND is_admin = FALSE LIMIT 1',
         [roleName],
@@ -2179,13 +2236,14 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
       if (!role) throw Object.assign(new Error('The selected account type is unavailable.'), { status: 503 });
 
       const [result] = await connection.execute(
-        `INSERT INTO users (full_name, email, phone, password_hash, status, preferred_language)
-         VALUES (?, ?, ?, ?, 'active', ?)`,
-        [parsed.data.name, normalizedEmail, null, passwordHash, preferredLanguage],
+        `INSERT INTO users
+           (full_name, email, phone, password_hash, status, preferred_language, terms_accepted_at)
+         VALUES (?, ?, ?, ?, 'active', ?, CURRENT_TIMESTAMP)`,
+        [parsed.data.fullName, normalizedEmail, phone, passwordHash, preferredLanguage],
       );
       await connection.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [result.insertId, role.id]);
       if (roleName === 'vendor') {
-        await ensureVendorProfileRecord(result.insertId, parsed.data.name, connection);
+        await ensureVendorProfileRecord(result.insertId, parsed.data.fullName, connection);
       }
       const { token } = await createUserSession(connection, result.insertId);
       await writeAudit(connection, {
@@ -2198,7 +2256,7 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
       });
       await notifyAdministrators(connection, {
         title: 'New user registration',
-        message: `${parsed.data.name} registered with the ${roleName} role.`,
+        message: `${parsed.data.fullName} registered with the ${roleName} role.`,
         type: 'user_registration',
         relatedType: 'user',
         relatedId: result.insertId,
@@ -2209,8 +2267,8 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
     });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
-    if (error.code === 'ER_DUP_ENTRY') {
-      return res.status(409).json({ error: 'An account with this email or phone number already exists.' });
+    if (error.code === 'ER_DUP_ENTRY' || error.code === '23505') {
+      return res.status(409).json({ error: 'That email address is already in use.' });
     }
     throw error;
   }
@@ -2218,79 +2276,98 @@ router.post('/register', registrationLimiter, asyncHandler(async (req, res) => {
   setPlatformCookie(res, created.token);
   return res.status(201).json({
     data: {
-      user: { id: created.id, name: parsed.data.name, full_name: parsed.data.name, email: normalizedEmail, role: roleName, preferred_language: preferredLanguage },
+      user: {
+        id: created.id,
+        name: parsed.data.fullName,
+        full_name: parsed.data.fullName,
+        email: normalizedEmail,
+        phone,
+        role: roleName,
+        preferred_language: preferredLanguage,
+      },
     },
   });
 }));
 
 export const platformLoginHandler = asyncHandler(async (req, res) => {
   const schema = z.object({
-    email: emailSchema,
+    email: z.string().trim().min(1).max(254),
     password: z.string().min(1).max(128),
   });
   const parsed = schema.safeParse(req.body || {});
-  if (!parsed.success) return res.status(400).json({ error: 'Enter a valid email and password.' });
+  const identifier = parsed.success ? parseLoginIdentifier(parsed.data.email) : null;
+  if (!parsed.success || !identifier) {
+    return res.status(400).json({ message: 'Enter a valid username or email and password.' });
+  }
 
   const database = databaseFor(req);
-  const [rows] = await database.execute(
-    `SELECT u.id, u.full_name, u.email, u.password_hash, u.status,
-            LOWER(r.name) AS role, r.is_admin, r.is_active AS role_is_active
-     FROM users u
-     JOIN user_roles ur ON ur.user_id = u.id
-     JOIN roles r ON r.id = ur.role_id
-     WHERE LOWER(u.email) = ?
-     ORDER BY r.is_active DESC,
-       CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN 1
-            WHEN LOWER(r.name) = 'organizer' THEN 2
-            WHEN LOWER(r.name) = 'vendor' THEN 3
-            WHEN LOWER(r.name) = 'customer' THEN 4 ELSE 5 END
-     LIMIT 1`,
-    [parsed.data.email]
-  );
-  const user = rows[0];
-  if (!user || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
-    return res.status(401).json({ error: 'Invalid email or password.' });
-  }
-  if (user.status !== 'active') {
-    const message = user.status === 'pending'
-      ? 'This account is pending verification. Complete account verification before signing in.'
-      : 'This account is inactive. Contact support for assistance.';
-    return res.status(403).json({ error: message });
-  }
-  if (!Number(user.role_is_active)) {
-    return res.status(403).json({ error: 'This account role is inactive. Contact support for assistance.' });
-  }
-  const role = Number(user.is_admin) || ['admin', 'administrator'].includes(user.role)
-    ? 'admin'
-    : user.role;
-  if (!['admin', 'organizer', 'vendor', 'customer'].includes(role)) {
-    return res.status(403).json({ error: 'This account role is not permitted to sign in.' });
-  }
+  try {
+    const [rows] = await database.execute(
+      `SELECT u.id, u.full_name, u.username, u.email, u.phone, u.password_hash, u.status,
+              LOWER(r.name) AS role, r.is_admin, r.is_active AS role_is_active
+       FROM users u
+       JOIN user_roles ur ON ur.user_id = u.id
+       JOIN roles r ON r.id = ur.role_id
+       WHERE LOWER(u.email) = ? OR LOWER(u.username) = ?
+       ORDER BY r.is_active DESC,
+         CASE WHEN r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator') THEN 1
+              WHEN LOWER(r.name) = 'organizer' THEN 2
+              WHEN LOWER(r.name) = 'vendor' THEN 3
+              WHEN LOWER(r.name) = 'customer' THEN 4 ELSE 5 END
+       LIMIT 1`,
+      [identifier, identifier]
+    );
+    const user = rows[0];
+    if (!user || !user.password_hash
+      || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
+      return res.status(401).json({ message: 'Invalid username/email or password' });
+    }
+    if (user.status !== 'active') {
+      const message = user.status === 'pending'
+        ? 'This account is pending verification. Complete account verification before signing in.'
+        : 'This account is inactive. Contact support for assistance.';
+      return res.status(403).json({ message });
+    }
+    if (!Number(user.role_is_active)) {
+      return res.status(403).json({ message: 'This account role is inactive. Contact support for assistance.' });
+    }
+    const role = Number(user.is_admin) || ['admin', 'administrator'].includes(user.role)
+      ? 'admin'
+      : user.role;
+    if (!['admin', 'organizer', 'vendor', 'customer'].includes(role)) {
+      return res.status(403).json({ message: 'This account role is not permitted to sign in.' });
+    }
 
-  await database.execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
-  const token = await inDatabaseTransaction(database, async (connection) => {
-    const session = await createUserSession(connection, user.id);
-    if (role === 'vendor') await ensureVendorProfileRecord(user.id, user.full_name, connection);
-    await writeAudit(connection, {
-      actorId: user.id,
-      action: 'auth.login',
-      entityType: 'user',
-      entityId: user.id,
-      details: { role },
-      ip: req.ip,
+    await database.execute('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
+    const token = await inDatabaseTransaction(database, async (connection) => {
+      const session = await createUserSession(connection, user.id);
+      if (role === 'vendor') await ensureVendorProfileRecord(user.id, user.full_name, connection);
+      await writeAudit(connection, {
+        actorId: user.id,
+        action: 'auth.login',
+        entityType: 'user',
+        entityId: user.id,
+        details: { role },
+        ip: req.ip,
+      });
+      return session.token;
     });
-    return session.token;
-  });
 
-  setPlatformCookie(res, token);
-  return res.json({
-    user: {
-      id: user.id,
-      name: user.full_name,
-      email: user.email,
-      role,
-    },
-  });
+    setPlatformCookie(res, token);
+    return res.json({
+      user: {
+        id: user.id,
+        name: user.full_name,
+        username: user.username,
+        email: user.email,
+        phone: user.phone,
+        role,
+      },
+    });
+  } catch (error) {
+    console.error('Platform login failed:', error);
+    return res.status(500).json({ message: 'Sign-in is temporarily unavailable. Please try again.' });
+  }
 });
 
 router.post('/login', platformLoginLimiter, platformLoginHandler);

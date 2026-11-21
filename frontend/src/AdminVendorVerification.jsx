@@ -13,6 +13,11 @@ const statusTabs = [
   { key: 'rejected', label: 'Rejected' },
   { key: 'suspended', label: 'Suspended' },
 ];
+const vendorManagementStatusTabs = [
+  { key: '', label: 'All vendors' },
+  { key: 'verified', label: 'Verified' },
+  { key: 'suspended', label: 'Suspended' },
+];
 
 function statusLabel(status = '') {
   return status.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -41,7 +46,7 @@ function availableActions(status) {
   return [];
 }
 
-export default function AdminVendorVerification() {
+export default function AdminVendorVerification({ management = window.location.pathname === '/admin/vendors' } = {}) {
   const focusId = new URLSearchParams(window.location.search).get('focus');
   const [applications, setApplications] = useState([]);
   const [counts, setCounts] = useState({});
@@ -110,6 +115,7 @@ export default function AdminVendorVerification() {
     () => applications.find((item) => String(item.id) === String(selectedId)),
     [applications, selectedId],
   );
+  const visibleStatusTabs = management ? vendorManagementStatusTabs : statusTabs;
 
   function submitSearch(event) {
     event.preventDefault();
@@ -180,17 +186,19 @@ export default function AdminVendorVerification() {
     <div className="av-page">
       <header className="av-heading">
         <div>
-          <p className="eyebrow">VENDOR ONBOARDING</p>
-          <h2>Vendor Verification</h2>
-          <p className="muted">Review vendor information and documents before approving access.</p>
+          <p className="eyebrow">{management ? 'VENDOR MANAGEMENT' : 'VENDOR ONBOARDING'}</p>
+          <h2>{management ? 'Vendor Management' : 'Vendor Verification'}</h2>
+          <p className="muted">{management
+            ? 'Search and filter vendors, view their profiles, and suspend or activate verified accounts.'
+            : 'Review vendor information and documents before approving access.'}</p>
         </div>
-        <span className="av-total"><Building2 size={16}/>{pagination.total} applications</span>
+        <span className="av-total"><Building2 size={16}/>{pagination.total} {management ? 'vendors' : 'applications'}</span>
       </header>
 
       {error && <div className="alert error" role="alert">{error}<button className="dismiss" type="button" onClick={() => setError('')}>Dismiss</button></div>}
 
-      <div className="av-tabs" role="tablist" aria-label="Filter vendor applications">
-        {statusTabs.map((tab) => (
+      <div className="av-tabs" role="tablist" aria-label={management ? 'Filter vendors' : 'Filter vendor applications'}>
+        {visibleStatusTabs.map((tab) => (
           <button
             type="button"
             role="tab"
@@ -205,14 +213,14 @@ export default function AdminVendorVerification() {
       </div>
 
       <form className="av-search panel" onSubmit={submitSearch}>
-        <label className="av-search-field"><Search size={16}/><input aria-label="Search vendor applications" placeholder="Search business, owner, email, phone, or application ID" value={query} onChange={(event) => setQuery(event.target.value)}/></label>
+        <label className="av-search-field"><Search size={16}/><input aria-label={management ? 'Search vendors' : 'Search vendor applications'} placeholder={`Search business, owner, email, phone, or ${management ? 'vendor' : 'application'} ID`} value={query} onChange={(event) => setQuery(event.target.value)}/></label>
         <button className="button" type="submit">Search</button>
       </form>
 
       <div className="av-layout">
-        <section className="panel av-list-panel" aria-label="Vendor applications">
-          <div className="av-list-heading"><strong>{status ? statusLabel(status) : 'All'} applications</strong><span>{pagination.total} results</span></div>
-          {loading ? <div className="av-loading"><span className="spinner"/>Loading vendor applications…</div>
+        <section className="panel av-list-panel" aria-label={management ? 'Vendors' : 'Vendor applications'}>
+          <div className="av-list-heading"><strong>{status ? statusLabel(status) : 'All'} {management ? 'vendors' : 'applications'}</strong><span>{pagination.total} results</span></div>
+          {loading ? <div className="av-loading"><span className="spinner"/>Loading {management ? 'vendors' : 'vendor applications'}…</div>
             : applications.length ? <div className="av-list">
               {applications.map((application) => (
                 <button
@@ -230,7 +238,7 @@ export default function AdminVendorVerification() {
                   <span className={`av-status ${application.verification_status}`}>{statusLabel(application.verification_status)}</span>
                 </button>
               ))}
-            </div> : <div className="av-empty">No vendor applications match this filter.</div>}
+            </div> : <div className="av-empty">No {management ? 'vendors' : 'vendor applications'} match this filter.</div>}
           {!loading && pagination.totalPages > 1 && <div className="av-pagination">
             <button type="button" className="button secondary" disabled={pagination.page <= 1} onClick={() => loadApplications(pagination.page - 1)}>Previous</button>
             <span>Page {pagination.page} of {pagination.totalPages}</span>
@@ -242,7 +250,7 @@ export default function AdminVendorVerification() {
           {detailLoading ? <div className="av-loading"><span className="spinner"/>Loading application details…</div>
             : detail ? <>
               <div className="av-detail-heading">
-                <div><p className="eyebrow">APPLICATION #{detail.id}</p><h3>{detail.business_name}</h3><span className={`av-status ${detail.verification_status}`}>{statusLabel(detail.verification_status)}</span></div>
+                <div><p className="eyebrow">{management ? 'VENDOR' : 'APPLICATION'} #{detail.id}</p><h3>{detail.business_name}</h3><span className={`av-status ${detail.verification_status}`}>{statusLabel(detail.verification_status)}</span></div>
                 {detail.verification_status === 'suspended' && <ShieldAlert className="av-warning" size={20}/>}
               </div>
               {detail.verification_status === 'verified' && <div className="av-actions">
@@ -277,14 +285,18 @@ export default function AdminVendorVerification() {
                 ))}</ol> : <p>No verification history is available.</p>}
               </section>
 
-              {availableActions(detail.verification_status).length > 0 && <div className="av-actions">
-                {availableActions(detail.verification_status).map(([nextStatus, label]) => (
+              {(management
+                ? (['verified', 'suspended'].includes(detail.verification_status) ? availableActions(detail.verification_status) : [])
+                : availableActions(detail.verification_status)).length > 0 && <div className="av-actions">
+                {(management
+                  ? (['verified', 'suspended'].includes(detail.verification_status) ? availableActions(detail.verification_status) : [])
+                  : availableActions(detail.verification_status)).map(([nextStatus, label]) => (
                   <button
                     type="button"
                     className={`button ${['rejected', 'suspended'].includes(nextStatus) ? 'danger' : nextStatus === 'under_review' ? 'secondary' : ''}`}
                     key={nextStatus}
                     onClick={() => beginAction(nextStatus, label)}
-                  >{nextStatus === 'verified' ? <BadgeCheck size={15}/> : null}{label}</button>
+                  >{nextStatus === 'verified' ? <BadgeCheck size={15}/> : null}{management && nextStatus === 'verified' ? 'Activate vendor' : label}</button>
                 ))}
               </div>}
             </> : <div className="av-empty">Select an application to review.</div>}

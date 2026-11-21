@@ -205,6 +205,7 @@ test('user management endpoints require an authenticated administrator', async (
       full_name: 'Unauthorized Organizer',
       email: 'unauthorized@example.test',
       password: 'StrongInitialPassword123',
+      confirm_password: 'StrongInitialPassword123',
       role_id: 4,
     }),
   });
@@ -220,10 +221,12 @@ test('public registration allows supported non-admin roles and rejects administr
         'X-Forwarded-For': `198.51.100.${index + 30}`,
       },
       body: JSON.stringify({
-        name: 'New Account',
+        fullName: 'New Account',
         email: `${role}@example.test`,
-        password: 'StrongPass123',
-        role,
+        phone: index === 0 ? '+12025550130' : '+12025550131',
+        password: 'StrongPass123!',
+        accountType: role === 'organizer' ? 'Organizer' : 'Vendor',
+        acceptedTerms: true,
       }),
     });
     assert.equal(response.status, 201);
@@ -237,14 +240,18 @@ test('public registration allows supported non-admin roles and rejects administr
       'X-Forwarded-For': '198.51.100.32',
     },
     body: JSON.stringify({
-      name: 'Self Registered Admin',
+      fullName: 'Self Registered Admin',
       email: 'self-admin@example.test',
-      password: 'StrongPass123',
-      role: 'admin',
+      phone: '+12025550132',
+      password: 'StrongPass123!',
+      accountType: 'Admin',
+      acceptedTerms: true,
     }),
   });
   assert.equal(administrator.status, 403);
-  assert.deepEqual(await administrator.json(), { error: 'Choose a supported account type.' });
+  assert.deepEqual(await administrator.json(), {
+    error: 'Admin accounts can only be created by an authorized administrator.',
+  });
 });
 
 test('public registration creates an authenticated customer account by default', async () => {
@@ -255,9 +262,12 @@ test('public registration creates an authenticated customer account by default',
       'X-Forwarded-For': '198.51.100.33',
     },
     body: JSON.stringify({
-      name: 'Public Customer',
+      fullName: 'Public Customer',
       email: 'public-customer@example.test',
-      password: 'StrongPass123',
+      phone: '+12025550133',
+      password: 'StrongPass123!',
+      accountType: 'Customer',
+      acceptedTerms: true,
     }),
   });
   assert.equal(response.status, 201);
@@ -315,6 +325,7 @@ test('administrator can create organizer and vendor accounts with a bcrypt-hashe
       email: ' NEW@example.test ',
       phone: '',
       password: 'StrongInitialPassword123',
+      confirm_password: 'StrongInitialPassword123',
       role_id: 4,
       status: 'suspended',
     }),
@@ -333,6 +344,7 @@ test('administrator can create organizer and vendor accounts with a bcrypt-hashe
       full_name: 'New Vendor',
       email: 'vendor@example.test',
       password: 'StrongInitialPassword123',
+      confirm_password: 'StrongInitialPassword123',
       role_id: 5,
     }),
   });
@@ -346,6 +358,7 @@ test('administrator can create organizer and vendor accounts with a bcrypt-hashe
       full_name: 'Duplicate User',
       email: 'jordan@example.test',
       password: 'StrongInitialPassword123',
+      confirm_password: 'StrongInitialPassword123',
       role_id: 4,
     }),
   });
@@ -361,6 +374,7 @@ test('administrator can create organizer and vendor accounts with a bcrypt-hashe
       email: 'different@example.test',
       phone: '+12025550123',
       password: 'StrongInitialPassword123',
+      confirm_password: 'StrongInitialPassword123',
       role_id: 4,
     }),
   });
@@ -374,6 +388,7 @@ test('administrator can create organizer and vendor accounts with a bcrypt-hashe
       full_name: 'Unauthorized Administrator',
       email: 'new-admin@example.test',
       password: 'StrongInitialPassword123',
+      confirm_password: 'StrongInitialPassword123',
       role_id: 1,
     }),
   });
@@ -386,6 +401,7 @@ test('administrator can create organizer and vendor accounts with a bcrypt-hashe
       full_name: 'Admin-created Customer',
       email: 'customer@example.test',
       password: 'StrongInitialPassword123',
+      confirm_password: 'StrongInitialPassword123',
       role_id: 3,
     }),
   });
@@ -401,6 +417,7 @@ test('administrator can create organizer and vendor accounts, and vendor profile
         full_name: 'Platform Account',
         email: `role-${roleId}@example.test`,
         password: 'StrongInitialPassword123',
+        confirm_password: 'StrongInitialPassword123',
         role_id: roleId,
         status,
       }),

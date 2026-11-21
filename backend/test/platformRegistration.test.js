@@ -7,7 +7,6 @@ import { hashToken } from '../src/lib/security.js';
 
 function createDatabase() {
   const usersByEmail = new Map();
-  const usersByUsername = new Map();
   const sessionsByHash = new Map();
   const roleAssignments = [];
   const audits = [];
@@ -32,19 +31,14 @@ function createDatabase() {
       const user = usersByEmail.get(String(values[0]).toLowerCase());
       return [user ? [{ id: user.id }] : [], []];
     }
-    if (sql.includes('SELECT id FROM users WHERE LOWER(username) = LOWER(?)')) {
-      const user = usersByUsername.get(String(values[0]).toLowerCase());
-      return [user ? [{ id: user.id }] : [], []];
-    }
     if (sql.includes('SELECT id FROM roles WHERE LOWER(name) = ?')) {
       return [[{ id: roleIds[values[0]] }], []];
     }
     if (sql.startsWith('INSERT INTO users')) {
-      const [fullName, username, email, phone, passwordHash, preferredLanguage] = values;
+      const [fullName, email, phone, passwordHash, preferredLanguage] = values;
       const id = nextUserId++;
-      const user = { id, full_name: fullName, username, email, phone, password_hash: passwordHash, preferred_language: preferredLanguage, status: 'active' };
+      const user = { id, full_name: fullName, email, phone, password_hash: passwordHash, preferred_language: preferredLanguage, status: 'active' };
       usersByEmail.set(email, user);
-      usersByUsername.set(username, user);
       return [{ insertId: id, affectedRows: 1 }, []];
     }
     if (sql.startsWith('INSERT INTO user_roles')) {
@@ -80,7 +74,6 @@ function createDatabase() {
 
   return {
     usersByEmail,
-    usersByUsername,
     roleAssignments,
     audits,
     async execute(...args) { return execute(...args); },
@@ -119,10 +112,9 @@ function register(body, headers = {}) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify({
-      username: 'test_user',
       phone: '0986481821',
-      role: 'customer',
-      termsAccepted: true,
+      accountType: 'Customer',
+      acceptedTerms: true,
       ...body,
     }),
   });
@@ -130,9 +122,8 @@ function register(body, headers = {}) {
 
 test('public registration creates and authenticates a persisted customer account', async () => {
   const response = await register({
-    name: 'Hana Bekele',
+    fullName: 'Hana Bekele',
     email: 'HANA@example.test',
-    username: 'hana_bekele',
     phone: '0986481821',
     password: 'StrongPass123!',
   }, { 'Accept-Language': 'am' });
@@ -141,12 +132,13 @@ test('public registration creates and authenticates a persisted customer account
   assert.equal(response.status, 201, JSON.stringify(body));
   assert.equal(body.data.user.role, 'customer');
   assert.equal(body.data.user.email, 'hana@example.test');
-  assert.equal(body.data.user.username, 'hana_bekele');
+  assert.equal(Object.hasOwn(body.data.user, 'username'), false);
   assert.equal(body.data.user.phone, '+251986481821');
   assert.equal(database.roleAssignments.at(-1).roleId, 3);
   assert.equal(database.audits.length, 1);
   const savedUser = database.usersByEmail.get('hana@example.test');
   assert.equal(savedUser.preferred_language, 'am');
+  assert.equal(Object.hasOwn(savedUser, 'username'), false);
   assert.notEqual(savedUser.password_hash, 'StrongPass123!');
   assert.equal(await bcrypt.compare('StrongPass123!', savedUser.password_hash), true);
 
@@ -159,43 +151,55 @@ test('public registration creates and authenticates a persisted customer account
   assert.equal(sessionBody.data.user.id, savedUser.id);
 });
 
-test('public registration supports allowed account types and rejects duplicate accounts', async () => {
-  for (const [index, role] of ['customer', 'organizer', 'vendor'].entries()) {
+test('public registration supports allowed account types and rejects duplicate email addresses', async () => {
+  for (const [index, accountType] of ['Customer', 'Organizer', 'Vendor'].entries()) {
+    const role = accountType.toLowerCase();
     const response = await register({
-      name: 'Role Attempt',
+      fullName: 'Role Attempt',
       email: `${role}@example.test`,
-      username: `role_${role}`,
       phone: `098648182${index}`,
       password: 'StrongPass123!',
-      role,
+      accountType,
     }, { 'X-Forwarded-For': `198.51.100.${index + 10}` });
     assert.equal(response.status, 201, `role=${role}`);
     assert.equal((await response.json()).data.user.role, role);
   }
 
   const adminRole = await register({
-    name: 'Self Registered Admin',
+    fullName: 'Self Registered Admin',
     email: 'admin@example.test',
     password: 'StrongPass123!',
-    role: 'admin',
+    accountType: 'Admin',
   }, { 'X-Forwarded-For': '198.51.100.19' });
   assert.equal(adminRole.status, 403);
 
   const duplicate = await register({
-    name: 'Duplicate User',
+    fullName: 'Duplicate User',
     email: 'hana@example.test',
-    username: 'another_hana',
     phone: '0986481810',
     password: 'StrongPass123!',
   }, { 'X-Forwarded-For': '198.51.100.20' });
   assert.equal(duplicate.status, 409);
+  assert.match((await duplicate.json()).error, /email/i);
+});
 
-  const duplicateUsername = await register({
-    name: 'Duplicate Username',
-    email: 'different@example.test',
-    username: 'HANA_Bekele',
-    phone: '0986481811',
-    password: 'StrongPass123!',
-  }, { 'X-Forwarded-For': '198.51.100.21' });
-  assert.equal(duplicateUsername.status, 409);
+test('public registration rejects missing terms, weak passwords, and unaccepted fields', async () => {
+  const base = {
+    fullName: 'Invalid Registration',
+    email: 'invalid@example.test',
+    phone: '0986481821',
+    accountType: 'Customer',
+    password: 'NoNumber',
+    acceptedTerms: true,
+  };
+  const cases = [
+    { ...base, password: 'StrongPass123!', acceptedTerms: false },
+    { ...base, password: 'NoNumber' },
+    { ...base, password: 'StrongPass123!', unexpected_field: 'should_not_be_accepted' },
+  ];
+  for (const [index, body] of cases.entries()) {
+    const response = await register(body, { 'X-Forwarded-For': `198.51.100.${30 + index}` });
+    assert.equal(response.status, 400);
+    assert.equal(typeof (await response.json()).error, 'string');
+  }
 });

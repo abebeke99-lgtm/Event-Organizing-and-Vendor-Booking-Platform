@@ -1,13 +1,13 @@
 services:
   - type: web
-    name: event-organizing-and-vendor-booking
+    name: event-organizing-and-vendor-booking-platform
     runtime: node
     repo: https://github.com/abebeke99-lgtm/Event-Organizing-and-Vendor-Booking-Platform
     branch: main
     rootDir: .
     buildCommand: npm ci
     startCommand: npm run start
-    healthCheckPath: /api/ready
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production

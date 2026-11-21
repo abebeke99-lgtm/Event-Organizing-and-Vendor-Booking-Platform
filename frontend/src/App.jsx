@@ -2,12 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExtern
 import axios from 'axios';
 import { LockKeyhole, Mail } from 'lucide-react';
 import apiClient from './api/axios.js';
-import { Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, Bell, BookOpen, BriefcaseBusiness, Building2, Cake, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, Church, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, GraduationCap, Heart, History, Image, Languages, LayoutDashboard, LifeBuoy, LogOut, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Music2, Palette, PanelLeftClose, PanelLeftOpen, PartyPopper, Phone, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, Trophy, UserRound, Users, Wallet, X } from 'lucide-react';
+import { Activity, ArrowLeft, ArrowRight, Award, BadgeCheck, BarChart3, Bell, BookOpen, BriefcaseBusiness, Building2, Cake, CalendarDays, ChartNoAxesCombined, Check, ChevronDown, ChevronLeft, ChevronRight, Church, ClipboardCheck, ClipboardList, Clock3, Compass, CreditCard, ExternalLink, Eye, EyeOff, GraduationCap, Heart, History, Image, Languages, LayoutDashboard, LifeBuoy, LogOut, MapPin, Menu, MessageSquareWarning, MonitorSmartphone, Moon, Music2, Palette, PanelLeftClose, PanelLeftOpen, PartyPopper, Phone, RotateCcw, Search, Send, Settings, Shield, ShieldCheck, SlidersHorizontal, Sparkles, Star, Store, Sun, Tags, Target, Trophy, UserCircle, UserRound, Users, Wallet, X } from 'lucide-react';
 import { INQUIRY_TYPES, buildContactInfo, validateContactForm } from './contactUtils.js';
 import { formatEventBudget, formatEventDate, formatEventDateOnly, formatEventTime } from './eventUtils.js';
 import { formatNotificationBadgeCount, getLanguage, setLanguage, setPlatformDefaultLanguage, translate, translateText, useLanguage } from './language.js';
 import { setTheme, useTheme } from './theme.js';
-import { getDashboardDateRange } from './dashboardUtils.js';
 import { summarizeOrganizerDashboard } from './organizerDashboardUtils.js';
 import {
   clearPlatformSessionHint,
@@ -50,15 +49,16 @@ import HorizontalCarousel from './HorizontalCarousel.jsx';
 import { clearDemoSession, isValidDemoPassword, readDemoProfile, readDemoSession, saveDemoAccount, saveDemoProfile, saveDemoSession } from './utils/demoAuth.js';
 import { readDemoProfilePhoto, removeDemoProfilePhoto, saveDemoProfilePhoto } from './utils/demoProfileStorage.js';
 import { buildOAuthStartUrl, getConfiguredOAuthProviders } from './oauthProviders.js';
-const EventCountdown = React.lazy(() => import('./EventsExperience.jsx').then(({ EventCountdown }) => ({ default: EventCountdown })));
-const EventDetailsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ EventDetailsPage }) => ({ default: EventDetailsPage })));
-const MyEventBookingsPage = React.lazy(() => import('./EventsExperience.jsx').then(({ MyEventBookingsPage }) => ({ default: MyEventBookingsPage })));
-const OrganizerEventsManager = React.lazy(() => import('./EventsExperience.jsx').then(({ OrganizerEventsManager }) => ({ default: OrganizerEventsManager })));
-const OrganizerWorkspace = React.lazy(() => import('./OrganizerWorkspace.jsx'));
-const VendorWorkspace = React.lazy(() => import('./VendorWorkspace.jsx'));
-const CustomerWorkspace = React.lazy(() => import('./CustomerWorkspace.jsx'));
-const CustomerBookingDetailsPage = React.lazy(() => import('./CustomerBookings.jsx').then(({ CustomerBookingDetailsPage }) => ({ default: CustomerBookingDetailsPage })));
-const ServiceCategoriesPage = React.lazy(() => import('./ServiceCategoriesPage.jsx'));
+const pageModules = () => import('./pages/index.jsx');
+const EventCountdown = React.lazy(() => pageModules().then(({ EventCountdown }) => ({ default: EventCountdown })));
+const EventDetailsPage = React.lazy(() => pageModules().then(({ EventDetailsPage }) => ({ default: EventDetailsPage })));
+const MyEventBookingsPage = React.lazy(() => pageModules().then(({ MyEventBookingsPage }) => ({ default: MyEventBookingsPage })));
+const OrganizerEventsManager = React.lazy(() => pageModules().then(({ OrganizerEventsManager }) => ({ default: OrganizerEventsManager })));
+const OrganizerWorkspace = React.lazy(() => import('./dashboards/organizer/index.jsx').then(({ OrganizerWorkspace }) => ({ default: OrganizerWorkspace })));
+const VendorWorkspace = React.lazy(() => import('./dashboards/vendor/index.jsx').then(({ VendorWorkspace }) => ({ default: VendorWorkspace })));
+const CustomerWorkspace = React.lazy(() => import('./dashboards/customer/index.jsx').then(({ CustomerWorkspace }) => ({ default: CustomerWorkspace })));
+const CustomerBookingDetailsPage = React.lazy(() => import('./dashboards/customer/index.jsx').then(({ CustomerBookingDetailsPage }) => ({ default: CustomerBookingDetailsPage })));
+const ServiceCategoriesPage = React.lazy(() => pageModules().then(({ ServiceCategoriesPage }) => ({ default: ServiceCategoriesPage })));
 const AIChat = React.lazy(() => import('./AIChat.jsx'));
 import AIChatWidget from './AIChatWidget.jsx';
 import ErrorBoundary from './ErrorBoundary.jsx';
@@ -70,41 +70,51 @@ import {
 import { createOrganizerDashboardOverviewRequests } from './organizerDashboardData.js';
 import { getVendorDashboardEndpoints } from './vendorDashboardData.js';
 import { requestDashboardData } from './dashboardRequests.js';
-const AdminUserManagement = React.lazy(() => import('./AdminUserManagement.jsx'));
-const AdminRoleManagement = React.lazy(() => import('./AdminRoleManagement.jsx'));
-const AdminVendorVerification = React.lazy(() => import('./AdminVendorVerification.jsx'));
-const AdminEventManagement = React.lazy(() => import('./AdminEventManagement.jsx'));
-const AdminBookingManagement = React.lazy(() => import('./AdminBookingManagement.jsx'));
-const AdminReviewsComplaints = React.lazy(() => import('./AdminReviewsComplaints.jsx'));
-const AdminPaymentManagement = React.lazy(() => import('./AdminPaymentManagement.jsx'));
-const AdminNotifications = React.lazy(() => import('./AdminNotifications.jsx'));
-const AdminAuditLogs = React.lazy(() => import('./AdminAuditLogs.jsx'));
-const AdminProfile = React.lazy(() => import('./AdminProfile.jsx'));
-const AdminSystemSettings = React.lazy(() => import('./AdminSystemSettings.jsx'));
-const AdminHeroImages = React.lazy(() => import('./AdminHeroImages.jsx'));
+const adminModules = () => import('./dashboards/admin/index.jsx');
+const AdminUserManagement = React.lazy(() => adminModules().then(({ AdminUserManagement }) => ({ default: AdminUserManagement })));
+const AdminRoleManagement = React.lazy(() => adminModules().then(({ AdminRoleManagement }) => ({ default: AdminRoleManagement })));
+const AdminVendorVerification = React.lazy(() => adminModules().then(({ AdminVendorVerification }) => ({ default: AdminVendorVerification })));
+const AdminVendorManagement = React.lazy(() => adminModules().then(({ AdminVendorManagement }) => ({ default: AdminVendorManagement })));
+const AdminEventManagement = React.lazy(() => adminModules().then(({ AdminEventManagement }) => ({ default: AdminEventManagement })));
+const AdminBookingManagement = React.lazy(() => adminModules().then(({ AdminBookingManagement }) => ({ default: AdminBookingManagement })));
+const AdminReviewsComplaints = React.lazy(() => adminModules().then(({ AdminReviewsComplaints }) => ({ default: AdminReviewsComplaints })));
+const AdminPaymentManagement = React.lazy(() => adminModules().then(({ AdminPaymentManagement }) => ({ default: AdminPaymentManagement })));
+const AdminPaymentsManagement = React.lazy(() => adminModules().then(({ AdminPaymentsManagement }) => ({ default: AdminPaymentsManagement })));
+const AdminRefundManagement = React.lazy(() => adminModules().then(({ AdminRefundManagement }) => ({ default: AdminRefundManagement })));
+const AdminNotifications = React.lazy(() => adminModules().then(({ AdminNotifications }) => ({ default: AdminNotifications })));
+const AdminDashboardOverview = React.lazy(() => adminModules().then(({ AdminDashboardOverview }) => ({ default: AdminDashboardOverview })));
+const AdminAuditLogs = React.lazy(() => adminModules().then(({ AdminAuditLogs }) => ({ default: AdminAuditLogs })));
+const AdminProfile = React.lazy(() => adminModules().then(({ AdminProfile }) => ({ default: AdminProfile })));
+const AdminSystemSettings = React.lazy(() => adminModules().then(({ AdminSystemSettings }) => ({ default: AdminSystemSettings })));
+const AdminHeroImages = React.lazy(() => adminModules().then(({ AdminHeroImages }) => ({ default: AdminHeroImages })));
 import HomeHeroSlider from './HomeHeroSlider.jsx';
 import './vendorDirectory.css';
 
 const DEMO_AUTH_ENABLED = false;
 const menu = [
-  ['overview','nav.dashboard.overview',LayoutDashboard], ['users','nav.dashboard.userManagement',Users], ['roles','nav.dashboard.rolesPermissions',Shield],
-  ['vendors','nav.dashboard.vendorVerification',BadgeCheck], ['categories','nav.dashboard.serviceCategoryManagement',Tags], ['events','nav.dashboard.eventManagement',CalendarDays],
-  ['bookings','nav.dashboard.bookingManagement',ClipboardList], ['package-requests','nav.dashboard.eventPackageRequests',ClipboardList], ['payments','nav.dashboard.paymentRefundManagement',CreditCard], ['reviews','nav.dashboard.reviewsComplaints',MessageSquareWarning], ['complaints','nav.dashboard.complaintManagement',MessageSquareWarning],
-  ['messages','nav.dashboard.contactMessages',MessageSquareWarning], ['reports','nav.dashboard.reportsAnalytics',ChartNoAxesCombined], ['notifications','nav.dashboard.notifications',Bell], ['audit-logs','nav.dashboard.auditLogs',Activity],
-  ['settings','nav.dashboard.systemSettings',Settings], ['profile','nav.dashboard.profile',UserRound], ['hero-images','nav.dashboard.heroImages',Image]
+  ['overview','Dashboard Overview',LayoutDashboard],
+  ['users','User Management',Users],
+  ['vendors','Vendor Management',Store],
+  ['vendor-verification','Vendor Verification',ShieldCheck],
+  ['categories','Categories',Tags],
+  ['events','Event Management',CalendarDays],
+  ['bookings','Booking Management',ClipboardList],
+  ['payments','Payment Management',CreditCard],
+  ['refunds','Refund Management',RotateCcw],
+  ['reports','Reports & Analytics',BarChart3],
+  ['notifications','Notifications',Bell],
+  ['messages','Contact Messages',Mail],
+  ['settings','System Settings',Settings],
+  ['audit-logs','Audit Logs',History],
+  ['profile','Administrator Profile',UserCircle],
+  ['logout','Logout',LogOut],
 ];
-const menuGroups = [
-  { id: 'overview', label: 'nav.dashboard.groupOverview', items: [menu[0]] },
-  { id: 'management', label: 'nav.dashboard.groupManagement', items: menu.slice(1, 8) },
-  { id: 'operations', label: 'nav.dashboard.groupOperations', items: menu.slice(8, 12).concat([menu[13]]) },
-  { id: 'insights', label: 'nav.dashboard.groupInsightsSecurity', items: [menu[12], menu[14]] },
-  { id: 'configuration', label: 'nav.dashboard.groupConfiguration', items: menu.slice(15, 18) },
-];
+const menuGroups = [{ id: 'admin', label: '', items: menu }];
 const modules = {
   users:{title:'User Management', endpoint:'users', columns:['id','full_name','email','phone','roles','status','created_at'], fields:[['full_name','Full name','text'],['email','Email','email'],['phone','Phone','text']], create:true, actions:['role','status']},
   roles:{title:'Role and Permission Management', endpoint:'roles', columns:['id','name','description','is_active','created_at'], fields:[['name','Role name','text'],['description','Description','text']], create:true, actions:['permissions']},
   vendors:{title:'Vendor Verification', endpoint:'vendors', columns:['id','business_name','user_id','category_id','city','verification_status','verification_reason','verified_at'], actions:['verify','reject']},
-  categories:{title:'Service Category Management', endpoint:'categories', columns:['id','name','description','is_active','created_at'], fields:[['name','Category name','text'],['description','Description','text']], create:true, actions:['edit','deactivate']},
+  categories:{title:'Categories', endpoint:'categories', columns:['id','name','description','is_active','created_at'], fields:[['name','Category name','text'],['description','Description','text']], create:true, actions:['edit','deactivate']},
   events:{title:'Event Management', endpoint:'events', columns:['id','title','event_type','organizer_id','city','venue','start_date','capacity','status'], fields:[['organizer_id','Organizer user ID','number'],['title','Title','text'],['event_type','Event type','text'],['description','Description (optional)','textarea'],['city','City (optional)','text'],['venue','Venue (optional)','text'],['cover_image_url','Cover image URL (optional)','url'],['start_date','Start date','datetime-local'],['end_date','End date (optional)','datetime-local'],['budget','Budget (optional)','number'],['capacity','Capacity (optional)','number'],['status','Status','select','draft,active,booked,in_progress,completed,cancelled'],['notes','Notes (optional)','textarea']], create:true, actions:['edit','deactivate']},
   bookings:{title:'Booking Management', endpoint:'bookings', columns:['id','event_id','vendor_id','service_description','quoted_amount','currency','status','moderation_reason','created_at'], actions:['moderate']},
   'package-requests':{title:'Event Package Requests', endpoint:'event-package-requests', columns:['id','event_id','event_title','event_type','requested_date','requested_location','requester_name','requester_email','service_category','guest_count','budget','notes','status','created_at'], actions:['package-status'], statuses:['new','reviewed','replied','closed']},
@@ -161,10 +171,32 @@ function AuthBrand({ showEventHubLogo = true }) {
   </div>;
 }
 
-function Sidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileOpen, onCloseMobile, language, className = '' }) {
+function Sidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileOpen, onCloseMobile, language, className = '', customerUser, onLogout, flat = false }) {
   const sidebarRef = useRef(null);
+  const isFlat = flat || groups.length === 1 && !groups[0].label;
   const [expandedGroups, setExpandedGroups] = useState(() => Object.fromEntries(groups.map((group) => [group.id, true])));
   const [flyout, setFlyout] = useState(null);
+  const [pendingVendorCount, setPendingVendorCount] = useState(null);
+  const [vendorCountError, setVendorCountError] = useState('');
+
+  useEffect(() => {
+    if (!/admin/i.test(roleTitle)) return undefined;
+    const controller = new AbortController();
+    api('/admin/vendor-verification?status=pending&page=1&pageSize=1', { signal: controller.signal })
+      .then((response) => {
+        const count = response?.counts?.pending;
+        if (!Number.isFinite(Number(count))) throw new Error('Pending vendor application count is unavailable.');
+        setPendingVendorCount(Number(count));
+        setVendorCountError('');
+      })
+      .catch((issue) => {
+        if (issue.name !== 'AbortError' && !controller.signal.aborted) {
+          setPendingVendorCount(null);
+          setVendorCountError(issue.message || 'Pending vendor application count is unavailable.');
+        }
+      });
+    return () => controller.abort();
+  }, [roleTitle]);
 
   useEffect(() => {
     function handleKeyDown(event) {
@@ -197,14 +229,17 @@ function Sidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileO
   }
 
   function renderItems(items, flyoutItems = false) {
-    return items.map(([id, label, Icon]) => {
+    return items.map(([id, label, Icon, badgeCount]) => {
       const ItemIcon = Icon || dashboardMenuIcons[id] || LayoutDashboard;
       const accessibleLabel = translate(label, language);
-      return <button key={id} className={`nav-item ${activePage === id ? 'active' : ''}`} title={accessibleLabel} data-tooltip={accessibleLabel} aria-label={accessibleLabel} aria-current={activePage === id ? 'page' : undefined} onClick={() => {
+      const unreadCount = Number(badgeCount) || 0;
+      const verificationBadge = id === 'vendor-verification' && pendingVendorCount > 0;
+      const verificationStatus = id === 'vendor-verification' && vendorCountError ? vendorCountError : '';
+      return <button key={id} className={`nav-item ${activePage === id ? 'active' : ''}`} title={verificationStatus || accessibleLabel} data-tooltip={accessibleLabel} aria-label={verificationBadge ? `${accessibleLabel}, ${pendingVendorCount} pending applications` : verificationStatus ? `${accessibleLabel}, ${verificationStatus}` : unreadCount ? `${accessibleLabel}, ${unreadCount} unread` : accessibleLabel} aria-current={activePage === id ? 'page' : undefined} onClick={() => {
         setFlyout(null);
         onNavigate(id);
         if (window.matchMedia('(max-width: 760px)').matches) onCloseMobile();
-      }}><ItemIcon size={18}/><span>{accessibleLabel}</span>{!flyoutItems && id === 'vendors' && <span className="nav-dot"/>}</button>;
+      }}><ItemIcon size={18}/><span>{accessibleLabel}</span>{unreadCount > 0 && <span className="nav-item-badge" aria-label={`${unreadCount} unread`}>{formatNotificationBadgeCount(unreadCount)}</span>}{!flyoutItems && verificationBadge && <span className="nav-dot" aria-label={`${pendingVendorCount} pending vendor applications`} title={`${pendingVendorCount} pending vendor applications`}/>}</button>;
     });
   }
 
@@ -214,7 +249,16 @@ function Sidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileO
       <Logo className="sidebar-brand-symbol" size="xs" variant="icon" />
       <div className="sidebar-brand-copy"><strong>EventHub</strong><span>{roleTitle}</span></div>
     </div>
-    <nav aria-label={translate('nav.dashboard.sections', language)}>{groups.map((group) => {
+    {customerUser && <section className="customer-sidebar-profile" aria-label="Customer account">
+      <ProfilePhotoDisplay user={customerUser}/>
+      <div className="customer-sidebar-profile-copy">
+        <strong>Welcome, {customerUser.full_name || customerUser.name || 'Customer'}</strong>
+        <span>Customer account</span>
+      </div>
+    </section>}
+    <nav aria-label={isFlat ? `${roleTitle} navigation` : translate('nav.dashboard.sections', language)}>{isFlat
+      ? <div className="sidebar-group-items">{renderItems(groups.flatMap((group) => group.items))}</div>
+      : groups.map((group) => {
       const groupLabel = translate(group.label, language);
       return <div className={`nav-group ${group.flyoutWhenCollapsed ? 'has-collapsed-flyout' : 'nav-group-flat'}`} key={group.id}>
       <button className="nav-group-toggle" type="button" title={groupLabel} data-tooltip={groupLabel} aria-label={`${groupLabel} ${translate('nav.dashboard.navigation', language)}`} aria-expanded={collapsed && !mobileOpen ? flyout?.groupId === group.id : Boolean(expandedGroups[group.id])} onClick={(event) => toggleGroup(event, group)}><span>{groupLabel}</span><span className="nav-group-indicator" aria-hidden="true">{collapsed && !mobileOpen ? <ChevronRight size={15}/> : expandedGroups[group.id] ? '−' : '+'}</span></button>
@@ -225,6 +269,7 @@ function Sidebar({ roleTitle, groups, activePage, onNavigate, collapsed, mobileO
       const group = groups.find((entry) => entry.id === flyout.groupId);
       return group ? <div className="sidebar-flyout" style={{ top: `${Math.min(flyout.top, window.innerHeight - Math.min(group.items.length * 45 + 24, window.innerHeight - 24))}px` }} aria-label={`${translate(group.label, language)} ${translate('nav.dashboard.navigation', language)}`}>{renderItems(group.items, true)}</div> : null;
     })()}
+    {customerUser && <button className="customer-sidebar-logout" type="button" onClick={onLogout}><LogOut size={17}/><span>{translate('logout', language)}</span></button>}
   </aside>;
 }
 const DashboardSidebar = Sidebar;
@@ -890,6 +935,7 @@ function ProfilePhotoDisplay({ user, isAdmin = false }) {
 function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sidebarExpanded, isAdmin = false, isOrganizer = false, isVendor = false, isCustomer = false }) {
   const language = useLanguage();
   const [activePanel, setActivePanel] = useState('');
+  const [globalSearch, setGlobalSearch] = useState('');
   const [viewingPhoto, setViewingPhoto] = useState(false);
   const [avatar, setAvatar] = useState('');
   const [selectedPhoto, setSelectedPhoto] = useState(null);
@@ -917,10 +963,11 @@ function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sid
     { id: 'welcome', title: 'Welcome to EventHub', message: 'Explore your dashboard and discover what you can do.', unread: false },
   ];
   const [items, setItems] = useState(() => hasServerNotifications ? [] : localNotifications);
+  const [serverUnreadCount, setServerUnreadCount] = useState(null);
   const [notificationLoading, setNotificationLoading] = useState(hasServerNotifications);
   const [notificationBusy, setNotificationBusy] = useState(false);
   const [notificationError, setNotificationError] = useState('');
-  const unreadCount = items.filter((item) => item.unread).length;
+  const unreadCount = serverUnreadCount ?? items.filter((item) => item.unread).length;
 
   const loadAdminNotifications = useCallback(async () => {
     if (!hasServerNotifications) return;
@@ -932,6 +979,9 @@ function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sid
         : isOrganizer ? '/platform/organizer/notifications' : isVendor ? '/vendor/notifications' : '/customer/notifications';
       const response = await api(endpoint);
       setItems((response.data || []).map((item) => ({ ...item, unread: !item.read })));
+      setServerUnreadCount(isAdmin && Number.isFinite(Number(response.unreadCount))
+        ? Number(response.unreadCount)
+        : null);
     } catch (issue) {
       setNotificationError(issue.message || 'Notifications could not be loaded.');
     } finally {
@@ -958,6 +1008,7 @@ function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sid
           : isVendor ? `/vendor/notifications/${item.id}/read` : `/customer/notifications/${item.id}/read`;
       await api(endpoint, { method: 'POST' });
       setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, unread: false } : entry));
+      setServerUnreadCount((current) => current === null ? null : Math.max(0, current - 1));
     } catch (issue) {
       setNotificationError(issue.message || 'The notification could not be marked as read.');
     } finally {
@@ -978,6 +1029,7 @@ function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sid
           : isVendor ? '/vendor/notifications/read-all' : '/customer/notifications/read-all';
       await api(endpoint, { method: 'POST' });
       setItems((current) => current.map((item) => ({ ...item, unread: false })));
+      setServerUnreadCount(hasServerNotifications ? 0 : null);
     } catch (issue) {
       setNotificationError(issue.message || 'Notifications could not be marked as read.');
     } finally {
@@ -1146,6 +1198,17 @@ function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sid
     setViewingPhoto(false);
   }
 
+  function submitGlobalSearch(event) {
+    event.preventDefault();
+    const params = new URLSearchParams();
+    params.set('view', 'services');
+    const query = globalSearch.trim();
+    if (query) params.set('q', query);
+    navigateBrowserPath(`${dashboardPathForRole('customer')}?${params.toString()}`);
+    onNavigate?.('services');
+    setGlobalSearch('');
+  }
+
   return <header className={`dashboard-header ${sidebarExpanded ? 'sidebar-expanded' : ''}`} ref={headerRef}>
     <div className="dashboard-header-start">
       <a className="dashboard-brand" href="/" aria-label="EventHub home">
@@ -1155,6 +1218,11 @@ function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sid
       </a>
       <button className="icon-button dashboard-sidebar-toggle" type="button" onClick={onToggleSidebar} aria-label={sidebarExpanded ? 'Collapse dashboard navigation' : 'Expand dashboard navigation'} aria-expanded={sidebarExpanded} title={sidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}>{sidebarExpanded ? <PanelLeftClose size={19}/> : <PanelLeftOpen size={19}/>}</button>
     </div>
+    {isCustomer && <form className="dashboard-global-search" role="search" onSubmit={submitGlobalSearch}>
+      <Search size={16} aria-hidden="true"/>
+      <input type="search" maxLength="120" value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} aria-label="Search services" placeholder="Search services, vendors, or locations"/>
+      <button type="submit" aria-label="Submit search"><ArrowRight size={16}/></button>
+    </form>}
     <div className="dashboard-header-actions">
       <LanguageSelector user={user} isAdmin={isAdmin}/>
       <ThemeToggle/>
@@ -1171,6 +1239,15 @@ function Navbar({ user, onLogout, onToggleSidebar, onUserChange, onNavigate, sid
         <span className="dashboard-avatar">{avatar ? <img src={avatar} alt="" /> : <UserRound size={19}/>}</span>
       </button>
       <div className="dashboard-profile-copy"><strong>{name}</strong><small>{role}</small></div>
+      {isCustomer && <div className="dashboard-popover-anchor">
+        <button className="icon-button customer-profile-menu-toggle" type="button" aria-label="Open profile menu" aria-expanded={activePanel === 'profile'} onClick={() => setActivePanel((current) => current === 'profile' ? '' : 'profile')}><ChevronDown size={16}/></button>
+        {activePanel === 'profile' && <section className="dashboard-popover customer-profile-popover" aria-label="Profile menu">
+          <div className="popover-heading"><div><strong>{name}</strong><span>{user.email}</span></div></div>
+          <button className="customer-profile-menu-item" type="button" onClick={() => { setActivePanel(''); onNavigate?.('profile'); }}><UserRound size={15}/>Edit profile</button>
+          <button className="customer-profile-menu-item" type="button" onClick={() => { setActivePanel(''); setPhotoError(''); setPhotoSuccess(''); setViewingPhoto(true); }}><Image size={15}/>Manage profile photo</button>
+          <button className="customer-profile-menu-item customer-profile-menu-logout" type="button" onClick={onLogout}><LogOut size={15}/>{translate('logout', language)}</button>
+        </section>}
+      </div>}
       <button className="icon-button dashboard-logout" type="button" aria-label={translate('logout', language)} title={translate('logout', language)} onClick={onLogout}><LogOut size={17}/></button>
     </div>
     {viewingPhoto && <div className="profile-photo-overlay" onClick={(event) => { if (event.target === event.currentTarget) closeProfilePhoto(); }}>
@@ -4012,7 +4089,7 @@ function LoginPage({
       else await onLogin(email, password, rememberMe);
     } catch (issue) {
       setError(issue.message);
-      setAccountNotFound(false);
+      setAccountNotFound(issue.status === 404);
     } finally {
       setBusy(false);
     }
@@ -4096,14 +4173,12 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
   const t = (key) => translate(key, language);
   const searchParams = new URLSearchParams(window.location.search);
   const [form, setForm] = useState({
-    name: searchParams.get('name') || '',
-    username: '',
+    fullName: searchParams.get('name') || '',
     email: searchParams.get('email') || '',
     phone: '',
     password: '',
-    confirmPassword: '',
-    role: 'customer',
-    termsAccepted: false,
+    accountType: 'Customer',
+    acceptedTerms: false,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -4126,7 +4201,6 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     return undefined;
   }, [callbackError]);
   const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
-  const usernameValid = /^[A-Za-z0-9_]{3,32}$/.test(form.username.trim());
   const phoneCompact = form.phone.trim().replace(/[\s().-]/g, '');
   const phoneValid = /^(?:0[79]\d{8}|251[79]\d{8}|\+[1-9]\d{7,14})$/.test(phoneCompact);
   const passwordValid = form.password.length >= 8
@@ -4134,27 +4208,28 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     && new TextEncoder().encode(form.password).length <= 72
     && /[A-Z]/.test(form.password)
     && /[a-z]/.test(form.password)
-    && /\d/.test(form.password)
-    && /[^A-Za-z0-9]/.test(form.password);
+    && /\d/.test(form.password);
   const passwordStrength = form.password
     ? [form.password.length >= 8, /[A-Z]/.test(form.password) && /[a-z]/.test(form.password),
-      /\d/.test(form.password), /[^A-Za-z0-9]/.test(form.password)]
+      /\d/.test(form.password)]
       .filter(Boolean).length
     : 0;
-  const validationErrors = {
-    name: form.name.trim().length >= 2 ? '' : t('fullNameMinimum'),
-    username: usernameValid ? '' : t('usernameRequirements'),
+  const passwordError = !form.password
+    ? t('registrationPasswordRequired')
+    : form.password.length < 8
+      ? t('registrationPasswordMinimum')
+      : new TextEncoder().encode(form.password).length > 72
+        ? t('registrationPasswordTooLong')
+        : passwordValid ? '' : t('registrationPasswordRequirements');
+  const validationErrors = { // registrationConfirmPasswordRequired // passwordMismatch
+    fullName: form.fullName.trim().length >= 2 ? '' : t('fullNameMinimum'),
     email: !form.email.trim()
       ? t('registrationEmailRequired')
       : emailValid ? '' : t('validEmailRequired'),
     phone: phoneValid ? '' : t('validPhoneRequired'),
-    password: !form.password ? t('registrationPasswordRequired')
-      : passwordValid ? '' : t('registrationPasswordRequirements'),
-    confirmPassword: !form.confirmPassword
-      ? t('registrationConfirmPasswordRequired')
-      : form.confirmPassword !== form.password ? t('passwordMismatch') : '',
-    role: ['customer', 'organizer', 'vendor'].includes(form.role) ? '' : t('accountTypeRequired'),
-    termsAccepted: form.termsAccepted ? '' : t('termsAcceptanceRequired'),
+    password: passwordError,
+    accountType: ['Customer', 'Organizer', 'Vendor'].includes(form.accountType) ? '' : t('accountTypeRequired'),
+    acceptedTerms: form.acceptedTerms ? '' : t('termsAcceptanceRequired'),
   };
 
   async function submit(event) {
@@ -4166,16 +4241,17 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     setBusy(true);
     try {
       const result = await onRegister({
-        ...form,
-        name: form.name.trim(),
-        username: form.username.trim(),
+        fullName: form.fullName.trim(),
         email: form.email.trim(),
         phone: form.phone.trim(),
+        password: form.password,
+        accountType: form.accountType,
+        acceptedTerms: form.acceptedTerms,
       });
       onRegistrationComplete(result);
     } catch (issue) {
       setError(translateText(issue.message, language));
-      setDuplicateEmail(issue.status === 409 && /email|username|ኢሜይል|የተጠቃሚ ስም/i.test(issue.message || ''));
+      setDuplicateEmail(issue.status === 409 && /email|ኢሜይል/i.test(issue.message || ''));
     } finally {
       setBusy(false);
     }
@@ -4201,13 +4277,8 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
     <form onSubmit={submit} noValidate>
       <label className="field">
         <span>{t('fullName')}</span>
-        <input name="name" autoComplete="name" minLength="2" maxLength="160" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.name)} aria-describedby={validationAttempted && validationErrors.name ? 'registration-name-error' : undefined} />
-        {validationAttempted && validationErrors.name && <small id="registration-name-error" className="field-error" role="alert">{validationErrors.name}</small>}
-      </label>
-      <label className="field">
-        <span>{t('username')}</span>
-        <input name="username" autoComplete="username" minLength="3" maxLength="32" pattern="[A-Za-z0-9_]+" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.username)} aria-describedby={validationAttempted && validationErrors.username ? 'registration-username-error' : undefined} />
-        {validationAttempted && validationErrors.username && <small id="registration-username-error" className="field-error" role="alert">{validationErrors.username}</small>}
+        <input name="fullName" type="text" autoComplete="name" minLength="2" maxLength="160" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.fullName)} aria-describedby={validationAttempted && validationErrors.fullName ? 'registration-name-error' : undefined} />
+        {validationAttempted && validationErrors.fullName && <small id="registration-name-error" className="field-error" role="alert">{validationErrors.fullName}</small>}
       </label>
       <label className="field">
         <span>{t('emailAddress')}</span>
@@ -4221,12 +4292,12 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
       </label>
       <label className="field">
         <span>{t('accountType')}</span>
-        <select name="role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.role)} aria-describedby={validationAttempted && validationErrors.role ? 'registration-role-error' : undefined}>
-          <option value="customer">{t('customerRole')}</option>
-          <option value="organizer">{t('organizerRole')}</option>
-          <option value="vendor">{t('vendorRole')}</option>
+        <select name="accountType" value={form.accountType} onChange={(e) => setForm({ ...form, accountType: e.target.value })} required aria-invalid={Boolean(validationAttempted && validationErrors.accountType)} aria-describedby={validationAttempted && validationErrors.accountType ? 'registration-role-error' : undefined}>
+          <option value="Customer">{t('customerRole')}</option>
+          <option value="Organizer">{t('organizerRole')}</option>
+          <option value="Vendor">{t('vendorRole')}</option>
         </select>
-        {validationAttempted && validationErrors.role && <small id="registration-role-error" className="field-error" role="alert">{validationErrors.role}</small>}
+        {validationAttempted && validationErrors.accountType && <small id="registration-role-error" className="field-error" role="alert">{validationErrors.accountType}</small>}
       </label>
       <div className="registration-password-field">
         <PasswordField
@@ -4246,30 +4317,15 @@ function RegisterPage({ onRegister, onRegistrationComplete, registrationEnabled 
         <small className="muted">{t('registrationPasswordRequirements')}</small>
         <div className="password-strength" aria-live="polite">
           <span>{t('passwordStrength')}:</span>
-          <strong>{passwordStrength < 2 ? t('passwordStrengthWeak') : passwordStrength < 4 ? t('passwordStrengthMedium') : t('passwordStrengthStrong')}</strong>
-          <progress max="4" value={passwordStrength} aria-label={t('passwordStrength')} />
+          <strong>{passwordStrength < 2 ? t('passwordStrengthWeak') : passwordStrength < 3 ? t('passwordStrengthMedium') : t('passwordStrengthStrong')}</strong>
+          <progress max="3" value={passwordStrength} aria-label={t('passwordStrength')} />
         </div>
       </div>
       <label className="registration-terms field">
-        <span><input name="termsAccepted" type="checkbox" checked={form.termsAccepted} onChange={(e) => setForm({ ...form, termsAccepted: e.target.checked })} aria-invalid={Boolean(validationAttempted && validationErrors.termsAccepted)} aria-describedby={validationAttempted && validationErrors.termsAccepted ? 'registration-terms-error' : undefined} required /> {t('acceptTerms')} <a href="/terms">{t('termsConditions')}</a></span>
-        {validationAttempted && validationErrors.termsAccepted && <small id="registration-terms-error" className="field-error" role="alert">{validationErrors.termsAccepted}</small>}
+        <span><input name="acceptedTerms" type="checkbox" checked={form.acceptedTerms} onChange={(e) => setForm({ ...form, acceptedTerms: e.target.checked })} aria-invalid={Boolean(validationAttempted && validationErrors.acceptedTerms)} aria-describedby={validationAttempted && validationErrors.acceptedTerms ? 'registration-terms-error' : undefined} required /> {t('acceptTerms')} <a href="/terms">{t('termsConditions')}</a></span>
+        {validationAttempted && validationErrors.acceptedTerms && <small id="registration-terms-error" className="field-error" role="alert">{validationErrors.acceptedTerms}</small>}
       </label>
-      <div className="registration-confirm-field">
-        <PasswordField
-          name="confirm-password"
-          label={t('confirmPassword')}
-          value={form.confirmPassword}
-          autoComplete="new-password"
-          language={language}
-          minLength={8}
-          maxLength={72}
-          describedBy={validationAttempted && validationErrors.confirmPassword ? 'registration-confirm-feedback' : undefined}
-          invalid={Boolean(validationAttempted && validationErrors.confirmPassword)}
-          onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
-        />
-        {validationAttempted && validationErrors.confirmPassword && <p id="registration-confirm-feedback" className="field-error" role="alert">{validationErrors.confirmPassword}</p>}
-      </div>
-      <button className="button login-button" disabled={busy || !registrationEnabled}>{busy ? t('creatingAccount') : t('registerNow')}</button>
+      <button className="button login-button" type="submit" disabled={busy || !registrationEnabled}>{busy ? t('creatingAccount') : t('registerNow')}</button>
     </form>
     <div className="registration-login-link"><span>{t('alreadyHaveAccount')}</span><button type="button" onClick={() => navigateBrowserPath('/login')}>{t('loginHere')}</button></div>
     <div className="auth-home-footer"><AuthHomeLink /></div>
@@ -4805,10 +4861,6 @@ function VendorDashboard({ user, onLogout, onUserChange }) {
 function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
   const language = useLanguage();
   const t = (key) => translate(key, language);
-  const customerMenu = [
-    ['overview', 'nav.dashboard.overview'], ['vendors', 'nav.dashboard.browseVendors'], ['services', 'nav.dashboard.searchServices'], ['categories', 'nav.dashboard.serviceCategories'], ['bookings', 'nav.dashboard.myBookings'], ['history', 'nav.dashboard.bookingHistory'], ['events', 'nav.dashboard.myEvents'], ['favorites', 'nav.dashboard.wishlist'], ['quotations', 'nav.dashboard.requestQuotations'], ['payments', 'nav.dashboard.paymentsTransactions'], ['messages', 'nav.dashboard.messages'], ['reviews', 'nav.dashboard.reviewsRatings'], ['notifications', 'nav.dashboard.notifications'], ['profile', 'nav.dashboard.profile']
-  ];
-
   const [slug, setSlug] = useState(() => new URLSearchParams(window.location.search).get('view') === 'profile' ? 'profile' : 'overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -4830,6 +4882,9 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
     guestCount: '',
     notes: '',
   });
+  const customerMenu = [
+    ['overview', 'nav.dashboard.overview'], ['vendors', 'nav.dashboard.browseVendors'], ['services', 'nav.dashboard.searchServices'], ['categories', 'nav.dashboard.serviceCategories'], ['bookings', 'nav.dashboard.myBookings'], ['history', 'nav.dashboard.bookingHistory'], ['events', 'nav.dashboard.myEvents'], ['favorites', 'nav.dashboard.wishlist'], ['quotations', 'nav.dashboard.requestQuotations'], ['payments', 'nav.dashboard.paymentsTransactions'], ['messages', 'nav.dashboard.messages', undefined, data.overview?.unreadMessages], ['reviews', 'nav.dashboard.reviewsRatings'], ['notifications', 'nav.dashboard.notifications', undefined, data.overview?.unreadNotifications], ['support', 'nav.contactUs'], ['profile', 'nav.dashboard.profile']
+  ];
 
   useEffect(() => {
     const syncDashboardView = () => {
@@ -4986,7 +5041,7 @@ function CustomerDashboard({ user, onLogout, onUserChange, onNavigatePublic }) {
     else setSidebarCollapsed((current) => !current);
   }
 
-  return <div className={`app-shell dashboard-role-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('customerDashboard').toUpperCase()} groups={[{ id: 'customer', label: t('bookings'), items: customerMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isCustomer onNavigate={setSlug} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
+  return <div className={`app-shell dashboard-role-shell customer-dashboard-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}><DashboardSidebar roleTitle={t('customerDashboard').toUpperCase()} groups={[{ id: 'customer', label: t('bookings'), items: customerMenu }]} activePage={slug} onNavigate={setSlug} onToggle={toggleSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={() => setSidebarOpen(false)} language={language} customerUser={user} onLogout={onLogout}/><div className={`mobile-scrim ${sidebarOpen ? 'visible' : ''}`} onClick={() => setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} isCustomer onNavigate={setSlug} onLogout={onLogout} onToggleSidebar={toggleSidebar} onUserChange={onUserChange} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{renderSection()}</div><footer className="footer">{t('customerPortal')} <span>•</span> {t('personalRecordsOnly')}</footer></main></div>;
 }
 
 function OrganizerDashboard({ user, onLogout, onUserChange }) {
@@ -5137,142 +5192,8 @@ function OrganizerDashboard({ user, onLogout, onUserChange }) {
   </section>);
 }
 
-function Overview({ onNavigate, user }) {
-  const sessionSnapshot = useAuthSessionSnapshot();
-  const language = useLanguage();
-  const t = (key) => translate(key, language);
-  const [preset,setPreset]=useState('30d');
-  const [dateRange,setDateRange]=useState(()=>getDashboardDateRange('30d'));
-  const [appliedRange,setAppliedRange]=useState(()=>getDashboardDateRange('30d'));
-  const [data,setData]=useState(null);
-  const [error,setError]=useState('');
-  const [loading,setLoading]=useState(true);
-  const [retryCount,setRetryCount]=useState(0);
-  const ownerId = user?.id ?? sessionSnapshot.user?.id;
-  useEffect(() => {
-    const controller = new AbortController();
-    const params = new URLSearchParams(appliedRange);
-    setLoading(true);
-    setError('');
-    const owner = ownerId == null ? null : `admin:${ownerId}`;
-    requestDashboardData(api, owner, `/admin/dashboard/overview?${params}`, controller.signal)
-      .then((response) => setData(response.data))
-      .catch((issue) => { if (issue.name !== 'AbortError') setError(issue.message); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
-  }, [appliedRange,retryCount,ownerId]);
-
-  const applyPreset = (nextPreset) => {
-    setPreset(nextPreset);
-    if (nextPreset !== 'custom') {
-      const nextRange = getDashboardDateRange(nextPreset);
-      setDateRange(nextRange);
-      setAppliedRange(nextRange);
-    }
-  };
-  const applyCustomRange = (event) => {
-    event.preventDefault();
-    setPreset('custom');
-    setAppliedRange({ ...dateRange });
-  };
-  if (!data && loading) return <div className="loading dashboard-loading"><span className="spinner"/>{t('loading')} administrator dashboard…</div>;
-  if (!data && error) return <section className="dashboard-error" role="alert"><div className="alert error">{translateText(error,language)}</div><button className="button" onClick={()=>setRetryCount((count)=>count+1)}>Retry dashboard</button></section>;
-
-  const number = (value) => Number(value || 0).toLocaleString();
-  const money = (value,currency) => {
-    const code = typeof currency === 'string' && /^[A-Za-z]{3}$/.test(currency.trim())
-      ? currency.trim().toUpperCase()
-      : 'ETB';
-    const amount = Number(value);
-    const safeAmount = Number.isFinite(amount) ? amount : 0;
-    try {
-      return new Intl.NumberFormat('en-ET', {
-        style: 'currency',
-        currency: code,
-        maximumFractionDigits: 2,
-      }).format(safeAmount);
-    } catch {
-      return `${safeAmount.toLocaleString()} ${code}`;
-    }
-  };
-  const dateTime = (value) => {
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
-  };
-  const metricGroups = [
-    { title: 'Registered users', total: data.users.total_users, values: [
-      ['Administrators', data.userRoles.total_administrators],
-      ['Customers', data.userRoles.total_customers],
-      ['Organizers', data.userRoles.total_organizers],
-      ['Vendors', data.userRoles.total_vendors],
-    ] },
-    { title: 'Vendors', total: data.vendors.total_vendors, values: [['Verified',data.vendors.verified_vendors],['Pending applications',data.vendors.pending_vendors]] },
-    { title: 'Events', total: data.events.total_events, values: [['Published',data.events.published_events],['Upcoming',data.events.upcoming_events]] },
-    { title: 'Bookings', total: data.bookings.total_bookings, values: [['Pending',data.bookings.pending_bookings],['Confirmed',data.bookings.confirmed_bookings],['Completed',data.bookings.completed_bookings],['Cancelled',data.bookings.cancelled_bookings]] },
-    { title: 'Payments', total: data.payments.total_payments, values: [['Successful',data.payments.successful_payments],['Pending / authorized',data.payments.pending_payments],['Refund requests',data.payments.refund_requests]] },
-    { title: 'Open complaints', total: data.complaints.open_complaints, values: [['All complaints',data.complaints.total_complaints]] },
-    { title: 'Reviews', total: data.reviews.total_reviews, values: [] },
-  ];
-  const maxActivity = Math.max(1,...data.bookingTrend.map((row)=>Math.max(Number(row.bookings),Number(row.paidTransactions))));
-  const maxCategory = Math.max(1,...data.eventCategories.map((row)=>Number(row.total)));
-  const maxRevenueByCurrency = Object.fromEntries(data.revenueByCurrency.map((row)=>[
-    row.currency,
-    Math.max(1,...data.bookingTrend.map((trend)=>Number(trend.salesByCurrency[row.currency] || 0))),
-  ]));
-  const bookingStatusTotal = data.bookingStatuses.reduce((total,row)=>total+Number(row.total),0);
-  const statusColors = ['#3074b3','#38a98b','#edaa45','#7984ea','#d96b72','#94a3b8','#44a1aa'];
-  let statusOffset = 0;
-  const statusGradient = bookingStatusTotal ? data.bookingStatuses.map((row,index)=>{
-    const end = statusOffset + Number(row.total) / bookingStatusTotal * 100;
-    const segment = `${statusColors[index % statusColors.length]} ${statusOffset}% ${end}%`;
-    statusOffset = end;
-    return segment;
-  }).join(', ') : '#e7eaf1 0% 100%';
-  return <>
-    <div className="welcome"><div><p className="eyebrow">{t('adminConsole')}</p><h2>{t('platformOverview')}</h2><p className="muted">Live database metrics for {appliedRange.startDate} through {appliedRange.endDate}. Revenue includes successful payments only and remains grouped by currency.</p></div><span className="live-dot">{t('liveDataLabel')}</span></div>
-    {error&&<div className="alert error dashboard-inline-error" role="alert">{translateText(error,language)} <button className="text-action" onClick={()=>setRetryCount((count)=>count+1)}>Retry</button></div>}
-    <section className="panel dashboard-filter" aria-label="Dashboard date filters">
-      <div className="dashboard-filter-heading"><div><strong>Dashboard date range</strong><span>Updates counts, charts, and recent records</span></div>{loading&&<span className="dashboard-refreshing" role="status"><span className="spinner"/>Refreshing</span>}</div>
-      <div className="dashboard-presets" role="group" aria-label="Date range presets">
-        {[['today','Today'],['7d','Last 7 Days'],['30d','Last 30 Days'],['custom','Custom Range']].map(([value,label])=><button type="button" key={value} className={`button secondary dashboard-preset ${preset===value?'selected':''}`} aria-pressed={preset===value} onClick={()=>applyPreset(value)}>{label}</button>)}
-      </div>
-      {preset==='custom'&&<form className="dashboard-custom-range" onSubmit={applyCustomRange}>
-        <label className="field"><span>From</span><input type="date" required value={dateRange.startDate} max={dateRange.endDate} onChange={(event)=>setDateRange((current)=>({...current,startDate:event.target.value}))}/></label>
-        <label className="field"><span>Through</span><input type="date" required value={dateRange.endDate} min={dateRange.startDate} onChange={(event)=>setDateRange((current)=>({...current,endDate:event.target.value}))}/></label>
-        <button className="button" disabled={loading}>Apply range</button>
-      </form>}
-    </section>
-    <section className="dashboard-metrics" aria-label="Overview statistics">
-      {metricGroups.map((metric)=><article className="metric-card dashboard-metric" key={metric.title}><p>{metric.title}</p><strong>{number(metric.total)}</strong>{metric.values.length>0&&<div className="dashboard-metric-details">{metric.values.map(([label,value])=><span key={label}><span>{label}</span><b>{number(value)}</b></span>)}</div>}</article>)}
-    </section>
-    <section className="panel dashboard-sales"><div className="dashboard-section-heading"><div><h3>Revenue</h3><p className="muted">Captured payments marked paid; failed, pending, and refund-request records are excluded.</p></div></div>
-      {data.revenueByCurrency.length===0?<div className="empty"><strong>No successful payments in this range</strong><span>Revenue will appear when valid payment records are recorded.</span></div>:<div className="currency-totals">{data.revenueByCurrency.map((row)=><div className="report-row" key={row.currency}><span>{row.currency} revenue</span><strong>{money(row.total,row.currency)}</strong></div>)}</div>}
-    </section>
-    <section className="dashboard-quick-actions" aria-label="Quick actions">
-      <h3>Quick actions</h3><div>{[['users','Users'],['vendors','Vendors'],['events','Events'],['bookings','Bookings'],['reports','Reports'],['settings','Settings']].map(([target,label])=><button type="button" className="button secondary" key={target} onClick={()=>onNavigate(target)}>{label}<ChevronRight size={15}/></button>)}</div>
-    </section>
-    <div className="dashboard-chart-grid">
-      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Booking trends</h3><p className="muted">Daily bookings and successful payment counts</p></div></div>
-        {data.bookingTrend.length===0?<div className="empty"><strong>No booking activity in this range</strong></div>:<><div className="trend-legend"><span><i className="trend-bookings"/>Bookings</span><span><i className="trend-payments"/>Paid transactions</span></div><div className="trend-chart" role="list" aria-label="Daily bookings and paid transactions">{data.bookingTrend.map((row)=><div className="trend-month" key={row.period} role="listitem" aria-label={`${row.period}: ${row.bookings} bookings, ${row.paidTransactions} paid transactions`}><div className="trend-bars"><span className="trend-bar trend-bookings" style={{height:`${Math.max(3,Number(row.bookings)/maxActivity*100)}%`}} title={`${number(row.bookings)} bookings`}/><span className="trend-bar trend-payments" style={{height:`${Math.max(3,Number(row.paidTransactions)/maxActivity*100)}%`}} title={`${number(row.paidTransactions)} paid transactions`}/></div><strong>{row.period.slice(5)}</strong><small>{number(row.bookings)} bookings</small><small>{number(row.paidTransactions)} paid</small></div>)}</div></>}
-      </section>
-      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Revenue trends</h3><p className="muted">Paid transaction totals shown separately by currency</p></div></div>
-        {data.revenueByCurrency.length===0?<div className="empty"><strong>No revenue activity in this range</strong></div>:<div className="revenue-series">{data.revenueByCurrency.map(({currency})=><div className="revenue-series-item" key={currency}><div className="revenue-series-heading"><strong>{currency}</strong><span>{money(data.revenueByCurrency.find((row)=>row.currency===currency)?.total,currency)}</span></div><div className="trend-chart revenue-chart" role="list" aria-label={`${currency} daily revenue`}>{data.bookingTrend.map((row)=>{const amount=Number(row.salesByCurrency[currency]||0);return <div className="trend-month" key={`${currency}-${row.period}`} role="listitem" aria-label={`${row.period}: ${money(amount,currency)}`}><div className="trend-bars"><span className="trend-bar trend-revenue" style={{height:`${Math.max(amount?3:0,amount/maxRevenueByCurrency[currency]*100)}%`}} title={money(amount,currency)}/></div><strong>{row.period.slice(5)}</strong></div>;})}</div></div>)}</div>}
-      </section>
-      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Events by category</h3><p className="muted">Event types created in the selected range</p></div></div>
-        {data.eventCategories.length===0?<div className="empty"><strong>No events in this range</strong></div>:<div className="category-chart">{data.eventCategories.map((row,index)=><div className="category-bar-row" key={row.category}><div><span>{row.category}</span><strong>{number(row.total)}</strong></div><span className="category-bar-track"><i style={{width:`${Number(row.total)/maxCategory*100}%`,background:statusColors[index%statusColors.length]}}/></span></div>)}</div>}
-      </section>
-      <section className="panel dashboard-chart-card"><div className="dashboard-section-heading"><div><h3>Booking statuses</h3><p className="muted">Status distribution in the selected range</p></div></div>
-        {bookingStatusTotal===0?<div className="empty"><strong>No bookings in this range</strong></div>:<div className="status-chart"><div className="status-donut" role="img" aria-label={`Booking status distribution across ${number(bookingStatusTotal)} bookings`} style={{background:`conic-gradient(${statusGradient})`}}><div><strong>{number(bookingStatusTotal)}</strong><span>bookings</span></div></div><div className="status-legend">{data.bookingStatuses.map((row,index)=><div key={row.status}><i style={{background:statusColors[index%statusColors.length]}}/><span>{translateText(row.status,language)}</span><strong>{number(row.total)}</strong></div>)}</div></div>}
-      </section>
-    </div>
-    <div className="dashboard-recent-grid">
-      <section className="panel dashboard-recent"><h3>Recent bookings</h3>{data.recentBookings.length===0?<div className="empty"><strong>No bookings in this range</strong></div>:<div className="dashboard-list">{data.recentBookings.map((row)=><article className="dashboard-list-row dashboard-booking-row" key={row.id}><div><strong>{row.event_title}</strong><span>{row.organizer_name} · {row.vendor_name}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span><strong>{money(row.quoted_amount,row.currency)}</strong></article>)}</div>}</section>
-      <section className="panel dashboard-recent"><h3>Recent vendor applications</h3>{data.recentVendorRequests.length===0?<div className="empty"><strong>No pending vendor applications</strong></div>:<div className="dashboard-list">{data.recentVendorRequests.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{row.business_name}</strong><span>{row.applicant_name} · {row.email}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div><span className="pill pending">Pending</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('vendors')}>Review vendors</button></section>
-      <section className="panel dashboard-recent"><h3>Recent complaints</h3>{data.recentComplaints.length===0?<div className="empty"><strong>No complaints in this range</strong></div>:<div className="dashboard-list">{data.recentComplaints.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{row.subject}</strong><span>{row.customer_name} · {dateTime(row.created_at)}</span></div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('complaints')}>Manage complaints</button></section>
-      <section className="panel dashboard-recent"><h3>Recent reviews</h3>{data.recentReviews.length===0?<div className="empty"><strong>No reviews in this range</strong></div>:<div className="dashboard-list">{data.recentReviews.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{'★'.repeat(Number(row.rating))} · {row.vendor_name}</strong><span>{row.customer_name} · {dateTime(row.created_at)}</span>{row.comment&&<span className="dashboard-review-comment">{row.comment}</span>}</div><span className={`pill ${row.status}`}>{translateText(row.status,language)}</span></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('reviews')}>Manage reviews</button></section>
-      <section className="panel dashboard-recent"><h3>Recent activities</h3>{data.recentActivities.length===0?<div className="empty"><strong>No activity in this range</strong></div>:<div className="dashboard-list">{data.recentActivities.map((row)=><article className="dashboard-list-row" key={row.id}><div><strong>{translateText(row.action,language)}</strong><span>{row.actor_name} · {row.entity_type}{row.entity_id ? ` #${row.entity_id}` : ''}</span><time dateTime={row.created_at}>{dateTime(row.created_at)}</time></div></article>)}</div>}<button className="text-action dashboard-view-all" onClick={()=>onNavigate('audit-logs')}>View audit log</button></section>
-    </div>
-  </>;
+function Overview({ onNavigate }) {
+  return <AdminDashboardOverview onNavigate={onNavigate}/>;
 }
 
 function AdminServiceCategories() {
@@ -5480,7 +5401,7 @@ function AdminServiceCategories() {
       <div className="page-heading">
         <div>
           <p className="eyebrow">SYSTEM CONTROL</p>
-          <h2>Service Category Management</h2>
+          <h2>Categories</h2>
           <p className="muted">Manage the shared categories used by customer browsing and vendor service forms.</p>
         </div>
         <button className="button" type="button" onClick={startCreate}>Create category</button>
@@ -6038,6 +5959,10 @@ function DataPage(props) {
     ? <AdminServiceCategories />
     : props.slug === 'payments'
       ? <AdminPaymentManagement />
+      : props.slug === 'refunds'
+        ? <AdminPaymentManagement mode="refunds" />
+        : props.slug === 'vendor-verification'
+          ? <AdminVendorVerification />
       : props.slug === 'reviews'
         ? <AdminReviewsComplaints kind="reviews" />
         : props.slug === 'complaints'
@@ -6872,20 +6797,19 @@ export default function App(){
     navigatePublic(`/login?registered=1&email=${encodeURIComponent(registeredUser.email)}`);
   }
   async function registerPublic(form){
-    const { name, username, email, phone, password, role, termsAccepted } = form;
+    const { fullName, email, phone, password, accountType, acceptedTerms } = form;
     if (DEMO_AUTH_ENABLED) {
-      if (!name || name.trim().length < 2) throw new Error('Enter your full name (at least 2 characters).');
+      if (!fullName || fullName.trim().length < 2) throw new Error('Enter your full name (at least 2 characters).');
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) throw new Error('Enter a valid email address.');
-      if (!username || !/^[A-Za-z0-9_]{3,32}$/.test(username.trim())) throw new Error('Use 3 to 32 letters, numbers, or underscores for your username.');
       if (!phone || !/^(?:0[79]\d{8}|251[79]\d{8}|\+[1-9]\d{7,14})$/.test(phone.trim().replace(/[\s().-]/g, ''))) throw new Error('Enter a valid phone number.');
-      if (!isValidDemoPassword(password) || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) throw new Error('Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character.');
-      if (!termsAccepted) throw new Error('Accept the Terms and Conditions to create an account.');
-      const profile = saveDemoAccount({ name, email, role });
+      if (!isValidDemoPassword(password) || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password)) throw new Error('Password must be at least 8 characters and include uppercase, lowercase, and a number.');
+      if (!acceptedTerms) throw new Error('Accept the Terms and Conditions to create an account.');
+      const profile = saveDemoAccount({ name: fullName, email, role: accountType.toLowerCase() });
       return { demo: true, profile };
     }
-    const response = await api('/platform/register',{method:'POST',body:JSON.stringify({name,username,email,phone,password,role,termsAccepted})});
+    const response = await api('/platform/register',{method:'POST',body:JSON.stringify({fullName,email,phone,accountType,password,acceptedTerms})});
     const registeredUser = response?.data?.user;
-    if (!registeredUser || registeredUser.role !== role) throw new Error('The server did not confirm the requested account.');
+    if (!registeredUser || registeredUser.role !== accountType.toLowerCase()) throw new Error('The server did not confirm the requested account.');
     return response;
   }
   async function setPassword(token, password) {
@@ -6895,31 +6819,25 @@ export default function App(){
   async function verifyPasswordResetOtp(email,code){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/platform/account/password/verify-otp',{method:'POST',body:JSON.stringify({email,code})}); }
   async function resetPassword(email,resetSessionToken,newPassword,confirmPassword){ if(DEMO_AUTH_ENABLED)throw Object.assign(new Error('Browser-only demo mode cannot send reset emails.'),{status:503,code:'DEMO_AUTH'}); return api('/platform/account/password/reset',{method:'POST',body:JSON.stringify({email,resetSessionToken,newPassword,confirmPassword})}); }
   async function verifyEmail(token){ const response = await api('/platform/verify-email',{method:'POST',body:JSON.stringify({token})}); return response; }
-  function navigate(next){const destination=DEMO_AUTH_ENABLED&&next==='account-settings'?'settings':next;const path=adminPathForSlug(destination);history.pushState({},'',path);setSlug(adminSlugFromPath(path)||'overview');setSidebarOpen(false);setGlobalError('');}
+  function navigate(next){if(next==='logout'){void logout();return;}const destination=DEMO_AUTH_ENABLED&&next==='account-settings'?'settings':next;const path=adminPathForSlug(destination);history.pushState({},'',path);setSlug(adminSlugFromPath(path)||'overview');setSidebarOpen(false);setGlobalError('');}
   function toggleAdminSidebar(){if(window.matchMedia('(max-width: 760px)').matches)setSidebarOpen((current)=>!current);else setSidebarCollapsed((current)=>!current);}
   async function logout(){
     if (!window.confirm(translate('confirmLogout', language))) return;
     const isAdministrator = String(user?.role || '').toLowerCase() === 'admin';
+    let logoutIssue = null;
     try {
       if (DEMO_AUTH_ENABLED) clearDemoSession();
       if (user) await api(isAdministrator ? '/auth/logout' : '/platform/logout',{method:'POST'});
     } catch (issue) {
-      setGlobalError(translate('logoutFailed', language));
-      if (issue.status === 401) {
-        authSessionLoader.setUnauthenticated();
-        setUser(null);
-        setPortal('admin');
-        const loginPath = isAdministrator ? '/admin/login' : '/login';
-        window.history.replaceState({}, '', loginPath);
-        setCurrentPath(loginPath);
-      }
-      return;
+      logoutIssue = issue;
+      console.error('The backend logout request failed; clearing the local session:', issue);
     }
+    clearPlatformSessionHint();
     authSessionLoader.setUnauthenticated();
     setUser(null);
     setShowLogin(false);
     setPortal('admin');
-    setGlobalError('');
+    setGlobalError(logoutIssue ? translate('logoutFailed', language) : '');
     try {
       window.sessionStorage.removeItem('eventhub_after_login');
     } catch (issue) {
@@ -7062,6 +6980,6 @@ export default function App(){
   if (portal === 'customer') return <><CustomerDashboard user={user} onLogout={logout} onUserChange={setUser} onNavigatePublic={navigatePublic}/></>;
   if (portal === 'organizer') return <><OrganizerDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
   if (portal === 'vendor') return <><VendorDashboard user={user} onLogout={logout} onUserChange={setUser}/></>;
-  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?  <AdminUserManagement currentAdminId={user.id}/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
-  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))} activePage={slug} onNavigate={navigate} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={navigate} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?  <AdminUserManagement currentAdminId={user.id}/>:slug==='roles'?<AdminRoleManagement/>:slug==='vendors'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translate('securePlatform',language)}</footer></main></div></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))}  activePage={slug}  onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={(target)=>navigate(target==='settings'?'account-settings':target)} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?  <AdminUserManagement currentAdminId={user.id}/>:slug==='vendors'?<AdminVendorManagement/>:slug==='vendor-verification'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentsManagement/>:slug==='refunds'?<AdminRefundManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translateText('Operational data is server-backed',language)}</footer></main></div></>;
+  return <><div className={`app-shell dashboard-admin-shell ${sidebarCollapsed?'sidebar-collapsed':''}`}><DashboardSidebar roleTitle={translate('adminDashboard',language).toUpperCase()} groups={menuGroups.map((group) => ({ ...group, flyoutWhenCollapsed: true }))}  activePage={slug}  onNavigate={navigate} onToggle={toggleAdminSidebar} collapsed={sidebarCollapsed} mobileOpen={sidebarOpen} onCloseMobile={()=>setSidebarOpen(false)} language={language} className="admin-dashboard-sidebar"/><div className={`mobile-scrim ${sidebarOpen?'visible':''}`} onClick={()=>setSidebarOpen(false)}/><main className="main-area"><DashboardHeader user={user} onNavigate={navigate} onLogout={logout} onToggleSidebar={toggleAdminSidebar} onUserChange={setUser} isAdmin={!user.role || user.role === 'admin'} sidebarExpanded={window.matchMedia('(max-width: 760px)').matches ? sidebarOpen : !sidebarCollapsed}/><div className="content">{globalError&&<div className="alert error">{globalError}<button className="dismiss" onClick={()=>setGlobalError('')}>{translate('dismiss',language)}</button></div>}{slug==='account-settings'?<DashboardSettings user={user}/>:slug==='overview'?<Overview onNavigate={navigate}/>:slug==='users'?  <AdminUserManagement currentAdminId={user.id}/>:slug==='vendors'?<AdminVendorManagement/>:slug==='vendor-verification'?<AdminVendorVerification/>:slug==='events'?<AdminEventManagement/>:slug==='hero-images'?<AdminHeroImages/>:slug==='bookings'?<AdminBookingManagement/>:slug==='payments'?<AdminPaymentsManagement/>:slug==='refunds'?<AdminRefundManagement/>:slug==='notifications'?<AdminNotifications/>:slug==='audit-logs'?<AdminAuditLogs/>:slug==='profile'?(DEMO_AUTH_ENABLED?<DataPage slug="profile" user={user} onUserChange={setUser}/>:<AdminProfile user={user} onUserChange={setUser}/>):slug==='reports'?<Reports/>:slug==='settings'?<SettingsPage/>:<DataPage slug={slug} user={user} onUserChange={setUser}/>}</div><footer className="footer">{translate('adminDashboard',language)} <span>•</span> {translate('securePlatform',language)}</footer></main></div></>;
 }

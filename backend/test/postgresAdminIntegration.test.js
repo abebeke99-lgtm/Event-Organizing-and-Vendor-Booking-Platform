@@ -32,10 +32,13 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
   let rosterChangeAdminId;
   let userId;
   let invitedVendorId;
+  let customerUserId;
+  let createdAdminUserId;
   let adminRoleId;
   let secondAdminRoleId;
   let rosterChangeAdminRoleId;
   let testRoleId;
+  let platformAdminRoleId;
   let secondAdminToken;
   let organizerRoleId;
   let organizerPermissionIds;
@@ -73,6 +76,14 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     assert.ok(roles.has('vendor'));
     assert.ok(roles.has('customer'));
     organizerRoleId = roles.get('organizer').id;
+    const platformAdminRole = await database.runtimeAdapter.query(
+      `SELECT id FROM roles
+       WHERE is_admin = TRUE AND is_active = TRUE
+         AND LOWER(name) IN ('admin', 'administrator')
+       ORDER BY id LIMIT 1`,
+    );
+    assert.ok(platformAdminRole.rows[0], 'an active Admin role is required');
+    platformAdminRoleId = platformAdminRole.rows[0].id;
     organizerPermissionIds = (await database.runtimeAdapter.query(
       'SELECT permission_id FROM role_permissions WHERE role_id = $1 ORDER BY permission_id',
       [organizerRoleId],
@@ -222,7 +233,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     const startDate = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const overviewPromise = (async () => {
       const startedAt = Date.now();
-      const response = await request(`/dashboard/overview?startDate=${startDate}&endDate=${endDate}`);
+      const response = await request(`/dashboard/overview?range=custom&from=${startDate}&to=${endDate}`);
       return { response, durationMs: Date.now() - startedAt };
     })();
     const [
@@ -254,14 +265,90 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     assert.ok(dashboardDurationMs < 15000, 'admin dashboard must load before the 15-second client timeout');
     assert.equal(overviewResponse.status, 200);
     const overview = (await overviewResponse.json()).data;
-    assert.deepEqual(overview.filters, { startDate, endDate });
+    assert.deepEqual(overview.period, { from: startDate, to: endDate });
     for (const key of [
-      'users', 'userRoles', 'vendors', 'events', 'bookings', 'payments',
-      'revenueByCurrency', 'complaints', 'reviews', 'recentBookings',
-      'recentVendorRequests', 'recentComplaints', 'recentReviews',
-      'bookingTrend', 'eventCategories', 'bookingStatuses', 'recentActivities',
+      'users', 'vendors', 'events', 'bookings', 'payments', 'revenue',
+      'complaints', 'reviews', 'charts', 'recentActivity',
     ]) assert.ok(Object.hasOwn(overview, key), `Missing dashboard field ${key}`);
-    assert.ok(Array.isArray(overview.bookingTrend));
+    assert.ok(Array.isArray(overview.charts.registrations));
+    assert.ok(Array.isArray(overview.charts.bookings));
+    assert.ok(Array.isArray(overview.charts.revenue));
+    assert.ok(Array.isArray(overview.recentActivity));
+    assert.ok(overview.recentActivity.length <= 10);
+    const directCounts = await database.runtimeAdapter.query(
+      `SELECT
+         (SELECT COUNT(*)::int FROM users WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS users_total,
+         (SELECT COUNT(DISTINCT u.id)::int FROM users u
+          JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
+          WHERE u.created_at >= $1::date AND u.created_at < ($2::date + INTERVAL '1 day')
+            AND (r.is_admin = TRUE OR LOWER(r.name) IN ('admin', 'administrator'))) AS users_admins,
+         (SELECT COUNT(DISTINCT u.id)::int FROM users u
+          JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
+          WHERE u.created_at >= $1::date AND u.created_at < ($2::date + INTERVAL '1 day')
+            AND LOWER(r.name) = 'customer') AS users_customers,
+         (SELECT COUNT(DISTINCT u.id)::int FROM users u
+          JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
+          WHERE u.created_at >= $1::date AND u.created_at < ($2::date + INTERVAL '1 day')
+            AND LOWER(r.name) = 'organizer') AS users_organizers,
+         (SELECT COUNT(DISTINCT u.id)::int FROM users u
+          JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id AND r.is_active = TRUE
+          WHERE u.created_at >= $1::date AND u.created_at < ($2::date + INTERVAL '1 day')
+            AND LOWER(r.name) = 'vendor') AS users_vendors,
+         (SELECT COUNT(*)::int FROM vendor_profiles WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS vendors_total,
+         (SELECT COUNT(*)::int FROM vendor_profiles WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND verification_status = 'verified') AS vendors_verified,
+         (SELECT COUNT(*)::int FROM vendor_profiles WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND verification_status = 'pending') AS vendors_pending,
+         (SELECT COUNT(*)::int FROM events WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS events_total,
+         (SELECT COUNT(*)::int FROM events WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status IN ('active', 'published', 'upcoming', 'open')) AS events_published,
+         (SELECT COUNT(*)::int FROM events WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND start_date >= CURRENT_DATE AND status IN ('active', 'published', 'upcoming', 'open')) AS events_upcoming,
+         (SELECT COUNT(*)::int FROM bookings WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS bookings_total,
+         (SELECT COUNT(*)::int FROM bookings WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status IN ('requested', 'quoted', 'under_review')) AS bookings_pending,
+         (SELECT COUNT(*)::int FROM bookings WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status = 'accepted') AS bookings_confirmed,
+         (SELECT COUNT(*)::int FROM bookings WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status = 'completed') AS bookings_completed,
+         (SELECT COUNT(*)::int FROM bookings WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status = 'cancelled') AS bookings_cancelled,
+         (SELECT COUNT(*)::int FROM payments WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS payments_total,
+         (SELECT COUNT(*)::int FROM payments WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status = 'paid') AS payments_successful,
+         (SELECT COUNT(*)::int FROM payments WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status IN ('pending', 'authorized')) AS payments_pending_authorized,
+         (SELECT COUNT(*)::int FROM refund_requests WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS payments_refund_requests,
+         (SELECT COUNT(*)::int FROM complaints WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS complaints_total,
+         (SELECT COUNT(*)::int FROM complaints WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status IN ('open', 'under_review', 'investigating')) AS complaints_open,
+         (SELECT COUNT(*)::int FROM reviews WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day')) AS reviews_total`,
+      [startDate, endDate],
+    );
+    const direct = directCounts.rows[0];
+    assert.equal(overview.users.total, direct.users_total);
+    assert.equal(overview.users.administrators, direct.users_admins);
+    assert.equal(overview.users.customers, direct.users_customers);
+    assert.equal(overview.users.organizers, direct.users_organizers);
+    assert.equal(overview.users.vendors, direct.users_vendors);
+    assert.equal(overview.vendors.total, direct.vendors_total);
+    assert.equal(overview.vendors.verified, direct.vendors_verified);
+    assert.equal(overview.vendors.pending, direct.vendors_pending);
+    assert.equal(overview.events.total, direct.events_total);
+    assert.equal(overview.events.published, direct.events_published);
+    assert.equal(overview.events.upcoming, direct.events_upcoming);
+    assert.equal(overview.bookings.total, direct.bookings_total);
+    assert.equal(overview.bookings.pending, direct.bookings_pending);
+    assert.equal(overview.bookings.confirmed, direct.bookings_confirmed);
+    assert.equal(overview.bookings.completed, direct.bookings_completed);
+    assert.equal(overview.bookings.cancelled, direct.bookings_cancelled);
+    assert.equal(overview.payments.total, direct.payments_total);
+    assert.equal(overview.payments.successful, direct.payments_successful);
+    assert.equal(overview.payments.pendingAuthorized, direct.payments_pending_authorized);
+    assert.equal(overview.payments.refundRequests, direct.payments_refund_requests);
+    assert.equal(overview.complaints.total, direct.complaints_total);
+    assert.equal(overview.complaints.open, direct.complaints_open);
+    assert.equal(overview.reviews.total, direct.reviews_total);
+    const directRevenue = await database.runtimeAdapter.query(
+      `SELECT currency, COALESCE(SUM(amount), 0)::text AS total
+       FROM payments
+       WHERE created_at >= $1::date AND created_at < ($2::date + INTERVAL '1 day') AND status = 'paid'
+       GROUP BY currency ORDER BY currency`,
+      [startDate, endDate],
+    );
+    assert.deepEqual(overview.revenue, directRevenue.rows.map((row) => ({
+      currency: row.currency,
+      total: row.total,
+    })));
 
     assert.equal(roleUsersResponse.status, 200);
     assert.equal((await roleUsersResponse.json()).pagination.total, 0);
@@ -311,6 +398,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       method: 'POST',
       body: {
         full_name: 'Postgres Admin Created User',
+        username: `pg_org_${phoneSuffix}`,
         email: `pg-user-${suffix}@example.invalid`,
         phone: `+1555${phoneSuffix}`,
         password: 'StrongPass123',
@@ -373,6 +461,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       method: 'POST',
       body: {
         full_name: 'Postgres Admin Created Vendor',
+        username: `pg_vendor_${phoneSuffix}`,
         email: `pg-vendor-${suffix}@example.invalid`,
         phone: `+1666${phoneSuffix}`,
         password: 'StrongPass123',
@@ -399,7 +488,8 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
     const customerCreation = await request('/users', {
       method: 'POST',
       body: {
-        full_name: 'Blocked Customer',
+        full_name: 'Postgres Admin Created Customer',
+        username: `pg_customer_${phoneSuffix}`,
         email: `pg-customer-${suffix}@example.invalid`,
         phone: `+1777${phoneSuffix}`,
         password: 'StrongPass123',
@@ -407,16 +497,54 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         role_id: roles.get('customer').id,
       },
     });
-    assert.equal(customerCreation.status, 400);
-    const forbiddenAdminInvitation = await request('/users', {
+    assert.equal(customerCreation.status, 201);
+    const createdCustomer = await customerCreation.json();
+    customerUserId = createdCustomer.data.id;
+    const promotedCustomer = await request(`/users/${customerUserId}/role`, {
+      method: 'PATCH',
+      body: { role_id: platformAdminRoleId },
+    });
+    assert.equal(promotedCustomer.status, 200);
+    const promotedCustomerRole = await database.runtimeAdapter.query(
+      `SELECT r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+       WHERE ur.user_id = $1 AND r.is_admin = TRUE`,
+      [customerUserId],
+    );
+    assert.equal(promotedCustomerRole.rowCount, 1);
+    const adminCreation = await request('/users', {
       method: 'POST',
       body: {
-        full_name: 'Blocked Administrator',
-        email: `pg-blocked-admin-${suffix}@example.invalid`,
-        role_id: adminRoleId,
+        full_name: 'Postgres Admin Created Administrator',
+        username: `pg_admin_${phoneSuffix}`,
+        email: `pg-created-admin-${suffix}@example.invalid`,
+        phone: `+1888${phoneSuffix}`,
+        password: 'StrongPass123!',
+        confirm_password: 'StrongPass123!',
+        role_id: platformAdminRoleId,
       },
     });
-    assert.equal(forbiddenAdminInvitation.status, 400);
+    assert.equal(adminCreation.status, 201);
+    const createdAdmin = await adminCreation.json();
+    createdAdminUserId = createdAdmin.data.id;
+    const adminEmailLogin = await fetch(`${apiOrigin}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `pg-created-admin-${suffix}@example.invalid`, password: 'StrongPass123!' }),
+    });
+    assert.equal(adminEmailLogin.status, 200);
+    const adminUsernameLogin = await fetch(`${apiOrigin}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `pg_admin_${phoneSuffix}`, password: 'StrongPass123!' }),
+    });
+    assert.equal(adminUsernameLogin.status, 200);
+    const createdAdminCookie = adminUsernameLogin.headers.get('set-cookie')?.split(';', 1)[0];
+    assert.ok(createdAdminCookie?.startsWith('admin_session='));
+    const createdAdminDashboard = await fetch(
+      `${apiOrigin}/api/admin/dashboard/overview?range=custom&from=${startDate}&to=${endDate}`,
+      { headers: { Cookie: createdAdminCookie } },
+    );
+    assert.equal(createdAdminDashboard.status, 200);
 
     const invitedVendorProfile = await database.runtimeAdapter.query(
       'SELECT business_name, category_id FROM vendor_profiles WHERE user_id = $1',
@@ -772,7 +900,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
       request('/users', { token: userToken }),
       request('/reports/summary', { token: userToken }),
       request(
-        `/dashboard/overview?startDate=${startDate}&endDate=${endDate}`,
+        `/dashboard/overview?range=custom&from=${startDate}&to=${endDate}`,
         { token: userToken },
       ),
       request(
@@ -996,6 +1124,7 @@ test('Neon PostgreSQL admin user, role, and report-summary workflows enforce aut
         await database.inTransaction(async (client) => {
           const fixtureUserIds = [
             adminId, secondAdminId, rosterChangeAdminId, userId, invitedVendorId,
+            customerUserId, createdAdminUserId,
           ].filter(Boolean);
           const fixtureRoleIds = [
             adminRoleId, secondAdminRoleId, rosterChangeAdminRoleId, testRoleId,

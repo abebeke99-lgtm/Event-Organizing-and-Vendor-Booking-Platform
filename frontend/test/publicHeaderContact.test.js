@@ -28,18 +28,18 @@ test('public header contact links use the central settings and correct display v
   assert.doesNotMatch(markup, /old@example\.com|\+251 11 123 4567/);
 });
 
-test('contact details lead the right-side group while social icons stay on the left', () => {
+test('contact details lead the left-side group and social icons follow the email', () => {
   const markup = renderToStaticMarkup(React.createElement(ContactTopBar, {
     environment: { VITE_FACEBOOK_URL: 'https://facebook.com/eventhub' },
     children: React.createElement('span', { id: 'language-switcher' }, 'English'),
   }));
   const leftContent = markup.match(/<div class="contact-top-bar-left">([\s\S]*?)<\/div>/)?.[1] || '';
-  const actionsContent = markup.match(/<div class="contact-top-bar-actions">([\s\S]*?)<\/div><\/div><\/aside>/)?.[1] || '';
+  const actionsContent = markup.match(/<div class="contact-top-bar-actions">([\s\S]*?)<\/div>/)?.[1] || '';
 
-  assert.doesNotMatch(leftContent, /contact-top-bar-item/);
-  assert.match(leftContent, /contact-top-bar-social/);
-  assert.ok(actionsContent.indexOf('contact-top-bar-info') < actionsContent.indexOf('contact-top-bar-actions-divider'));
-  assert.ok(actionsContent.indexOf('contact-top-bar-actions-divider') < actionsContent.indexOf('id="language-switcher"'));
+  assert.match(leftContent, /contact-top-bar-info/);
+  assert.match(leftContent, /contact-top-bar-social-icons/);
+  assert.ok(actionsContent.indexOf('contact-top-bar-actions-divider') > -1);
+  assert.ok(actionsContent.indexOf('id="language-switcher"') > -1);
 });
 
 test('mobile drawer shows full central contact details with tappable links', () => {

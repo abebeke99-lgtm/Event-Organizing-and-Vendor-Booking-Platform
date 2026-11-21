@@ -1,0 +1,16 @@
+import '../src/lib/environment.js';
+const { createPostgresRuntimePool } = await import('../src/postgresPool.js');
+const pool = createPostgresRuntimePool();
+const q = async (sql) => (await pool.query(sql)).rows;
+console.log('DB:', (await q("SELECT current_database() AS db, current_user AS usr, current_schema() AS sch"))[0]);
+console.log('VERSION:', (await q("SELECT version() AS v"))[0].v);
+const tables = await q("SELECT COUNT(*)::int AS c FROM information_schema.tables WHERE table_schema=current_schema() AND table_type='BASE TABLE'");
+console.log('TABLES:', tables[0].c);
+const fks = await q("SELECT COUNT(*)::int AS c FROM information_schema.table_constraints WHERE constraint_type='FOREIGN KEY' AND table_schema=current_schema()");
+console.log('FKS:', fks[0].c);
+const idx = await q("SELECT COUNT(*)::int AS c FROM pg_indexes WHERE schemaname=current_schema()");
+console.log('INDEXES:', idx[0].c);
+const mig = await q("SELECT * FROM schema_migrations ORDER BY 1");
+console.log('MIGRATIONS:', mig.length);
+console.log(JSON.stringify(mig, null, 2));
+await pool.end();

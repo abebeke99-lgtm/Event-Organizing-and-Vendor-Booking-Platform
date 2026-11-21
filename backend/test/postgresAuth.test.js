@@ -45,19 +45,22 @@ function createDatabase() {
       if (sql.includes("setting_key = 'notify_admin_user_registrations'")) {
         return { rows: [], rowCount: 0 };
       }
+      if (sql.includes('SELECT id FROM users WHERE LOWER(email) = LOWER($1)')) {
+        const user = users.get(String(values[0]).toLowerCase());
+        return { rows: user ? [{ id: user.id }] : [], rowCount: user ? 1 : 0 };
+      }
       if (sql.includes('SELECT id FROM roles')) {
         const roleIds = { customer: 2, organizer: 3, vendor: 4 };
         return { rows: [{ id: roleIds[values[0]] || 2 }], rowCount: 1 };
       }
       if (sql.startsWith('INSERT INTO users')) {
-        const [fullName, username, email, phone, passwordHash, preferredLanguage] = values;
-        if ([...users.values()].some((user) => user.email === email || user.username === username)) {
+        const [fullName, email, phone, passwordHash, preferredLanguage] = values;
+        if ([...users.values()].some((user) => user.email === email)) {
           throw Object.assign(new Error('duplicate user'), { code: '23505' });
         }
         const user = {
           id: nextUserId++,
           full_name: fullName,
-          username,
           email,
           phone,
           password_hash: passwordHash,
@@ -106,7 +109,8 @@ function createDatabase() {
       if (sql.startsWith('SELECT DISTINCT u.id')) {
         return { rows: [], rowCount: 0 };
       }
-      if (sql.startsWith('SELECT u.id, u.full_name, u.username, u.email, u.password_hash')) {
+      if (sql.includes('FROM users u')
+        && sql.includes('WHERE LOWER(u.email) = $1 OR LOWER(u.username) = $1')) {
         const user = [...users.values()].find((candidate) => (
           candidate.email === values[0] || candidate.username === values[0]
         ));
@@ -187,19 +191,17 @@ after(async () => {
 
 test('PostgreSQL application auth persists registration, login, and session operations', async () => {
   const email = `pg-auth-${Date.now()}@example.test`;
-  const username = `pg_auth_${Date.now()}`;
   const password = 'StrongPass123!';
   const registerResponse = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Accept-Language': 'am', 'X-Forwarded-For': '198.51.100.11' },
     body: JSON.stringify({
-      name: 'Postgres Auth User',
-      username,
+      fullName: 'Postgres Auth User',
       email,
       phone: '0986481821',
       password,
-      role: 'customer',
-      termsAccepted: true,
+      accountType: 'Customer',
+      acceptedTerms: true,
     }),
   });
   const registered = await registerResponse.json();
@@ -207,7 +209,8 @@ test('PostgreSQL application auth persists registration, login, and session oper
   assert.equal(registered.data.user.role, 'customer');
   assert.equal(database.roleAssignments.at(-1).roleId, 2);
   assert.equal(database.audits.at(-1)[1], 'auth.register');
-  assert.equal(registered.data.user.username, username);
+  assert.equal(Object.hasOwn(registered.data.user, 'username'), false);
+  assert.equal(Object.hasOwn(database.users.get(email), 'username'), false);
   assert.equal(await bcrypt.compare(password, database.users.get(email).password_hash), true);
   assert.equal(registerResponse.headers.get('set-cookie'), null);
   assert.equal(database.sessions.size, 0);
@@ -218,13 +221,13 @@ test('PostgreSQL application auth persists registration, login, and session oper
     body: JSON.stringify({ email, password: 'Incorrect123' }),
   });
   assert.equal(incorrectPassword.status, 401);
-  assert.equal((await incorrectPassword.json()).error, 'Invalid username/email or password.');
+  assert.equal((await incorrectPassword.json()).message, 'Invalid username/email or password');
 
   const organizerEmail = `organizer-${Date.now()}@example.test`;
   const organizerRegistration = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.13' },
-    body: JSON.stringify({ name: 'Platform Organizer', username: `org_${Date.now()}`, email: organizerEmail, phone: '0986481822', password, role: 'organizer', termsAccepted: true }),
+    body: JSON.stringify({ fullName: 'Platform Organizer', email: organizerEmail, phone: '0986481822', password, accountType: 'Organizer', acceptedTerms: true }),
   });
   assert.equal(organizerRegistration.status, 201);
   assert.equal((await organizerRegistration.json()).data.user.role, 'organizer');
@@ -234,7 +237,7 @@ test('PostgreSQL application auth persists registration, login, and session oper
   const vendorRegistration = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.14' },
-    body: JSON.stringify({ name: 'Platform Vendor', username: `vendor_${Date.now()}`, email: vendorEmail, phone: '0986481823', password, role: 'vendor', termsAccepted: true }),
+    body: JSON.stringify({ fullName: 'Platform Vendor', email: vendorEmail, phone: '0986481823', password, accountType: 'Vendor', acceptedTerms: true }),
   });
   assert.equal(vendorRegistration.status, 201);
   assert.equal((await vendorRegistration.json()).data.user.role, 'vendor');
@@ -245,7 +248,7 @@ test('PostgreSQL application auth persists registration, login, and session oper
   const adminRegistration = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.15' },
-    body: JSON.stringify({ name: 'Self Registered Admin', username: 'admin_register', email: adminEmail, phone: '0986481824', password, role: 'admin', termsAccepted: true }),
+    body: JSON.stringify({ fullName: 'Self Registered Admin', email: adminEmail, phone: '0986481824', password, accountType: 'Admin', acceptedTerms: true }),
   });
   assert.equal(adminRegistration.status, 403);
   assert.equal(database.roleAssignments.length, previousAssignmentCount);
@@ -254,10 +257,10 @@ test('PostgreSQL application auth persists registration, login, and session oper
   const duplicateRegistration = await fetch(`${baseUrl}/api/platform/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.16' },
-    body: JSON.stringify({ name: 'Duplicate User', username: 'duplicate_user', email, phone: '0986481825', password, role: 'vendor', termsAccepted: true }),
+    body: JSON.stringify({ fullName: 'Duplicate User', email, phone: '0986481825', password, accountType: 'Vendor', acceptedTerms: true }),
   });
   assert.equal(duplicateRegistration.status, 409);
-  assert.match((await duplicateRegistration.json()).error, /username or email/i);
+  assert.match((await duplicateRegistration.json()).error, /email/i);
 
   const loginResponse = await fetch(`${baseUrl}/api/platform/login`, {
     method: 'POST',
@@ -265,6 +268,12 @@ test('PostgreSQL application auth persists registration, login, and session oper
     body: JSON.stringify({ email, password }),
   });
   assert.equal(loginResponse.status, 200);
+  const usernameLogin = await fetch(`${baseUrl}/api/platform/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'valid_unused_username', password }),
+  });
+  assert.equal(usernameLogin.status, 401);
   const cookie = loginResponse.headers.get('set-cookie').split(';', 1)[0];
   const meResponse = await fetch(`${baseUrl}/api/platform/me`, { headers: { Cookie: cookie } });
   const me = await meResponse.json();
@@ -282,10 +291,10 @@ test('PostgreSQL application auth persists registration, login, and session oper
   const inactiveLogin = await fetch(`${baseUrl}/api/platform/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password: 'StrongPass123' }),
+    body: JSON.stringify({ email, password }),
   });
   assert.equal(inactiveLogin.status, 403);
-  assert.equal((await inactiveLogin.json()).error, 'This account is inactive. Contact support for assistance.');
+  assert.equal((await inactiveLogin.json()).message, 'This account is inactive. Contact support for assistance.');
 });
 
 test('PostgreSQL login returns a generic error for an unknown email', async () => {
@@ -295,7 +304,43 @@ test('PostgreSQL login returns a generic error for an unknown email', async () =
     body: JSON.stringify({ email: `unknown-${Date.now()}@example.test`, password: 'Pass1234' }),
   });
   assert.equal(unknown.status, 401);
-  assert.equal((await unknown.json()).error, 'Invalid username/email or password.');
+  assert.equal((await unknown.json()).message, 'Invalid username/email or password');
+});
+
+test('PostgreSQL login rejects missing and hashless-account credentials without throwing', async () => {
+  for (const [email, username, passwordHash] of [
+    ['oauth-null@example.test', 'oauth_null', null],
+    ['oauth-empty@example.test', 'oauth_empty', ''],
+  ]) {
+    const userId = database.users.size + 900;
+    database.users.set(email, {
+      id: userId,
+      full_name: 'OAuth-only account',
+      username,
+      email,
+      password_hash: passwordHash,
+      status: 'active',
+    });
+    database.roleAssignments.push({ userId, roleId: 2 });
+    const response = await fetch(`${baseUrl}/api/platform/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: username, password: 'AnyPassword123' }),
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { message: 'Invalid username/email or password' });
+    assert.equal(response.headers.has('set-cookie'), false);
+  }
+
+  const missingFields = await fetch(`${baseUrl}/api/platform/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(missingFields.status, 400);
+  assert.deepEqual(await missingFields.json(), {
+    message: 'Enter a valid username or email and password.',
+  });
 });
 
 test('invitation password tokens are hashed, expire, and can be used only once', async () => {
@@ -364,13 +409,12 @@ test('PostgreSQL platform maintenance blocks auth operations but keeps availabil
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: 'Maintenance Test',
-        username: `maintenance_${Date.now()}`,
+        fullName: 'Maintenance Test',
         email: `maintenance-${Date.now()}@example.test`,
         phone: '0986481826',
         password: 'StrongPass123!',
-        role: 'customer',
-        termsAccepted: true,
+        accountType: 'Customer',
+        acceptedTerms: true,
       }),
     });
     assert.equal(registration.status, 503);

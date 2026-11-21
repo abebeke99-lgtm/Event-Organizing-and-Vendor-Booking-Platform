@@ -9,32 +9,40 @@ const syntheticPassword = 'SyntheticAdminPassword12';
 const passwordHash = await bcrypt.hash(syntheticPassword, 4);
 const users = new Map([
   ['active-admin@example.test', {
-    id: 21, full_name: 'Synthetic Admin', email: 'active-admin@example.test',
+    id: 21, full_name: 'Synthetic Admin', username: 'active_admin', email: 'active-admin@example.test',
     password_hash: passwordHash, status: 'active', role: 'admin', is_admin: 1, role_is_active: 1,
   }],
   ['inactive-admin@example.test', {
-    id: 22, full_name: 'Inactive Admin', email: 'inactive-admin@example.test',
+    id: 22, full_name: 'Inactive Admin', username: 'inactive_admin', email: 'inactive-admin@example.test',
     password_hash: passwordHash, status: 'suspended', role: 'admin', is_admin: 1, role_is_active: 1,
   }],
   ['inactive-role@example.test', {
-    id: 23, full_name: 'Inactive Role', email: 'inactive-role@example.test',
+    id: 23, full_name: 'Inactive Role', username: 'inactive_role', email: 'inactive-role@example.test',
     password_hash: passwordHash, status: 'active', role: 'admin', is_admin: 1, role_is_active: 0,
   }],
   ['customer@example.test', {
-    id: 24, full_name: 'Synthetic Customer', email: 'customer@example.test',
+    id: 24, full_name: 'Synthetic Customer', username: 'synthetic_customer', email: 'customer@example.test',
     password_hash: passwordHash, status: 'active', role: 'customer', is_admin: 0, role_is_active: 1,
   }],
   ['organizer@example.test', {
-    id: 25, full_name: 'Synthetic Organizer', email: 'organizer@example.test',
+    id: 25, full_name: 'Synthetic Organizer', username: 'synthetic_organizer', email: 'organizer@example.test',
     password_hash: passwordHash, status: 'active', role: 'organizer', is_admin: 0, role_is_active: 1,
   }],
   ['vendor@example.test', {
-    id: 26, full_name: 'Synthetic Vendor', email: 'vendor@example.test',
+    id: 26, full_name: 'Synthetic Vendor', username: 'synthetic_vendor', email: 'vendor@example.test',
     password_hash: passwordHash, status: 'active', role: 'vendor', is_admin: 0, role_is_active: 1,
   }],
   ['administrator-role@example.test', {
-    id: 27, full_name: 'Synthetic Named Administrator', email: 'administrator-role@example.test',
+    id: 27, full_name: 'Synthetic Named Administrator', username: 'named_administrator', email: 'administrator-role@example.test',
     password_hash: passwordHash, status: 'active', role: 'administrator', is_admin: 0, role_is_active: 1,
+  }],
+  ['oauth-only@example.test', {
+    id: 28, full_name: 'OAuth-only Account', username: 'oauth_only', email: 'oauth-only@example.test',
+    password_hash: null, status: 'active', role: 'customer', is_admin: 0, role_is_active: 1,
+  }],
+  ['oauth-empty@example.test', {
+    id: 29, full_name: 'OAuth Empty Account', username: 'oauth_empty', email: 'oauth-empty@example.test',
+    password_hash: '', status: 'active', role: 'customer', is_admin: 0, role_is_active: 1,
   }],
 ]);
 const sessions = new Map();
@@ -42,6 +50,13 @@ let loginRequestId = 0;
 
 function findUserById(id) {
   return [...users.values()].find((user) => String(user.id) === String(id));
+}
+
+function findUserByIdentifier(identifier) {
+  const normalized = String(identifier).trim().toLowerCase();
+  return [...users.values()].find((user) => (
+    user.email.toLowerCase() === normalized || user.username === normalized
+  ));
 }
 
 function findSession(tokenHash) {
@@ -60,7 +75,7 @@ const database = {
   async execute(statement, values = []) {
     if (statement.includes('FROM system_settings')) return [[], []];
     if (statement.includes('FROM users u') && statement.includes('LOWER(u.email) = ?')) {
-      const user = users.get(values[0]);
+      const user = findUserByIdentifier(values[0]);
       return [user ? [user] : [], []];
     }
     if (statement.startsWith('UPDATE users SET last_login_at')) return [{ affectedRows: 1 }, []];
@@ -133,7 +148,7 @@ const database = {
   },
   async query(statement, values = []) {
     if (statement.includes('FROM users u') && statement.includes('LOWER(u.email) = $1')) {
-      const user = users.get(values[0]);
+      const user = findUserByIdentifier(values[0]);
       return { rows: user ? [user] : [] };
     }
     if (statement.includes('FROM users u') && statement.includes('STRING_AGG(DISTINCT r.name')) {
@@ -197,38 +212,44 @@ after(async () => {
   })));
 });
 
-async function login(email, password = syntheticPassword, endpoint = '/api/platform/login', apiBaseUrl = baseUrl) {
+async function postLogin(body, endpoint = '/api/platform/login', apiBaseUrl = baseUrl) {
   return fetch(`${apiBaseUrl}${endpoint}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Forwarded-For': `198.51.100.${(loginRequestId++ % 250) + 1}`,
     },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify(body),
     credentials: 'omit',
   });
 }
 
-test('one platform login endpoint authenticates all four roles with a shared HttpOnly cookie session', async () => {
-  for (const [email, role] of [
-    ['active-admin@example.test', 'admin'],
-    ['organizer@example.test', 'organizer'],
-    ['vendor@example.test', 'vendor'],
-    ['customer@example.test', 'customer'],
-  ]) {
-    const response = await login(`  ${email.toUpperCase()}  `);
-    const body = await response.json();
-    const cookie = response.headers.get('set-cookie') || '';
-    const token = cookie.match(/platform_session=([^;]+)/)?.[1];
+async function login(email, password = syntheticPassword, endpoint = '/api/platform/login', apiBaseUrl = baseUrl) {
+  return postLogin({ email, password }, endpoint, apiBaseUrl);
+}
 
-    assert.equal(response.status, 200);
-    assert.equal(body.user.email, email);
-    assert.equal(body.user.role, role);
-    assert.equal(Object.hasOwn(body.user, 'password_hash'), false);
-    assert.match(cookie, /HttpOnly/i);
-    assert.match(cookie, /SameSite=Lax/i);
-    assert.ok(token);
-    assert.ok(sessions.has(hashToken(decodeURIComponent(token))));
+test('one platform login endpoint authenticates all four roles with a shared HttpOnly cookie session', async () => {
+  for (const [email, username, role] of [
+    ['active-admin@example.test', 'active_admin', 'admin'],
+    ['organizer@example.test', 'synthetic_organizer', 'organizer'],
+    ['vendor@example.test', 'synthetic_vendor', 'vendor'],
+    ['customer@example.test', 'synthetic_customer', 'customer'],
+  ]) {
+    for (const identifier of [email.toUpperCase(), ` ${username.toUpperCase()} `]) {
+      const response = await login(identifier);
+      const body = await response.json();
+      const cookie = response.headers.get('set-cookie') || '';
+      const token = cookie.match(/platform_session=([^;]+)/)?.[1];
+
+      assert.equal(response.status, 200);
+      assert.equal(body.user.email, email);
+      assert.equal(body.user.role, role);
+      assert.equal(Object.hasOwn(body.user, 'password_hash'), false);
+      assert.match(cookie, /HttpOnly/i);
+      assert.match(cookie, /SameSite=Lax/i);
+      assert.ok(token);
+      assert.ok(sessions.has(hashToken(decodeURIComponent(token))));
+    }
   }
 });
 
@@ -256,22 +277,40 @@ test('both session inspection endpoints accept the same admin session', async ()
 test('inactive accounts and inactive roles receive clear errors', async () => {
   const inactiveAccount = await login('inactive-admin@example.test');
   assert.equal(inactiveAccount.status, 403);
-  assert.match((await inactiveAccount.json()).error, /inactive/i);
+  assert.match((await inactiveAccount.json()).message, /inactive/i);
 
   const inactiveRole = await login('inactive-role@example.test');
   assert.equal(inactiveRole.status, 403);
-  assert.match((await inactiveRole.json()).error, /role is inactive/i);
+  assert.match((await inactiveRole.json()).message, /role is inactive/i);
 });
 
 test('incorrect or unknown credentials do not create a session', async () => {
   const wrongPassword = await login('active-admin@example.test', 'wrong-synthetic-password');
   assert.equal(wrongPassword.status, 401);
-  assert.deepEqual(await wrongPassword.json(), { error: 'Invalid email or password.' });
+  assert.deepEqual(await wrongPassword.json(), { message: 'Invalid username/email or password' });
   assert.equal(wrongPassword.headers.has('set-cookie'), false);
 
   const missingUser = await login('missing@example.test');
   assert.equal(missingUser.status, 401);
-  assert.deepEqual(await missingUser.json(), { error: 'Invalid email or password.' });
+  assert.deepEqual(await missingUser.json(), { message: 'Invalid username/email or password' });
+
+  for (const identifier of ['oauth_only', 'oauth-empty@example.test']) {
+    const oauthOnlyUser = await login(identifier);
+    assert.equal(oauthOnlyUser.status, 401);
+    assert.deepEqual(await oauthOnlyUser.json(), { message: 'Invalid username/email or password' });
+    assert.equal(oauthOnlyUser.headers.has('set-cookie'), false);
+  }
+});
+
+test('missing login fields return a clear 400 response in both database modes', async () => {
+  for (const apiBaseUrl of [baseUrl, postgresBaseUrl]) {
+    const response = await postLogin({ email: 'active-admin@example.test', password: '' },
+      '/api/platform/login', apiBaseUrl);
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      message: 'Enter a valid username or email and password.',
+    });
+  }
 });
 
 test('admin API rejects unauthenticated and non-admin platform sessions', async () => {

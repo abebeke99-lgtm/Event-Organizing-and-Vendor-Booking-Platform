@@ -14,6 +14,8 @@ The Event Organizing and Vendor Booking Platform is a web-based solution that co
 - Customer: browses services, requests bookings, monitors payments, and leaves reviews.
 - Visitor: can browse public listings but must sign in to book or manage private data.
 
+The registration form lists **Admin**, **Customer**, **Organizer**, and **Vendor**, with Customer selected by default. Public registration validates the required profile fields, unique username and email, phone format, password strength, and terms acceptance; public requests cannot create Admin accounts. Only an authenticated administrator with the required user-management permission can create or promote an Admin. Successful sign-in routes each account to its role-specific dashboard, while backend role checks protect privileged routes.
+
 ## 3. Functional Scope
 
 ### Core capabilities
@@ -98,7 +100,7 @@ AI chat also blocks common requests to disclose credentials, hidden instructions
 
 Neon integration tests can create, update, and roll back database fixtures. Do not enable them until an administrator has created a separate Neon test branch and configured its pooled `DATABASE_URL` and direct `DIRECT_URL` in the ignored `backend/.env.neon-test` file. Never copy production connection strings into that file or share connection strings in chat, logs, or tracked files.
 
-The test environment loader compares the configured test host with both production endpoints from `backend/.env` and the backend process environment. It refuses to connect if either test endpoint uses the production Neon branch, even if a different database name is supplied, and fails closed if production identity cannot be verified. `npm run db:check:neon-test` checks connectivity and schema; only after the branch has been independently confirmed should Neon integration tests be enabled with `$env:RUN_NEON_INTEGRATION = 'true'` before running `npm test` from `backend`. The normal backend test command leaves these integration tests skipped.
+The test environment loader compares the configured test host with both production endpoints from `backend/.env` and the backend process environment. It refuses to connect if either test endpoint uses the production Neon branch, even if a different database name is supplied, and fails closed if production identity cannot be verified. After independently confirming the isolated branch, run `npm run migrate:neon-test -- --target=isolated-neon-eventhub --authorize-allowlisted-migrations` from `backend` to apply the guarded, additive test migrations, then run `npm run db:check:neon-test` to verify connectivity and schema (including username authentication). Only after the branch has been independently confirmed should Neon integration tests be enabled with `$env:RUN_NEON_INTEGRATION = 'true'` before running `npm test` from `backend`. The normal backend test command leaves these integration tests skipped.
 
 ### Render backend
 
@@ -115,7 +117,7 @@ The test environment loader compares the configured test host with both producti
 
 - Base directory: repository root; build command: `npm ci && npm run build`; publish directory: `frontend/dist`.
 - Before the production build, open the deployed backend service in the Render Dashboard and copy its actual HTTPS service URL. In Netlify, set the build environment variable `VITE_API_URL` to that confirmed URL, with `/api` appended (for example, copy the real hostname from Render; do not use a placeholder or localhost). `VITE_API_URL` is a public build-time setting, not a secret. No production hostname is baked into the repository. Production Vite builds reject missing, non-HTTPS, and loopback API URLs; after changing the value, trigger a fresh Netlify deploy. The client accepts either the API origin or its `/api` base path and sends credentialed requests.
-- Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, and `VITE_LINKEDIN_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
+- Set `VITE_TELEGRAM_URL`, `VITE_YOUTUBE_URL`, `VITE_FACEBOOK_URL`, `VITE_LINKEDIN_URL`, and `VITE_WHATSAPP_URL` to confirmed official profile URLs in Netlify, Vercel, or your frontend host's build environment. These public values are compiled into the frontend build. Vite reads `.env` files only when it starts, so restart the local dev server after changing them and rebuild/redeploy after changing deployment settings. Do not enter credentials in profile URLs.
 - The public header's phone and email are configured centrally in `frontend/src/siteSettings.js`; social profile links remain build-time settings. For local development, set the social profile URLs in `frontend/.env.development`.
 - The SPA fallback is defined once in `frontend/public/_redirects` and copied into `frontend/dist` by Vite.
 - After configuration, use **Clear cache and deploy site** in Netlify. Check the deployed asset and verify `/`, `/register`, `/login`, and `/dashboard`.

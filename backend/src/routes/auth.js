@@ -38,7 +38,7 @@ const verifyOtpSchema = emailSchema.extend({
   otp: z.string().regex(/^[0-9]{6}$/),
 }).strict();
 const resetPasswordSchema = z.object({
-  newPassword: z.string().min(8).max(128).refine(isStrongPassword),
+  newPassword: z.string().min(8).max(16).refine(isStrongPassword),
 }).strict();
 
 export function createAuthRouter({

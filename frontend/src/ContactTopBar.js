@@ -20,12 +20,6 @@ const TOP_BAR_SOCIAL_LINKS = [
     paths: [{ d: 'M13.5 21v-8h2.7l.4-3.1h-3.1v-2c0-.9.3-1.5 1.6-1.5h1.7V3.6c-.3 0-1.3-.1-2.5-.1-2.5 0-4.2 1.5-4.2 4.3v2.1H7.3V13h2.8v8h3.4Z' }],
   },
   {
-    id: 'linkedin',
-    label: 'LinkedIn',
-    url: 'https://linkedin.com/company/yourpage',
-    paths: [{ d: 'M5.2 7.3a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM3.5 9h3.4v12H3.5zM9 9h3.2v1.6h.1c.5-.9 1.6-1.9 3.4-1.9 3.6 0 4.3 2.3 4.3 5.2V21h-3.4v-6.3c0-1.5 0-3.4-2.1-3.4s-2.4 1.6-2.4 3.3V21H9V9Z' }],
-  },
-  {
     id: 'youtube',
     label: 'YouTube',
     url: 'https://youtube.com/@yourchannel',
@@ -35,6 +29,12 @@ const TOP_BAR_SOCIAL_LINKS = [
     ],
   },
   {
+    id: 'linkedin',
+    label: 'LinkedIn',
+    url: 'https://linkedin.com/company/yourpage',
+    paths: [{ d: 'M5.2 7.3a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM3.5 9h3.4v12H3.5zM9 9h3.2v1.6h.1c.5-.9 1.6-1.9 3.4-1.9 3.6 0 4.3 2.3 4.3 5.2V21h-3.4v-6.3c0-1.5 0-3.4-2.1-3.4s-2.4 1.6-2.4 3.3V21H9V9Z' }],
+  },
+  {
     id: 'whatsapp',
     label: 'WhatsApp',
     url: 'https://wa.me/251986481821',
@@ -42,15 +42,22 @@ const TOP_BAR_SOCIAL_LINKS = [
   },
 ];
 
-function renderSocialLink(social) {
+function renderSocialLink(social, language) {
+  const platformLabel = translate(social.id === 'youtube' ? 'youtube'
+    : social.id === 'linkedin' ? 'linkedin'
+    : social.id === 'facebook' ? 'facebook'
+    : social.id === 'telegram' ? 'telegram'
+    : social.id === 'whatsapp' ? 'whatsapp'
+    : social.id, language);
+  const label = `${translate('eventHubOn', language)} ${platformLabel}`;
   return h('li', { key: social.id },
     h('a', {
       className: `footer-social-link footer-social-${social.id}`,
       href: social.url,
       target: '_blank',
       rel: 'noopener noreferrer',
-      'aria-label': social.label,
-      title: social.label,
+      'aria-label': label,
+      title: label,
     }, h('svg', {
       className: 'social-media-icon',
       viewBox: '0 0 24 24',
@@ -100,15 +107,17 @@ export default function ContactTopBar({
   },
     h('div', { className: 'contact-top-bar-inner' },
       h('div', { className: 'contact-top-bar-left' },
-        h('ul', {
-          className: 'contact-top-bar-social',
-          'aria-label': translate('topBarSocialLinks', language),
-        }, socialLinks.map(renderSocialLink)),
-        h('span', {
-          className: 'contact-top-bar-divider contact-top-bar-social-divider',
-          'aria-hidden': 'true',
-        }),
-        h('div', { className: 'contact-top-bar-info' }, contactItems),
+        h('div', { className: 'contact-top-bar-info' },
+          ...contactItems,
+          h('span', {
+            className: 'contact-top-bar-divider contact-top-bar-social-divider',
+            'aria-hidden': 'true',
+          }),
+          h('ul', {
+            className: 'contact-top-bar-social contact-top-bar-social-icons',
+            'aria-label': translate('topBarSocialLinks', language),
+          }, socialLinks.map((social) => renderSocialLink(social, language))),
+        ),
       ),
       h('div', { className: 'contact-top-bar-actions' },
         children && h('span', {

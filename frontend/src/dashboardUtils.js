@@ -10,6 +10,14 @@ export function getDashboardDateRange(preset, now = new Date(), customRange = {}
   if (preset === 'custom') {
     return { startDate: customRange.startDate || endDate, endDate: customRange.endDate || endDate };
   }
+  if (preset === 'monthly') {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { startDate: formatDashboardDate(start), endDate };
+  }
+  if (preset === 'yearly') {
+    const start = new Date(now.getFullYear(), 0, 1);
+    return { startDate: formatDashboardDate(start), endDate };
+  }
   const days = preset === 'today' ? 1 : preset === '7d' ? 7 : 30;
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days + 1);
   return { startDate: formatDashboardDate(start), endDate };

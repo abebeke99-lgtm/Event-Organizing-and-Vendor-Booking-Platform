@@ -60,11 +60,11 @@ function Modal({ title, children, onClose, footer }) {
   );
 }
 
-export default function AdminPaymentManagement() {
+export default function AdminPaymentManagement({ mode = window.location.pathname === '/admin/refunds' ? 'refunds' : 'payments' } = {}) {
+  const isRefunds = mode === 'refunds';
   const focusId = new URLSearchParams(window.location.search).get('focus');
   const focusQuery = /^\d+$/.test(focusId || '') ? focusId : '';
   const openedFocus = useRef('');
-  const [tab, setTab] = useState('payments');
   const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState(initialPagination);
   const [queryInput, setQueryInput] = useState(focusQuery);
@@ -93,7 +93,7 @@ export default function AdminPaymentManagement() {
         ...(dateFrom ? { dateFrom } : {}),
         ...(dateTo ? { dateTo } : {}),
       };
-      const response = await apiClient.get(tab === 'payments' ? '/admin/payments' : '/admin/refunds', { params });
+      const response = await apiClient.get(isRefunds ? '/admin/refunds' : '/admin/payments', { params });
       setRows(response.data.data || []);
       setPagination(response.data.pagination || initialPagination);
       setIntegrationConfigured(Boolean(response.data.integration?.configured));
@@ -102,16 +102,16 @@ export default function AdminPaymentManagement() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, pagination.pageSize, query, status, tab]);
+  }, [dateFrom, dateTo, isRefunds, pagination.pageSize, query, status]);
 
   useEffect(() => { void load(1); }, [load]);
 
-  async function exportReport(reportTab = tab) {
+  async function exportReport(reportTab = isRefunds ? 'refunds' : 'payments') {
     setBusy(true);
     setError('');
     try {
       const response = await apiClient.get(
-        reportTab === 'payments' ? '/admin/payments/export' : '/admin/refunds/export',
+        reportTab === 'refunds' ? '/admin/refunds/export' : '/admin/payments/export',
         {
           params: {
             ...(query ? { q: query } : {}),
@@ -125,7 +125,7 @@ export default function AdminPaymentManagement() {
       const url = URL.createObjectURL(response.data);
       const link = document.createElement('a');
       link.href = url;
-      link.download = reportTab === 'payments' ? 'payment-report.csv' : 'refund-report.csv';
+      link.download = reportTab === 'refunds' ? 'refund-report.csv' : 'payment-report.csv';
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -137,7 +137,7 @@ export default function AdminPaymentManagement() {
     }
   }
 
-  async function openDetails(paymentId) {
+  const openDetails = useCallback(async (paymentId) => {
     setDetail(null);
     setError('');
     setModal({ kind: 'details', id: paymentId });
@@ -147,16 +147,16 @@ export default function AdminPaymentManagement() {
     } catch (issue) {
       setError(errorText(issue));
     }
+  }, []);
 
-    useEffect(() => {
-      if (!focusId || tab !== 'payments' || loading || openedFocus.current === focusId) return;
-      const payment = rows.find((row) => Number(row.id) === Number(focusId));
-      if (payment) {
-        openedFocus.current = focusId;
-        openDetails(payment.id);
-      }
-    }, [focusId, loading, rows, tab]);
-  }
+  useEffect(() => {
+    if (isRefunds || !focusId || loading || openedFocus.current === focusId) return;
+    const payment = rows.find((row) => Number(row.id) === Number(focusId));
+    if (payment) {
+      openedFocus.current = focusId;
+      void openDetails(payment.id);
+    }
+  }, [focusId, isRefunds, loading, openDetails, rows]);
 
   async function decideRefund(decision, refundRow = modal?.row) {
     if (!refundRow || (decision === 'rejected' && reason.trim().length < 5)) return;
@@ -180,42 +180,37 @@ export default function AdminPaymentManagement() {
     }
   }
 
-  const statuses = tab === 'payments' ? paymentStatuses : refundStatuses;
+  const statuses = isRefunds ? refundStatuses : paymentStatuses;
 
   return (
     <section className="admin-payment-management">
       <div className="page-heading">
         <div>
           <p className="eyebrow">System control</p>
-          <h2>Payment and Refund Management</h2>
-          <p className="muted">Review real transaction records, refund decisions, and immutable financial history.</p>
+          <h2>{isRefunds ? 'Refund Management' : 'Payment Management'}</h2>
+          <p className="muted">{isRefunds
+            ? 'Review refund requests and approve or reject decisions.'
+            : 'Review payment transactions and immutable financial history.'}</p>
         </div>
-        <button className="button secondary" type="button" onClick={() => void exportReport()} disabled={busy}>
-          <Download size={16}/> Export {tab === 'payments' ? 'payment' : 'refund'} report
+        <button className="button secondary" type="button" onClick={() => void exportReport(isRefunds ? 'refunds' : 'payments')} disabled={busy}>
+          <Download size={16}/> Export {isRefunds ? 'refund' : 'payment'} report
         </button>
       </div>
 
       {!integrationConfigured && (
         <div className="alert warning" role="status">
-          Payment integration pending. Transactions are read-only and remain unverified until a payment provider with verified webhooks is configured. Refund approvals are unavailable; rejection decisions remain available.
+          {isRefunds
+            ? 'Payment integration pending. Refund approvals are unavailable until a verified payment provider is configured; rejection decisions remain available.'
+            : 'Payment integration pending. Transactions are read-only and remain unverified until a payment provider with verified webhooks is configured.'}
         </div>
       )}
       {notice && <div className="alert success" role="status">{notice}</div>}
       {error && <div className="alert error" role="alert">{error}</div>}
 
-      <div className="admin-payment-tabs" role="tablist" aria-label="Financial records">
-        <button type="button" role="tab" aria-selected={tab === 'payments'} className={tab === 'payments' ? 'active' : ''} onClick={() => { setTab('payments'); setStatus(''); }}>
-          Payments
-        </button>
-        <button type="button" role="tab" aria-selected={tab === 'refunds'} className={tab === 'refunds' ? 'active' : ''} onClick={() => { setTab('refunds'); setStatus(''); }}>
-          Refund requests
-        </button>
-      </div>
-
       <form className="admin-payment-filters" onSubmit={(event) => { event.preventDefault(); setQuery(queryInput.trim()); }}>
         <label className="admin-payment-search">
-          <span className="sr-only">Search transactions or customers</span>
-          <input value={queryInput} maxLength={120} onChange={(event) => setQueryInput(event.target.value)} placeholder="Search ID, booking, customer, provider, reference"/>
+          <span className="sr-only">{isRefunds ? 'Search refunds or customers' : 'Search transactions or customers'}</span>
+          <input value={queryInput} maxLength={120} onChange={(event) => setQueryInput(event.target.value)} placeholder={isRefunds ? 'Search refund, payment, booking, customer' : 'Search ID, booking, customer, provider, reference'}/>
           <button className="button" type="submit">Search</button>
         </label>
         <label><span>Status</span>
@@ -226,12 +221,12 @@ export default function AdminPaymentManagement() {
         </label>
         <label><span>From</span><input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)}/></label>
         <label><span>To</span><input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)}/></label>
-        <span className="admin-payment-count">{pagination.total} records</span>
+        <span className="admin-payment-count">{pagination.total} {isRefunds ? 'refunds' : 'payments'}</span>
       </form>
 
       <div className="table-wrap">
         <table>
-          {tab === 'payments' ? (
+          {!isRefunds ? (
             <>
               <thead><tr><th>Transaction</th><th>Booking / event</th><th>Customer</th><th>Amount</th><th>Method / provider</th><th>Reference</th><th>Status</th><th>Created</th><th>History</th></tr></thead>
               <tbody>

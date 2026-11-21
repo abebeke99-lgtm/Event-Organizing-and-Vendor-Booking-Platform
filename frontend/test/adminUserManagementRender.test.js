@@ -14,7 +14,11 @@ test('AdminUserManagement renders a user row and all action icons without throwi
     server: { middlewareMode: true },
   });
   const previousWindow = globalThis.window;
-  globalThis.window = { location: { search: '' } };
+  globalThis.window = {
+    location: {
+      search: '?status=invalid&sortBy=unknown&sortDirection=sideways&dateFrom=2026-02-31&focus=bad',
+    },
+  };
 
   try {
     const { default: AdminUserManagement } = await server.ssrLoadModule('/src/AdminUserManagement.jsx');

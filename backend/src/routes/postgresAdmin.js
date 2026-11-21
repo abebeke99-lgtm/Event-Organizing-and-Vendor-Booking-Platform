@@ -9,7 +9,8 @@ import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { getPasswordResetEmailConfig, sendPasswordSetupEmail } from '../lib/passwordResetEmail.js';
 import { hashToken, newSessionToken } from '../lib/security.js';
 import { isStrongPassword } from '../lib/authFlow.js';
-import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
+import { usernameSchema } from '../lib/accountValidation.js';
+import { dashboardDateRangeSchema, loadAdminDashboardOverview, resolveDashboardDateRange } from '../lib/dashboardFilters.js';
 import { createPostgresAdminProfileRouter } from './postgresAdminProfile.js';
 import {
   ASSIGNABLE_PLATFORM_ROLES,
@@ -100,7 +101,8 @@ export function createPostgresAdminRouter({
       return res.status(400).json({ error: 'Provide a valid date range no longer than 366 days.' });
     }
     try {
-      const data = await loadAdminDashboardOverview(database, parsed.data);
+      const period = resolveDashboardDateRange(parsed.data);
+      const data = await loadAdminDashboardOverview(database, period);
       return res.json({ data });
     } catch (error) {
       return next(error);
@@ -549,18 +551,19 @@ export function createPostgresAdminRouter({
   router.post('/users', requirePermission('users.create'), createUserLimiter, async (req, res, next) => {
     const parsed = z.object({
       full_name: z.string().trim().min(1).max(160),
+      username: usernameSchema,
       email: emailSchema,
       phone: phoneSchema,
       role_id: z.coerce.number().int().positive(),
       password: z.string().min(8).max(128)
         .refine(isStrongPassword, 'Use uppercase and lowercase letters, a number, and a special character.')
         .refine((value) => Buffer.byteLength(value, 'utf8') <= 72, 'Password is too long.'),
-      confirm_password: z.string().min(1).max(128),
+      confirm_password: z.string().max(128).optional(),
       fid_number: z.string().trim().max(120).nullable().optional()
         .transform((value) => value || null),
       business_name: z.string().trim().min(1).max(160).optional(),
       category_id: z.coerce.number().int().positive().optional(),
-    }).strict().refine((value) => value.password === value.confirm_password, {
+    }).strict().refine((value) => value.confirm_password === undefined || value.password === value.confirm_password, {
       path: ['confirm_password'],
       message: 'Passwords do not match.',
     }).safeParse(req.body);
@@ -572,13 +575,13 @@ export function createPostgresAdminRouter({
       const created = await database.inTransaction(async (client) => {
         await client.query('SELECT pg_advisory_xact_lock(hashtext(LOWER($1)))', [parsed.data.email]);
         const roleResult = await client.query(
-          'SELECT id, name FROM roles WHERE id = $1 AND is_active = TRUE AND is_admin = FALSE FOR UPDATE',
+          'SELECT id, name FROM roles WHERE id = $1 AND is_active = TRUE FOR UPDATE',
           [parsed.data.role_id],
         );
         const role = roleResult.rows[0];
         const roleName = String(role?.name || '').toLowerCase();
-        if (!role || !['organizer', 'vendor'].includes(roleName)) {
-          throw statusError('Choose Event Organizer or Vendor for this account.', 400);
+        if (!role || !['admin', 'administrator', 'customer', 'organizer', 'vendor'].includes(roleName)) {
+          throw statusError('Choose a valid role for this account.', 400);
         }
         if (roleName === 'vendor' && (!parsed.data.business_name || !parsed.data.category_id)) {
           throw statusError('Vendor accounts require a business name and service category.', 400);
@@ -595,16 +598,19 @@ export function createPostgresAdminRouter({
         }
         const existing = await client.query('SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [parsed.data.email]);
         if (existing.rows.length) throw statusError('An account with this email already exists.', 409);
+        const existingUsername = await client.query('SELECT id FROM users WHERE LOWER(username) = LOWER($1) LIMIT 1', [parsed.data.username]);
+        if (existingUsername.rows.length) throw statusError('An account with this username already exists.', 409);
         if (parsed.data.phone) {
           const existingPhone = await client.query('SELECT id FROM users WHERE phone = $1 LIMIT 1', [parsed.data.phone]);
           if (existingPhone.rows.length) throw statusError('An account with this phone number already exists.', 409);
         }
         const userResult = await client.query(
-          `INSERT INTO users (full_name, email, phone, password_hash, status, digital_id, fid_number)
-           VALUES ($1, $2, $3, $4, 'active', $5, $6)
-           RETURNING id, full_name, email, phone, digital_id, fid_number, status, created_at`,
+          `INSERT INTO users (full_name, username, email, phone, password_hash, status, digital_id, fid_number)
+           VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)
+           RETURNING id, full_name, username, email, phone, digital_id, fid_number, status, created_at`,
           [
             parsed.data.full_name,
+            parsed.data.username,
             parsed.data.email,
             parsed.data.phone,
             passwordHash,
@@ -760,12 +766,13 @@ export function createPostgresAdminRouter({
         );
         const target = targetResult.rows[0];
         const roleResult = await client.query(
-          'SELECT id, name FROM roles WHERE id = $1 AND is_active = TRUE AND is_admin = FALSE',
+          'SELECT id, name FROM roles WHERE id = $1 AND is_active = TRUE',
           [roleId.data],
         );
         const role = roleResult.rows[0];
         if (!target || !role) throw statusError('User or active non-admin role not found.', 404);
-        if (!ASSIGNABLE_PLATFORM_ROLES.includes(String(role.name).toLowerCase())) {
+        const normalizedRoleName = String(role.name).toLowerCase();
+        if (!ASSIGNABLE_PLATFORM_ROLES.includes(normalizedRoleName) && !['administrator', 'admin'].includes(normalizedRoleName)) {
           throw statusError('This role is not approved for user assignment.', 403);
         }
         if (target.is_admin) throw statusError('Administrator roles cannot be changed through user management.', 409);

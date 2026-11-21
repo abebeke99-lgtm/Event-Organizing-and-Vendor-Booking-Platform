@@ -192,9 +192,12 @@ test('Neon PostgreSQL registration, login, session, and logout use persisted aut
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept-Language': 'am' },
       body: JSON.stringify({
-        name: 'Neon Auth Integration',
+        fullName: 'Neon Auth Integration',
         email,
+        phone: '+12025550134',
         password: 'NeonPass12345',
+        accountType: 'Customer',
+        acceptedTerms: true,
       }),
     });
     const registered = await registerResponse.json();

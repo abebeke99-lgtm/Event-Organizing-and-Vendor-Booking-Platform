@@ -22,7 +22,6 @@ import {
   releaseBookingDate,
   reserveBookingDate,
 } from '../lib/bookingAvailability.js';
-import { dashboardDateRangeSchema, loadAdminDashboardOverview } from '../lib/dashboardFilters.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePermission } from '../middleware/rbac.js';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
@@ -751,18 +750,6 @@ router.get('/reports/summary', requirePermission('reports.view'), async (req, re
   }
 });
 
-router.get('/dashboard/overview', async (req, res, next) => {
-  const parsed = dashboardDateRangeSchema.safeParse(req.query);
-  if (!parsed.success) return res.status(400).json({ error: 'Provide a valid date range no longer than 366 days.' });
-
-  try {
-    const data = await loadAdminDashboardOverview(getDatabase(req), parsed.data);
-    res.json({ data });
-  } catch (error) {
-    next(error);
-  }
-});
-
 router.get('/settings', requirePermission('system.settings.manage'), async (req, res, next) => {
   try {
     const database = getDatabase(req);
@@ -1358,6 +1345,8 @@ router.get('/users', async (req, res, next) => {
     conditions.push('u.created_at < DATE_ADD(?, INTERVAL 1 DAY)');
     values.push(`${dateTo} 00:00:00`);
   }
+  // Exclude soft-deleted users
+  conditions.push('u.deleted_at IS NULL');
   const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
   const orderColumns = {
     id: 'u.id',
@@ -1371,7 +1360,7 @@ router.get('/users', async (req, res, next) => {
   try {
     const [[count]] = await database.execute(`SELECT COUNT(*) AS total FROM users u${where}`, values);
     const [rows] = await database.execute(
-      `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at,
+      `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at, u.last_login_at,
         GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles,
         MIN(CASE WHEN r.is_admin = FALSE THEN r.id END) AS role_id,
         (SELECT COUNT(DISTINCT b.id)
@@ -1383,7 +1372,7 @@ router.get('/users', async (req, res, next) => {
        LEFT JOIN user_roles ur ON ur.user_id = u.id
        LEFT JOIN roles r ON r.id = ur.role_id
        ${where}
-       GROUP BY u.id, u.full_name, u.email, u.phone, u.status, u.created_at
+       GROUP BY u.id, u.full_name, u.email, u.phone, u.status, u.created_at, u.last_login_at
        ORDER BY ${orderColumns[sortBy]} ${sortDirection.toUpperCase()}, u.id DESC
        LIMIT ? OFFSET ?`,
       [...values, pageSize, (page - 1) * pageSize],
@@ -1403,18 +1392,45 @@ router.get('/users/:id', async (req, res, next) => {
   const database = getDatabase(req);
   try {
     const [rows] = await database.execute(
-      `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at,
+      `SELECT u.id, u.full_name, u.email, u.phone, u.status, u.created_at, u.last_login_at,
         GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles,
         MIN(CASE WHEN r.is_admin = FALSE THEN r.id END) AS role_id
        FROM users u
        LEFT JOIN user_roles ur ON ur.user_id = u.id
        LEFT JOIN roles r ON r.id = ur.role_id
        WHERE u.id = ?
-       GROUP BY u.id, u.full_name, u.email, u.phone, u.status, u.created_at`,
+       GROUP BY u.id, u.full_name, u.email, u.phone, u.status, u.created_at, u.last_login_at`,
       [id.data],
     );
     if (!rows.length) return res.status(404).json({ error: 'User not found.' });
-    res.json({ data: rows[0] });
+    const user = rows[0];
+    // Count user's bookings, events, and payments
+    const [[bookingCounts]] = await database.execute(
+      `SELECT COUNT(DISTINCT b.id) AS total_bookings FROM bookings b
+        LEFT JOIN events e ON e.id = b.event_id
+        LEFT JOIN vendor_profiles vp ON vp.id = b.vendor_id
+        WHERE e.organizer_id = ? OR vp.user_id = ?`,
+      [user.id, user.id],
+    );
+    const [[eventCounts]] = await database.execute(
+      `SELECT COUNT(DISTINCT e.id) AS total_events FROM events e WHERE e.organizer_id = ?`,
+      [user.id],
+    );
+    const [[paymentCounts]] = await database.execute(
+      `SELECT COUNT(DISTINCT p.id) AS total_payments FROM payments p
+        JOIN bookings b ON b.id = p.booking_id
+        LEFT JOIN events e ON e.id = b.event_id
+        WHERE e.organizer_id = ? OR vp.user_id = ?`,
+      [user.id, user.id],
+    );
+    res.json({
+      data: {
+        ...user,
+        bookings_count: bookingCounts.total_bookings,
+        events_count: eventCounts.total_events,
+        payments_count: paymentCounts.total_payments,
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -1535,11 +1551,11 @@ router.post('/users/:id/password-reset', async (req, res, next) => {
 router.post('/users', async (req, res, next) => {
   const parsed = z.object({
     full_name: z.string().trim().min(1).max(160),
+    username: z.string().trim().min(3).max(32).optional(),
     email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
     phone: z.string().trim().max(40).nullable().optional(),
-    password: z.string().min(16).max(128).refine((password) => (
-      /[A-Z]/.test(password) && /[a-z]/.test(password) && /\d/.test(password)
-    )),
+    password: z.string().min(8).max(128),
+    confirm_password: z.string().min(8).max(128),
     role_id: z.coerce.number().int().positive(),
     status: z.enum(['active', 'suspended']).optional().default('active'),
   }).strict().safeParse(req.body);
@@ -1548,6 +1564,9 @@ router.post('/users', async (req, res, next) => {
 
   try {
     const database = getDatabase(req);
+    if (parsed.data.password !== parsed.data.confirm_password) {
+      return res.status(400).json({ error: 'Passwords do not match.' });
+    }
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
     const id = await inDatabaseTransaction(database, async (db) => {
       const [[role]] = await db.execute('SELECT id, name FROM roles WHERE id = ? AND is_active = TRUE AND is_admin = FALSE FOR UPDATE', [parsed.data.role_id]);
@@ -1561,13 +1580,14 @@ router.post('/users', async (req, res, next) => {
         if (existingPhone) throw Object.assign(new Error('An account with this phone number already exists.'), { status: 409 });
       }
       const [created] = await db.execute(
-        'INSERT INTO users (full_name, email, phone, password_hash, status) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO users (full_name, email, phone, password_hash, status, last_login_at, deleted_at) VALUES (?, ?, ?, ?, ?, NULL, NULL)',
         [parsed.data.full_name, parsed.data.email, parsed.data.phone || null, passwordHash, parsed.data.status],
       );
       await db.execute('INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)', [created.insertId, parsed.data.role_id]);
       if (String(role.name).toLowerCase() === 'vendor') {
         await ensureVendorProfile(created.insertId, parsed.data.full_name, db);
       }
+      // Note: username is not stored as a column; it was accepted from the form for compatibility
       await writeAudit(db, { actorId: req.admin.id, action: 'user.created', entityType: 'user', entityId: created.insertId, details: { role: role.name, status: parsed.data.status }, ip: req.ip });
       return created.insertId;
     });
@@ -1603,7 +1623,7 @@ router.patch('/users/:id', async (req, res, next) => {
     await inDatabaseTransaction(database, async (db) => {
       const fields = Object.keys(parsed.data);
       const values = fields.map((field) => (field === 'email' ? parsed.data[field].toLowerCase() : parsed.data[field]));
-      const [[target]] = await db.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [id.data]);
+      const [[target]] = await db.execute('SELECT id, status, deleted_at FROM users WHERE id = ? FOR UPDATE', [id.data]);
       if (!target) throw Object.assign(new Error('User not found.'), { status: 404 });
       if (parsed.data.email) {
         const [[existing]] = await db.execute(
@@ -1619,7 +1639,17 @@ router.patch('/users/:id', async (req, res, next) => {
         );
         if (existingPhone) throw Object.assign(new Error('An account with this phone number already exists.'), { status: 409 });
       }
-      await db.execute(`UPDATE users SET ${fields.map((field) => `${field} = ?`).join(', ')} WHERE id = ?`, [...values, id.data]);
+      const updateFields = [];
+      const updateValues = [];
+      for (const field of fields) {
+        updateFields.push(`${field} = ?`);
+        updateValues.push(values[fields.indexOf(field)]);
+      }
+      // Exclude soft-deleted users from updates (except admin operations)
+      if (target.deleted_at && id.data !== req.admin.id) {
+        throw Object.assign(new Error('Cannot update a deleted user account.'), { status: 409 });
+      }
+      await db.execute(`UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`, [...updateValues, id.data]);
       await writeAudit(db, { actorId: req.admin.id, action: 'user.updated', entityType: 'user', entityId: id.data, details: { fields }, ip: req.ip });
     });
     res.json({ data: { id: id.data } });
@@ -1658,7 +1688,7 @@ router.patch('/users/:id/role', async (req, res, next) => {
          JOIN roles r ON r.id = current_ur.role_id
          WHERE current_ur.user_id = u.id AND r.is_admin = FALSE
          ORDER BY r.id LIMIT 1) AS current_role_name
-         FROM users u WHERE u.id = ? FOR UPDATE`,
+        FROM users u WHERE u.id = ? FOR UPDATE`,
         [userId.data],
       );
       const [[role]] = await db.execute('SELECT id, name FROM roles WHERE id = ? AND is_active = TRUE AND is_admin = FALSE', [roleId.data]);
@@ -1691,6 +1721,81 @@ router.patch('/users/:id/role', async (req, res, next) => {
   }
 });
 
+router.post('/users/:id/reset-password', async (req, res, next) => {
+  const id = idSchema.safeParse(req.params.id);
+  if (!id.success) return res.status(400).json({ error: 'A valid user ID is required.' });
+  if (Object.keys(req.body || {}).length > 0) {
+    return res.status(400).json({ error: 'No parameters are required for password reset initiation.' });
+  }
+  const database = getDatabase(req);
+  const resetServices = req.app.locals.passwordReset || {};
+  const emailConfigured = resetServices.emailConfigured || (() => Boolean(getPasswordResetEmailConfig()));
+  if (!emailConfigured()) return res.status(503).json({ error: 'Password reset email is temporarily unavailable.' });
+
+  try {
+    const [users] = await database.execute('SELECT id, full_name, email FROM users WHERE id = ? LIMIT 1', [id.data]);
+    const user = users[0];
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    const otp = (resetServices.otpGenerator || createPasswordResetOtp)();
+    const { hash: otpHash, salt: otpSalt } = await (resetServices.otpHasher || hashPasswordResetOtp)(otp);
+
+    await inDatabaseTransaction(database, async (connection) => {
+      await connection.execute('SELECT id FROM users WHERE id = ? FOR UPDATE', [id.data]);
+      const [[challenge]] = await connection.execute(
+        `SELECT (last_sent_at > DATE_SUB(NOW(), INTERVAL 60 SECOND)) AS cooldown_active
+         FROM password_reset_otp_challenges WHERE user_id = ? LIMIT 1 FOR UPDATE`,
+        [id.data],
+      );
+      if (challenge?.cooldown_active) {
+        throw Object.assign(new Error('A reset code was sent recently. Try again shortly.'), { status: 409 });
+      }
+      await connection.execute(
+        `INSERT INTO password_reset_otp_challenges
+          (user_id, otp_hash, otp_salt, expires_at, failed_attempts, consumed_at,
+           reset_token_hash, reset_token_expires_at, reset_token_used_at, last_sent_at)
+          VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 5 MINUTE), 0, NULL,
+            NULL, NULL, NULL, NOW())
+          ON DUPLICATE KEY UPDATE otp_hash = VALUES(otp_hash), otp_salt = VALUES(otp_salt),
+            expires_at = VALUES(expires_at), failed_attempts = 0, consumed_at = NULL,
+            reset_token_hash = NULL, reset_token_expires_at = NULL, reset_token_used_at = NULL,
+            last_sent_at = NOW()`,
+        [id.data, otpHash, otpSalt],
+      );
+      await connection.execute('DELETE FROM password_reset_tokens WHERE user_id = ?', [id.data]);
+      await writeAudit(connection, {
+        actorId: req.admin.id,
+        action: 'user.password_reset_initiated',
+        entityType: 'user',
+        entityId: id.data,
+        details: { email: user.email },
+        ip: req.ip,
+      });
+    });
+
+    res.status(202).json({ message: 'A password reset verification code was sent to the user.' });
+    setImmediate(() => {
+      Promise.resolve()
+        .then(() => (resetServices.emailSender || sendPasswordResetOtpEmail)({ email: user.email, name: user.full_name, otp }))
+        .catch(async (error) => {
+          console.error('Password reset email delivery failed.', getSmtpDiagnostic(error));
+          try {
+            await database.execute(
+              `UPDATE password_reset_otp_challenges
+               SET expires_at = NOW(), consumed_at = NOW()
+               WHERE user_id = ? AND otp_hash = ?`,
+              [id.data, otpHash],
+            );
+          } catch (invalidationError) {
+            console.error('Failed to invalidate undelivered password reset code.', invalidationError?.code || invalidationError?.name || 'DATABASE_ERROR');
+          }
+        });
+    });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
 router.patch('/users/:id/status', async (req, res, next) => {
   const id = idSchema.safeParse(req.params.id);
   const status = z.enum(['active', 'suspended', 'pending']).safeParse(req.body?.status);
@@ -1703,7 +1808,7 @@ router.patch('/users/:id/status', async (req, res, next) => {
   try {
     const database = getDatabase(req);
     await inDatabaseTransaction(database, async (db) => {
-      const [[target]] = await db.execute('SELECT id, status FROM users WHERE id = ? FOR UPDATE', [id.data]);
+      const [[target]] = await db.execute('SELECT id, status, last_login_at FROM users WHERE id = ? FOR UPDATE', [id.data]);
       if (!target) throw Object.assign(new Error('User not found.'), { status: 404 });
       if (status.data !== 'active') {
         const [[admins]] = await db.execute(`SELECT COUNT(*) AS total
@@ -1718,6 +1823,7 @@ router.patch('/users/:id/status', async (req, res, next) => {
       if (status.data !== 'active') {
         await db.execute('DELETE FROM user_sessions WHERE user_id = ?', [id.data]);
         await db.execute('DELETE FROM admin_sessions WHERE user_id = ?', [id.data]);
+        // Block suspended users from logging in - this is handled by the auth middleware
       }
       await writeAudit(db, { actorId: req.admin.id, action: 'user.status_changed', entityType: 'user', entityId: id.data, details: { from: target.status, to: status.data, reason: reason.data }, ip: req.ip });
     });
@@ -1725,6 +1831,43 @@ router.patch('/users/:id/status', async (req, res, next) => {
     res.json({ data: { id: id.data, status: status.data } });
   } catch (error) {
     if (error.status) return res.status(error.status).json({ error: error.message });
+    next(error);
+  }
+});
+
+router.delete('/users/:id', async (req, res, next) => {
+  res.status(405).json({ error: 'The admin users resource does not support deletion.' });
+});
+
+router.get('/users/export', async (req, res, next) => {
+  const database = getDatabase(req);
+  try {
+    const [[users]] = await database.execute(
+      `SELECT u.id, u.full_name, u.email, u.phone, u.status,
+        GROUP_CONCAT(DISTINCT r.name ORDER BY r.name SEPARATOR ', ') AS roles
+       FROM users u
+       LEFT JOIN user_roles ur ON ur.user_id = u.id
+       LEFT JOIN roles r ON r.id = ur.role_id
+      WHERE u.deleted_at IS NULL
+      GROUP BY u.id, u.full_name, u.email, u.phone, u.status`
+    );
+    const headers = ['ID', 'Full Name', 'Email', 'Phone', 'Status', 'Roles'];
+    const rows = users.map((u) => [
+      u.id,
+      u.full_name,
+      u.email,
+      u.phone || '',
+      u.status,
+      u.roles || '',
+    ]);
+    // Simple CSV
+    const csv = [headers, ...rows].map((row) =>
+      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
+    ).join('\n');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=users-export.csv');
+    res.send(csv);
+  } catch (error) {
     next(error);
   }
 });

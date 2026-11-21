@@ -51,6 +51,7 @@ try {
       '009_payment_status_width.sql',
       '010_customer_dashboard_permissions.sql',
       '018_user_digital_and_fid_ids.sql',
+      '019_usernames_and_terms_acceptance.sql',
     ],
   });
   if (applied.length) {
@@ -85,6 +86,7 @@ try {
     || !recordedNames.includes('009_payment_status_width.sql')
     || !recordedNames.includes('010_customer_dashboard_permissions.sql')
     || !recordedNames.includes('018_user_digital_and_fid_ids.sql')
+    || !recordedNames.includes('019_usernames_and_terms_acceptance.sql')
     || postgresApplicationTables.some((tableName) => !publicTableNames.includes(tableName))
     || !publicTableNames.includes('schema_migrations')) {
     throw new Error('PostgreSQL schema integrity check failed: expected migration record or core tables are missing.');

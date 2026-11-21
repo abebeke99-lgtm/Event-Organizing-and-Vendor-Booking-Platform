@@ -115,7 +115,7 @@ test('backend startup script loads its environment from both supported working d
 
     assert.equal(result.status, 1, output);
     assert.match(output, /PORT must be an integer between 1 and 65535\./);
-    assert.match(output, /OPENAI_API_KEY (?:is not configured|contains a placeholder instead of a real key)/);
+    assert.doesNotMatch(output, /Required configuration is incomplete or invalid:[^\n]*OPENAI_API_KEY/);
     assert.doesNotMatch(output, /OPENAI_API_KEY=.*(?:sk-|secret)/i);
     assert.doesNotMatch(output, /Database connected\./);
   }

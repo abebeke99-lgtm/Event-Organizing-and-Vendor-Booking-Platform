@@ -111,6 +111,16 @@ async function createSession(executor, userId, lifetimeMs = SESSION_LIFETIME_MS)
   return token;
 }
 
+async function createAdminSession(executor, userId, lifetimeMs = SESSION_LIFETIME_MS) {
+  const token = newSessionToken();
+  const expiresAt = new Date(Date.now() + lifetimeMs);
+  await executor.query(
+    'INSERT INTO admin_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)',
+    [hashToken(token), userId, expiresAt],
+  );
+  return token;
+}
+
 export async function createRegistrationNotifications(executor, {
   name,
   userId,
@@ -199,10 +209,12 @@ export function createPostgresAuthRouter({
   });
 
   router.post('/register', registrationLimiter, async (req, res, next) => {
+    if (String(req.body?.accountType || '').toLowerCase() === 'admin') {
+      return res.status(403).json({ error: 'Admin accounts can only be created by an authorized administrator.' });
+    }
     const parsed = publicRegistrationSchema.safeParse(req.body || {});
     if (!parsed.success) {
-      const invalidRole = parsed.error.issues.some((issue) => issue.path[0] === 'role');
-      return res.status(invalidRole ? 403 : 400).json({
+      return res.status(400).json({
         error: parsed.error.issues[0]?.message || 'Invalid registration.',
       });
     }
@@ -218,7 +230,7 @@ export function createPostgresAuthRouter({
       if (!registrationSettings.public_registration_enabled) {
         return res.status(403).json({ error: 'Public registration is currently disabled.' });
       }
-      const requestedRole = parsed.data.role;
+      const requestedRole = parsed.data.accountType;
       if (!publicRegistrationRoles.has(requestedRole)) {
         return res.status(403).json({ error: 'The selected account type is unavailable.' });
       }
@@ -226,9 +238,18 @@ export function createPostgresAuthRouter({
       const passwordHash = await bcrypt.hash(parsed.data.password, 12);
       const preferredLanguage = req.language === 'am' ? 'am' : 'en';
       const normalizedEmail = parsed.data.email;
-      const { username, phone } = parsed.data;
+      const { phone } = parsed.data;
       const roleName = requestedRole || registrationSettings.default_registration_role;
       const created = await inTransaction(database, async (tx) => {
+        const existingEmail = await tx.query(
+          'SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1',
+          [normalizedEmail],
+        );
+        if (existingEmail.rows[0]) {
+          const error = new Error('An account with this email already exists.');
+          error.status = 409;
+          throw error;
+        }
         const role = await tx.query(
           `SELECT id FROM roles
            WHERE LOWER(name) = $1 AND is_active = TRUE AND is_admin = FALSE
@@ -242,10 +263,10 @@ export function createPostgresAuthRouter({
         }
         const inserted = await tx.query(
           `INSERT INTO users
-             (full_name, username, email, phone, password_hash, status, preferred_language, terms_accepted_at)
-           VALUES ($1, $2, $3, $4, $5, 'active', $6, CURRENT_TIMESTAMP)
+             (full_name, email, phone, password_hash, status, preferred_language, terms_accepted_at)
+           VALUES ($1, $2, $3, $4, 'active', $5, CURRENT_TIMESTAMP)
            RETURNING id`,
-          [parsed.data.name, username, normalizedEmail, phone, passwordHash, preferredLanguage],
+          [parsed.data.fullName, normalizedEmail, phone, passwordHash, preferredLanguage],
         );
         const userId = inserted.rows[0].id;
         await tx.query(
@@ -259,7 +280,7 @@ export function createPostgresAuthRouter({
           details: { role: roleName },
           ip: req.ip,
         });
-        await createRegistrationNotifications(tx, { name: parsed.data.name, userId, role: roleName });
+        await createRegistrationNotifications(tx, { name: parsed.data.fullName, userId, role: roleName });
         return { id: userId };
       });
 
@@ -267,9 +288,8 @@ export function createPostgresAuthRouter({
         data: {
           user: {
             id: created.id,
-            name: parsed.data.name,
-            full_name: parsed.data.name,
-            username,
+            name: parsed.data.fullName,
+            full_name: parsed.data.fullName,
             email: normalizedEmail,
             phone,
             role: roleName,
@@ -280,7 +300,7 @@ export function createPostgresAuthRouter({
     } catch (error) {
       if (error.status) return res.status(error.status).json({ error: error.message });
       if (error.code === '23505') {
-        return res.status(409).json({ error: 'That username or email address is already in use.' });
+        return res.status(409).json({ error: 'That email address is already in use.' });
       }
       return next(error);
     }
@@ -598,7 +618,7 @@ export function createPostgresAuthRouter({
       });
   }
 
-  router.post('/login', loginLimiter, async (req, res, next) => {
+  router.post('/login', loginLimiter, async (req, res) => {
     const schema = z.object({
       email: z.string().trim().min(1).max(254),
       password: z.string().min(1).max(128),
@@ -607,7 +627,7 @@ export function createPostgresAuthRouter({
     const parsed = schema.safeParse(req.body || {});
     const identifier = parsed.success ? parseLoginIdentifier(parsed.data.email) : null;
     if (!parsed.success || !identifier) {
-      return res.status(400).json({ error: 'Enter a valid username or email and password.' });
+      return res.status(400).json({ message: 'Enter a valid username or email and password.' });
     }
 
     try {
@@ -628,30 +648,33 @@ export function createPostgresAuthRouter({
         [identifier],
       );
       const user = result.rows[0];
-      if (!user || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
-        return res.status(401).json({ error: 'Invalid username/email or password.' });
+      if (!user || !user.password_hash
+        || !await bcrypt.compare(parsed.data.password, user.password_hash)) {
+        return res.status(401).json({ message: 'Invalid username/email or password' });
       }
       if (user.status !== 'active') {
         const message = user.status === 'pending'
           ? 'This account is pending verification. Complete account verification before signing in.'
           : 'This account is inactive. Contact support for assistance.';
-        return res.status(403).json({ error: message });
+        return res.status(403).json({ message });
       }
       if (!user.role_is_active) {
-        return res.status(403).json({ error: 'This account role is inactive. Contact support for assistance.' });
+        return res.status(403).json({ message: 'This account role is inactive. Contact support for assistance.' });
       }
       const role = user.is_admin || ['admin', 'administrator'].includes(user.role)
         ? 'admin'
         : user.role;
       if (!['admin', 'organizer', 'vendor', 'customer'].includes(role)) {
-        return res.status(403).json({ error: 'This account role is not permitted to sign in.' });
+        return res.status(403).json({ message: 'This account role is not permitted to sign in.' });
       }
       const token = await inTransaction(database, async (tx) => {
         await tx.query('UPDATE users SET last_login_at = NOW() WHERE id = $1', [user.id]);
         const lifetimeMs = parsed.data.rememberMe
           ? REMEMBERED_SESSION_LIFETIME_MS
           : SESSION_LIFETIME_MS;
-        const sessionToken = await createSession(tx, user.id, lifetimeMs);
+        const sessionToken = adminNamespace && role === 'admin'
+          ? await createAdminSession(tx, user.id, lifetimeMs)
+          : await createSession(tx, user.id, lifetimeMs);
         if (role === 'vendor') {
           await tx.query(
             `INSERT INTO vendor_profiles (user_id, business_name)
@@ -669,7 +692,13 @@ export function createPostgresAuthRouter({
         });
         return sessionToken;
       });
-      setSessionCookie(res, token, parsed.data.rememberMe);
+      if (adminNamespace && role === 'admin') {
+        res.cookie('admin_session', token, getCookieOptions({
+          maxAge: parsed.data.rememberMe ? REMEMBERED_SESSION_LIFETIME_MS : SESSION_LIFETIME_MS,
+        }));
+      } else {
+        setSessionCookie(res, token, parsed.data.rememberMe);
+      }
       return res.json({
         user: {
           id: user.id,
@@ -681,7 +710,8 @@ export function createPostgresAuthRouter({
         },
       });
     } catch (error) {
-      return next(error);
+      console.error('PostgreSQL platform login failed:', error);
+      return res.status(500).json({ message: 'Sign-in is temporarily unavailable. Please try again.' });
     }
   });
 

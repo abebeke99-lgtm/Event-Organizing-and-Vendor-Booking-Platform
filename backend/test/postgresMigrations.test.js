@@ -182,6 +182,20 @@ test('customer permissions are granted idempotently only to active customer role
   assert.doesNotMatch(sql, /DELETE\s+FROM|DROP\s+TABLE|TRUNCATE/i);
 });
 
+test('username authentication migration is additive and enforces case-insensitive uniqueness', async () => {
+  const sql = await readFile(new URL('../postgres/migrations/019_usernames_and_terms_acceptance.sql', import.meta.url), 'utf8');
+  const migrationScript = await readFile(new URL('../scripts/migrate-neon-test.js', import.meta.url), 'utf8');
+  const databaseCheck = await readFile(new URL('../scripts/check-neon-test-db.js', import.meta.url), 'utf8');
+
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS username VARCHAR\(32\)/i);
+  assert.match(sql, /ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ/i);
+  assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username_lower\s+ON users \(LOWER\(username\)\)\s+WHERE username IS NOT NULL/i);
+  assert.doesNotMatch(sql, /DELETE\s+FROM|DROP\s+TABLE|TRUNCATE/i);
+  assert.match(migrationScript, /'019_usernames_and_terms_acceptance\.sql'/);
+  assert.match(databaseCheck, /'username', 'terms_accepted_at'/);
+  assert.match(databaseCheck, /uq_users_username_lower/);
+});
+
 test('PostgreSQL migration runner sorts files and records successful migrations transactionally', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'eventhub-pg-migrations-'));
   const statements = [];

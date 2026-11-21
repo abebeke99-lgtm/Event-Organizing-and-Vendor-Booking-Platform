@@ -135,6 +135,10 @@ async function execute(sql, values = []) {
     const eventId = Number(values[0]);
     return [[11, 12].includes(eventId) ? [{ id: eventId, organizer_id: eventId === 11 ? customerId : 99, status: 'draft' }] : [], []];
   }
+  if (sql.startsWith('SELECT id, organizer_id, status FROM events WHERE id = ? FOR UPDATE')) {
+    const eventId = Number(values[0]);
+    return [[11, 12].includes(eventId) ? [{ id: eventId, organizer_id: eventId === 11 ? customerId : 99, status: 'draft' }] : [], []];
+  }
   if (sql.startsWith('SELECT COUNT(*) AS total FROM bookings')) return [[{ total: activeEventBookings }], []];
   if (sql.startsWith('SELECT id, status, start_date, capacity, start_date > NOW() AS is_future FROM events WHERE id = ? FOR UPDATE')) {
     return [Number(values[0]) === 88 ? [{
@@ -198,6 +202,10 @@ async function execute(sql, values = []) {
   }
   if (sql.startsWith('UPDATE events SET')) {
     writes.push({ kind: 'event_update', sql, values });
+    return [{ affectedRows: 1 }, []];
+  }
+  if (sql.startsWith('DELETE FROM events WHERE id = ? AND organizer_id = ?')) {
+    writes.push({ kind: 'event_delete', values });
     return [{ affectedRows: 1 }, []];
   }
   if (sql.startsWith('INSERT INTO audit_logs')) return [{ insertId: 1, affectedRows: 1 }, []];
@@ -363,7 +371,9 @@ test('customer event edit is owner-scoped and cancellation preserves active book
   assert.equal(updated.status, 200);
   assert.equal((await request('/api/platform/events/12', { method: 'PATCH', body: { title: 'Other event' } })).status, 403);
   activeEventBookings = 1;
+  assert.equal((await request('/api/platform/events/11', { method: 'DELETE' })).status, 409);
   assert.equal((await request('/api/platform/events/11/cancel', { method: 'PATCH' })).status, 409);
   activeEventBookings = 0;
+  assert.equal((await request('/api/platform/events/11', { method: 'DELETE' })).status, 204);
   assert.equal((await request('/api/platform/events/11/cancel', { method: 'PATCH' })).status, 200);
 });

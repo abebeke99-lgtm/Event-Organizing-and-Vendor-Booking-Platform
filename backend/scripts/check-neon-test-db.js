@@ -38,7 +38,7 @@ try {
     `SELECT column_name, is_nullable
      FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = 'users'
-       AND column_name IN ('digital_id', 'fid_number')`,
+       AND column_name IN ('digital_id', 'fid_number', 'username', 'terms_accepted_at')`,
   );
   const identityIntegrity = await database.runtimeAdapter.query(
     `SELECT
@@ -49,7 +49,13 @@ try {
          WHERE schemaname = 'public' AND tablename = 'users'
            AND indexname = 'uq_users_digital_id'
            AND indexdef ILIKE 'CREATE UNIQUE INDEX%'
-       ) AS has_unique_digital_id`,
+       ) AS has_unique_digital_id,
+       EXISTS (
+         SELECT 1 FROM pg_indexes
+         WHERE schemaname = 'public' AND tablename = 'users'
+           AND indexname = 'uq_users_username_lower'
+           AND indexdef ILIKE 'CREATE UNIQUE INDEX%'
+       ) AS has_unique_username`,
   );
   const actualTables = new Set(tables.rows.map((row) => row.tablename));
   const missingTables = postgresApplicationTables.filter((tableName) => !actualTables.has(tableName));
@@ -71,16 +77,20 @@ try {
   );
   if (identityNullability.get('digital_id') !== 'NO'
     || identityNullability.get('fid_number') !== 'YES'
+    || identityNullability.get('username') !== 'YES'
+    || identityNullability.get('terms_accepted_at') !== 'YES'
     || identityIntegrity.rows[0].missing_digital_ids !== 0
     || !identityIntegrity.rows[0].has_unique_digital_id
-    || !appliedMigrations.rows.some((row) => row.migration_name === '018_user_digital_and_fid_ids.sql')) {
+    || !identityIntegrity.rows[0].has_unique_username
+    || !appliedMigrations.rows.some((row) => row.migration_name === '018_user_digital_and_fid_ids.sql')
+    || !appliedMigrations.rows.some((row) => row.migration_name === '019_usernames_and_terms_acceptance.sql')) {
     const error = new Error(
-      'The isolated Neon user identity schema is missing required columns, values, or uniqueness.',
+      'The isolated Neon user identity or authentication schema is missing required columns, values, or uniqueness.',
     );
     error.code = 'DB_SCHEMA_INCOMPLETE';
     throw error;
   }
-  console.log('Neon test user identity schema: digital IDs are populated and unique; FID is nullable (PASS).');
+  console.log('Neon test user/auth schema: digital IDs and usernames are unique; FID, username, and terms timestamp are nullable (PASS).');
   console.log(`Applied Neon test migrations: ${appliedMigrations.rows.map((row) => row.migration_name).join(', ')}.`);
 } catch (error) {
   const isIncompleteSchema = error.code === 'DB_SCHEMA_INCOMPLETE';

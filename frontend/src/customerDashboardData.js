@@ -12,6 +12,7 @@ const ENDPOINTS_BY_VIEW = {
   messages: ['bookings', 'messages'],
   reviews: ['bookings', 'reviews'],
   notifications: ['notifications'],
+  support: ['complaints', 'bookings'],
   profile: ['profile'],
 };
 

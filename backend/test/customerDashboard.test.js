@@ -5,7 +5,7 @@ import { summarizeCustomerOverview, ensureCustomerOwnership, isDuplicateFavorite
 
 test('summarises customer activity across events, bookings, quotations, and payments', () => {
   const summary = summarizeCustomerOverview({
-    events: [{ date: '2026-11-18T16:00:00Z' }, { date: '2026-11-30T09:00:00Z' }, { date: '2026-10-05T18:00:00Z' }],
+    events: [{ date: '2026-12-01T16:00:00Z' }, { date: '2026-12-15T09:00:00Z' }, { date: '2026-11-01T18:00:00Z' }],
     bookings: [
       { status: 'pending' },
       { status: 'confirmed' },

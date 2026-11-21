@@ -28,14 +28,18 @@ export function mapVendor(row, services = [], media = []) {
   ]).sort((first, second) => first.price - second.price || first.serviceId - second.serviceId);
   const startingPrice = startingPriceOptions[0]?.price
     ?? (row.min_price === null || row.min_price === undefined ? null : toNumber(row.min_price));
+  const profileCategory = isValidCategoryName(row.category) ? String(row.category).trim() : '';
+  const serviceCategory = services.find((service) => isValidCategoryName(service.category))?.category || '';
+  const serviceCity = services.find((service) => String(service.city || '').trim())?.city || '';
+  const serviceDescription = services.find((service) => String(service.description || '').trim())?.description || '';
   return {
     id: toNumber(row.id),
     userId: toNumber(row.user_id),
     business_name: String(row.business_name || '').trim(),
     name: String(row.business_name || '').trim(),
-    category: isValidCategoryName(row.category) ? String(row.category).trim() : '',
-    city: String(row.city || '').trim(),
-    description: String(row.description || '').trim(),
+    category: profileCategory || serviceCategory,
+    city: String(row.city || '').trim() || String(serviceCity || '').trim(),
+    description: String(row.description || '').trim() || String(serviceDescription || '').trim(),
     verified: row.verification_status === 'verified',
     rating: toNumber(row.rating),
     reviewCount: toNumber(row.review_count),

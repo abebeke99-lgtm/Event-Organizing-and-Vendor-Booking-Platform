@@ -327,11 +327,14 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
       pendingBookings: 0,
       confirmedBookings: 0,
       completedBookings: 0,
+      completedEvents: 0,
       upcomingEvents: 2,
       pendingQuotations: 0,
       unreadMessages: 0,
       unreadNotifications: 0,
       outstandingPayments: 0,
+      paidPaymentCount: 0,
+      totalPaidByCurrency: [],
     });
     assert.equal((await request('/api/customer/overview', `${token}-vendor`)).status, 403);
     assert.equal((await fetch(`${baseUrl}/api/customer/overview`)).status, 401);
@@ -418,10 +421,13 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     assert.equal(populatedOverview.pendingBookings, 1);
     assert.equal(populatedOverview.confirmedBookings, 0);
     assert.equal(populatedOverview.completedBookings, 0);
+    assert.equal(populatedOverview.completedEvents, 0);
     assert.equal(populatedOverview.upcomingEvents, 2);
     assert.equal(populatedOverview.pendingQuotations, 0);
     assert.equal(populatedOverview.unreadMessages, 0);
     assert.equal(populatedOverview.outstandingPayments, 0);
+    assert.equal(populatedOverview.paidPaymentCount, 0);
+    assert.deepEqual(populatedOverview.totalPaidByCurrency, []);
 
     assert.equal(budgetBefore.status, 200);
     assert.equal((await budgetBefore.json()).data.summary.remaining, 10000);
@@ -858,6 +864,7 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
       method: 'POST',
       body: JSON.stringify({
         bookingId: customerBookingId,
+        category: 'payment_billing',
         subject: 'Customer complaint integration',
         details: 'The service did not match the confirmed arrangement.',
       }),
@@ -883,9 +890,31 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     ]);
     assert.equal(foreignComplaint.status, 404);
     assert.equal(complaintList.status, 200);
-    assert.ok((await complaintList.json()).data.some((row) => row.id === complaintId));
+    const complaintListBody = await complaintList.json();
+    assert.ok(complaintListBody.data.some((row) => row.id === complaintId));
     assert.equal(complaintDetail.status, 200);
     assert.equal((await complaintDetail.json()).data.history[0].action, 'created');
+    const listedComplaint = complaintListBody.data.find((row) => row.id === complaintId);
+    assert.equal(listedComplaint.category, 'payment_billing');
+    const invalidReply = await request(`/api/customer/complaints/${complaintId}/replies`, customerToken, {
+      method: 'POST',
+      body: JSON.stringify({ message: 'no' }),
+    });
+    const foreignReply = await request(`/api/customer/complaints/${complaintId}/replies`, token, {
+      method: 'POST',
+      body: JSON.stringify({ message: 'This is not my ticket.' }),
+    });
+    assert.equal(invalidReply.status, 400);
+    assert.equal(foreignReply.status, 404);
+    const customerReply = await request(`/api/customer/complaints/${complaintId}/replies`, customerToken, {
+      method: 'POST',
+      body: JSON.stringify({ message: 'Please help resolve this billing question.' }),
+    });
+    assert.equal(customerReply.status, 201);
+    const complaintAfterReply = await request('/api/customer/complaints', customerToken);
+    const repliedComplaint = (await complaintAfterReply.json()).data.find((row) => row.id === complaintId);
+    assert.ok(repliedComplaint.history.some((entry) => entry.action === 'customer_reply'
+      && entry.details.message === 'Please help resolve this billing question.'));
     assert.equal(vendorComplaintList.status, 403);
     assert.equal(foreignBookingComplaint.status, 404);
 
@@ -928,6 +957,15 @@ test('Neon PostgreSQL booking, quotation, and availability workflows persist and
     assert.equal(persistedComplaint.rows[0].action, 'attachment_added');
     assert.equal(persistedComplaint.rows[0].file_size, pdf.length);
     assert.equal(persistedComplaint.rows[0].audit_action, 'complaint.attachment_added');
+    await database.runtimeAdapter.query(
+      "UPDATE complaints SET status = 'closed' WHERE id = $1",
+      [complaintId],
+    );
+    const closedTicketReply = await request(`/api/customer/complaints/${complaintId}/replies`, customerToken, {
+      method: 'POST',
+      body: JSON.stringify({ message: 'Please reopen this ticket.' }),
+    });
+    assert.equal(closedTicketReply.status, 409);
     console.log('Neon booking, communication, notification, review, complaint, attachment, payment, refund, quotation, and availability integration passed.');
   } finally {
     const slowestRequests = [...requestTimings]

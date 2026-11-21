@@ -1,4 +1,4 @@
-import { getAiProviderConfiguration } from '../services/aiProvider.js';
+import { getAiProviderConfiguration } from './services/aiProvider.js';
 import { getDatabaseDialect, getStartupConfigurationErrors } from './lib/startupConfig.js';
 
 const configuredDialect = process.env.DB_DIALECT?.trim();
@@ -28,11 +28,14 @@ if (!aiProviderConfiguration.configured) {
   );
 }
 
+const errors = [...configurationErrors];
+
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
-  console.error('PORT must be an integer between 1 and 65535.');
-  process.exitCode = 1;
-} else if (configurationErrors.length) {
-  console.error('Required configuration is incomplete or invalid:', configurationErrors.join(', '));
+  errors.push('PORT must be an integer between 1 and 65535.');
+}
+
+if (errors.length) {
+  console.error('Required configuration is incomplete or invalid:', errors.join(', '));
   process.exitCode = 1;
 } else {
   const databaseDialect = getDatabaseDialect();

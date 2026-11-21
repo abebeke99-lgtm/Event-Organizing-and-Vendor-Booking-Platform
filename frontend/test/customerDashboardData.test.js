@@ -9,6 +9,7 @@ import {
 test('customer dashboard loads only the active section data', () => {
   assert.deepEqual(getCustomerDashboardEndpoints('payments'), ['payments', 'refunds']);
   assert.deepEqual(getCustomerDashboardEndpoints('bookings'), []);
+  assert.deepEqual(getCustomerDashboardEndpoints('support'), ['complaints', 'bookings']);
   assert.deepEqual(getCustomerDashboardEndpoints('unknown'), []);
 });
 

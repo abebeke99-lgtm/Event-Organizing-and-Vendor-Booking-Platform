@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { APIConnectionError } from 'openai';
 import { z } from 'zod';
 import { databaseDialect as defaultDatabaseDialect, pool } from '../db.js';
-import { createAiProvider } from '../../services/aiProvider.js';
+import { createAiProvider } from '../services/aiProvider.js';
 import { optionalPlatformUser, requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { createAuthRateLimiter } from '../middleware/authRateLimit.js';
 import { loadAiChatContext } from '../lib/aiChatContext.js';

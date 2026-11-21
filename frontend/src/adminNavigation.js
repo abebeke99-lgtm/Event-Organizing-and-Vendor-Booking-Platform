@@ -3,11 +3,13 @@ export const ADMIN_DASHBOARD_SLUGS = Object.freeze([
   'users',
   'roles',
   'vendors',
+  'vendor-verification',
   'categories',
   'events',
   'bookings',
   'package-requests',
   'payments',
+  'refunds',
   'reviews',
   'complaints',
   'messages',
@@ -22,12 +24,14 @@ export const ADMIN_DASHBOARD_SLUGS = Object.freeze([
 
 export function adminPathForSlug(slug) {
   const section = ADMIN_DASHBOARD_SLUGS.includes(slug) ? slug : 'overview';
+  if (section === 'messages') return '/admin/contact-messages';
   return section === 'overview' ? '/admin' : `/admin/${section}`;
 }
 
 export function adminSlugFromPath(path) {
   const pathname = String(path ?? '').split(/[?#]/, 1)[0].replace(/\/+$/, '') || '/';
   if (pathname === '/admin/dashboard') return 'overview';
+  if (pathname === '/admin/contact-messages') return 'messages';
   const match = pathname.match(/^\/admin(?:\/([^/]+))?$/);
   if (!match) return null;
   const section = match[1] || 'overview';

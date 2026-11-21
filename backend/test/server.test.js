@@ -320,7 +320,10 @@ test('cookie options use Secure and SameSite=None in production and insecure Lax
 let healthQueryCount = 0;
 const app = createApp({
   database: {
-    async execute() {
+    async execute(sql) {
+      if (sql.includes('FROM system_settings')) {
+        return [[{ setting_key: 'public_registration_enabled', setting_value: 'true' }], []];
+      }
       return [[], []];
     },
     async query(sql) {

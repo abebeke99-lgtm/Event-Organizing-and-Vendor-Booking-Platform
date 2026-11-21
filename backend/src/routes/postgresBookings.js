@@ -14,7 +14,12 @@ import {
   releaseBookingDate,
   reserveBookingDate,
 } from '../lib/bookingAvailability.js';
-import { dateTimeSchema, toMysqlDateTime } from '../lib/eventInput.js';
+import {
+  createEventSchema,
+  dateTimeSchema,
+  partialEventSchema,
+  toMysqlDateTime,
+} from '../lib/eventInput.js';
 import {
   createPostgresRefundRequest,
   isSafePostgresFinancialNote,
@@ -175,6 +180,269 @@ function createPostgresPlatformRouter({ database }) {
         guestCount: row.guest_count === null ? null : Number(row.guest_count),
       })),
     });
+  }));
+
+  router.post('/events', requirePlatformUser, asyncHandler(async (req, res) => {
+    if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+      return res.status(403).json({ error: 'Only customers and organizers can create events.' });
+    }
+    const parsed = createEventSchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid event details.' });
+    }
+
+    const event = parsed.data;
+    const created = await database.inTransaction(async (tx) => {
+      const inserted = await tx.query(
+        `INSERT INTO events (
+           organizer_id, title, event_type, description, city, venue, cover_image_url,
+           gallery_images, start_date, end_date, budget, guest_count, capacity, notes, status
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, 'draft')
+         RETURNING id, title, event_type, description, city, venue, cover_image_url,
+                   gallery_images, start_date, end_date, budget, guest_count, capacity,
+                   notes, status, published_at, created_at`,
+        [
+          req.platformUser.id,
+          event.title,
+          event.type,
+          event.description || null,
+          event.city || null,
+          event.venue || null,
+          event.coverImageUrl || null,
+          JSON.stringify(event.galleryImages || []),
+          toMysqlDateTime(event.startDate),
+          toMysqlDateTime(event.endDate),
+          event.budget,
+          event.guestCount,
+          event.capacity,
+          event.notes || null,
+        ],
+      );
+      await audit(tx, req, {
+        actorId: req.platformUser.id,
+        action: 'event.created',
+        entityType: 'event',
+        entityId: inserted.rows[0].id,
+        details: { title: event.title, status: 'draft' },
+      });
+      return inserted.rows[0];
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: {
+        ...mapDatabaseEvent(created),
+        notes: created.notes || '',
+        guestCount: created.guest_count === null ? null : Number(created.guest_count),
+      },
+    });
+  }));
+
+  router.patch('/events/:id', requirePlatformUser, asyncHandler(async (req, res) => {
+    if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+      return res.status(403).json({ error: 'Only event owners can edit events.' });
+    }
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    const parsed = partialEventSchema.safeParse(req.body || {});
+    if (!id.success || !parsed.success || Object.keys(parsed.data || {}).length === 0) {
+      return res.status(400).json({ error: parsed.error?.issues[0]?.message || 'Provide valid event changes.' });
+    }
+
+    const value = parsed.data;
+    const fields = [
+      ['title', 'title', value.title],
+      ['event_type', 'type', value.type],
+      ['description', 'description', value.description],
+      ['city', 'city', value.city],
+      ['venue', 'venue', value.venue],
+      ['cover_image_url', 'coverImageUrl', value.coverImageUrl],
+      ['gallery_images', 'galleryImages', value.galleryImages === undefined ? undefined : JSON.stringify(value.galleryImages)],
+      ['start_date', 'startDate', value.startDate === undefined ? undefined : toMysqlDateTime(value.startDate)],
+      ['end_date', 'endDate', value.endDate === undefined ? undefined : toMysqlDateTime(value.endDate)],
+      ['budget', 'budget', value.budget],
+      ['guest_count', 'guestCount', value.guestCount],
+      ['capacity', 'capacity', value.capacity],
+      ['notes', 'notes', value.notes],
+    ].filter(([, , fieldValue]) => fieldValue !== undefined);
+
+    const result = await database.inTransaction(async (tx) => {
+      const current = rowsOf(await tx.query(
+        `SELECT id, organizer_id, title, event_type, description, city, venue, cover_image_url,
+                gallery_images, start_date, end_date, budget, guest_count, capacity, notes, status
+         FROM events WHERE id = $1 FOR UPDATE`,
+        [id.data],
+      ))[0];
+      if (!current || Number(current.organizer_id) !== Number(req.platformUser.id)) {
+        return { status: 404, error: 'Event not found.' };
+      }
+      if (['completed', 'cancelled'].includes(current.status)) {
+        return { status: 409, error: 'Completed or cancelled events cannot be edited.' };
+      }
+
+      const nextStartDate = value.startDate === undefined ? current.start_date : value.startDate;
+      const nextEndDate = value.endDate === undefined ? current.end_date : value.endDate;
+      if (nextEndDate && new Date(nextEndDate).getTime() <= new Date(nextStartDate).getTime()) {
+        return { status: 400, error: 'Event end date must be after its start date.' };
+      }
+      if (value.capacity !== undefined && value.capacity !== null) {
+        const inventory = rowsOf(await tx.query(
+          `SELECT COALESCE(SUM(tt.sold_quantity), 0)::int AS sold,
+                  COALESCE((
+                    SELECT SUM(tb.quantity) FROM event_ticket_bookings tb
+                    WHERE tb.event_id = $1
+                      AND tb.booking_status = 'pending_payment'
+                      AND tb.created_at >= NOW() - INTERVAL '15 minutes'
+                  ), 0)::int AS reserved
+           FROM event_ticket_types tt
+           WHERE tt.event_id = $1 AND tt.status = 'active'`,
+          [id.data],
+        ))[0];
+        if (Number(inventory.sold) + Number(inventory.reserved) > value.capacity) {
+          return { status: 409, error: 'Event capacity cannot be lower than tickets sold or reserved.' };
+        }
+      }
+
+      const assignments = fields.map(([column], index) => (
+        `${column} = $${index + 1}${column === 'gallery_images' ? '::jsonb' : ''}`
+      ));
+      await tx.query(
+        `UPDATE events SET ${assignments.join(', ')} WHERE id = $${fields.length + 1}`,
+        [...fields.map(([, , fieldValue]) => fieldValue), id.data],
+      );
+      await audit(tx, req, {
+        actorId: req.platformUser.id,
+        action: 'event.updated',
+        entityType: 'event',
+        entityId: id.data,
+        details: { fields: fields.map(([, field]) => field) },
+      });
+      return { status: 200, event: { id: id.data, ...value, status: current.status } };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    return res.json({ success: true, data: result.event });
+  }));
+
+  router.patch('/events/:id/publish', requirePlatformUser, asyncHandler(async (req, res) => {
+    if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+      return res.status(403).json({ error: 'Only event owners can publish events.' });
+    }
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Event ID is invalid.' });
+    const result = await database.inTransaction(async (tx) => {
+      const event = rowsOf(await tx.query(
+        'SELECT id, organizer_id, status FROM events WHERE id = $1 FOR UPDATE',
+        [id.data],
+      ))[0];
+      if (!event || Number(event.organizer_id) !== Number(req.platformUser.id)) {
+        return { status: 404, error: 'Event not found.' };
+      }
+      if (['cancelled', 'completed'].includes(event.status)) {
+        return { status: 409, error: 'This event cannot be published.' };
+      }
+      await tx.query(
+        `UPDATE events SET status = 'active', published_at = COALESCE(published_at, NOW())
+         WHERE id = $1`,
+        [id.data],
+      );
+      await audit(tx, req, {
+        actorId: req.platformUser.id,
+        action: 'event.published',
+        entityType: 'event',
+        entityId: id.data,
+        details: { previousStatus: event.status },
+      });
+      return { status: 200 };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    return res.json({ success: true, data: { id: id.data, status: 'active' } });
+  }));
+
+  router.patch('/events/:id/cancel', requirePlatformUser, asyncHandler(async (req, res) => {
+    if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+      return res.status(403).json({ error: 'Only event owners can cancel events.' });
+    }
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Event ID is invalid.' });
+    const result = await database.inTransaction(async (tx) => {
+      const event = rowsOf(await tx.query(
+        'SELECT id, organizer_id, status FROM events WHERE id = $1 FOR UPDATE',
+        [id.data],
+      ))[0];
+      if (!event || Number(event.organizer_id) !== Number(req.platformUser.id)) {
+        return { status: 404, error: 'Event not found.' };
+      }
+      if (event.status === 'completed') {
+        return { status: 409, error: 'Completed events cannot be cancelled.' };
+      }
+      const activeBookings = rowsOf(await tx.query(
+        `SELECT COUNT(*)::int AS total FROM bookings
+         WHERE event_id = $1 AND status IN
+           ('requested', 'under_review', 'quoted', 'accepted', 'confirmed', 'in_progress')`,
+        [id.data],
+      ))[0];
+      if (Number(activeBookings.total)) {
+        return { status: 409, error: 'Cancel or resolve active bookings before cancelling this event.' };
+      }
+      await tx.query("UPDATE events SET status = 'cancelled' WHERE id = $1", [id.data]);
+      await audit(tx, req, {
+        actorId: req.platformUser.id,
+        action: 'event.cancelled',
+        entityType: 'event',
+        entityId: id.data,
+        details: { previousStatus: event.status },
+      });
+      return { status: 200 };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    return res.json({ success: true, data: { id: id.data, status: 'cancelled' } });
+  }));
+
+  router.delete('/events/:id', requirePlatformUser, asyncHandler(async (req, res) => {
+    if (!['customer', 'organizer'].includes(req.platformUser.role)) {
+      return res.status(403).json({ error: 'Only event owners can delete events.' });
+    }
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!id.success) return res.status(400).json({ error: 'Event ID is invalid.' });
+    const result = await database.inTransaction(async (tx) => {
+      const event = rowsOf(await tx.query(
+        'SELECT id, organizer_id, status FROM events WHERE id = $1 FOR UPDATE',
+        [id.data],
+      ))[0];
+      if (!event || Number(event.organizer_id) !== Number(req.platformUser.id)) {
+        return { status: 404, error: 'Event not found.' };
+      }
+      if (event.status !== 'draft') {
+        return { status: 409, error: 'Only draft events can be deleted.' };
+      }
+      for (const [table, message] of [
+        ['bookings', 'Events with bookings cannot be deleted.'],
+        ['event_history', 'Events with planning history cannot be deleted.'],
+        ['event_budget_categories', 'Events with budget records cannot be deleted.'],
+        ['event_expenses', 'Events with expenses cannot be deleted.'],
+        ['event_vendor_tasks', 'Events with vendor tasks cannot be deleted.'],
+        ['event_ticket_bookings', 'Events with ticket bookings cannot be deleted.'],
+      ]) {
+        const references = rowsOf(await tx.query(
+          `SELECT COUNT(*)::int AS total FROM ${table} WHERE event_id = $1`,
+          [id.data],
+        ))[0];
+        if (Number(references.total)) return { status: 409, error: message };
+      }
+      await tx.query(
+        `DELETE FROM events WHERE id = $1 AND organizer_id = $2 AND status = 'draft'`,
+        [id.data, req.platformUser.id],
+      );
+      await audit(tx, req, {
+        actorId: req.platformUser.id,
+        action: 'event.deleted',
+        entityType: 'event',
+        entityId: id.data,
+        details: { previousStatus: event.status },
+      });
+      return { status: 204 };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    return res.status(204).end();
   }));
 
   router.post('/bookings', requirePlatformUser, asyncHandler(async (req, res) => {
@@ -581,9 +849,10 @@ function createPostgresCustomerRouter({ database }) {
          WHERE e.organizer_id = $1
        ),
        event_summary AS (
-         SELECT COUNT(*)::int AS upcoming_events
+         SELECT COUNT(*) FILTER (WHERE e.start_date >= NOW())::int AS upcoming_events,
+                COUNT(*) FILTER (WHERE e.status = 'completed')::int AS completed_events
          FROM events e
-         WHERE e.organizer_id = $1 AND e.start_date >= NOW() AND e.status <> 'cancelled'
+         WHERE e.organizer_id = $1 AND e.status <> 'cancelled'
        ),
        quotation_summary AS (
          SELECT COUNT(*)::int AS pending_quotations
@@ -602,7 +871,20 @@ function createPostgresCustomerRouter({ database }) {
        ),
        payment_summary AS (
          SELECT COALESCE(SUM(p.amount) FILTER (WHERE p.status IN ('pending', 'authorized')), 0)
-                  AS outstanding_payments
+                  AS outstanding_payments,
+                COUNT(*) FILTER (WHERE p.status = 'paid')::int AS paid_payment_count,
+                COALESCE((
+                  SELECT json_agg(json_build_object('currency', paid.currency, 'amount', paid.amount) ORDER BY paid.currency)
+                  FROM (
+                    SELECT COALESCE(NULLIF(BTRIM(paid_payment.currency), ''), 'ETB') AS currency,
+                           SUM(paid_payment.amount) AS amount
+                    FROM payments paid_payment
+                    JOIN bookings paid_booking ON paid_booking.id = paid_payment.booking_id
+                    JOIN events paid_event ON paid_event.id = paid_booking.event_id
+                    WHERE paid_event.organizer_id = $1 AND paid_payment.status = 'paid'
+                    GROUP BY COALESCE(NULLIF(BTRIM(paid_payment.currency), ''), 'ETB')
+                  ) paid
+                ), '[]'::json) AS total_paid_by_currency
          FROM payments p
          JOIN bookings b ON b.id = p.booking_id
          JOIN events e ON e.id = b.event_id
@@ -626,11 +908,14 @@ function createPostgresCustomerRouter({ database }) {
         pendingBookings: Number(row.pending_bookings),
         confirmedBookings: Number(row.confirmed_bookings),
         completedBookings: Number(row.completed_bookings),
+        completedEvents: Number(row.completed_events),
         upcomingEvents: Number(row.upcoming_events),
         pendingQuotations: Number(row.pending_quotations),
         unreadMessages: Number(row.unread_messages),
         unreadNotifications: Number(row.unread_notifications),
         outstandingPayments: Number(row.outstanding_payments),
+        paidPaymentCount: Number(row.paid_payment_count),
+        totalPaidByCurrency: row.total_paid_by_currency,
       },
     });
   }));
@@ -1338,6 +1623,18 @@ function createPostgresCustomerRouter({ database }) {
   router.get('/complaints', requirePlatformUser, asyncHandler(async (req, res) => {
     const result = await database.query(
       `SELECT c.id, c.booking_id, c.subject, c.details, c.status, c.resolution, c.created_at,
+              COALESCE((
+                SELECT h.details ->> 'category' FROM complaint_history h
+                WHERE h.complaint_id = c.id AND h.action = 'created'
+                ORDER BY h.id LIMIT 1
+              ), 'general_inquiry') AS category,
+              COALESCE((
+                SELECT json_agg(json_build_object(
+                  'id', h.id, 'actorId', h.actor_id, 'action', h.action,
+                  'details', h.details, 'createdAt', h.created_at
+                ) ORDER BY h.id)
+                FROM complaint_history h WHERE h.complaint_id = c.id
+              ), '[]'::json) AS history,
               vp.business_name AS vendor_name
        FROM complaints c LEFT JOIN bookings b ON b.id = c.booking_id
        LEFT JOIN vendor_profiles vp ON vp.id = b.vendor_id
@@ -1355,6 +1652,10 @@ function createPostgresCustomerRouter({ database }) {
   router.post('/complaints', requirePlatformUser, asyncHandler(async (req, res) => {
     const parsed = z.object({
       bookingId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
+      category: z.enum([
+        'general_inquiry', 'event_booking_support', 'vendor_support',
+        'payment_billing', 'technical_support', 'account_assistance',
+      ]).default('general_inquiry'),
       subject: z.string().trim().min(3).max(180),
       details: z.string().trim().min(10).max(10000),
     }).strict().safeParse(req.body || {});
@@ -1380,9 +1681,12 @@ function createPostgresCustomerRouter({ database }) {
         );
         const id = Number(inserted.rows[0].id);
         await tx.query(
-          `INSERT INTO complaint_history (complaint_id, actor_id, action, to_status)
-           VALUES ($1, $2, 'created', 'open')`,
-          [id, req.platformUser.id],
+          `INSERT INTO complaint_history (complaint_id, actor_id, action, to_status, details)
+           VALUES ($1, $2, 'created', 'open', $3::jsonb)`,
+          [id, req.platformUser.id, JSON.stringify({
+            category: parsed.data.category,
+            bookingId: parsed.data.bookingId || null,
+          })],
         );
         await audit(tx, req, {
           actorId: req.platformUser.id,
@@ -1425,6 +1729,71 @@ function createPostgresCustomerRouter({ database }) {
     }
   }));
 
+  router.post('/complaints/:id/replies', requirePlatformUser, asyncHandler(async (req, res) => {
+    const id = z.coerce.number().int().positive().safeParse(req.params.id);
+    const parsed = z.object({
+      message: z.string().trim().min(5).max(4000),
+    }).strict().safeParse(req.body || {});
+    if (!id.success || !parsed.success) {
+      return res.status(400).json({ error: parsed.error?.issues[0]?.message || 'A valid support reply is required.' });
+    }
+
+    try {
+      const reply = await database.inTransaction(async (tx) => {
+        const complaint = await tx.query(
+          'SELECT id, status FROM complaints WHERE id = $1 AND user_id = $2 FOR UPDATE',
+          [id.data, req.platformUser.id],
+        );
+        const record = complaint.rows[0];
+        if (!record) throw httpError('Complaint not found.', 404);
+        if (!['open', 'under_review', 'investigating'].includes(record.status)) {
+          throw httpError('Replies are not allowed for a closed support ticket.', 409);
+        }
+
+        const inserted = await tx.query(
+          `INSERT INTO complaint_history (complaint_id, actor_id, action, from_status, to_status, details)
+           VALUES ($1, $2, 'customer_reply', $3, $3, $4::jsonb)
+           RETURNING id, created_at`,
+          [id.data, req.platformUser.id, record.status, JSON.stringify({ message: parsed.data.message })],
+        );
+        const replyId = Number(inserted.rows[0].id);
+        const settings = await loadSystemSettings(tx, ['notify_admin_complaints']);
+        if (settings.notify_admin_complaints) {
+          const administrators = await tx.query(
+            `SELECT DISTINCT u.id FROM users u
+             JOIN user_roles ur ON ur.user_id = u.id
+             JOIN roles r ON r.id = ur.role_id
+             WHERE u.status = 'active' AND r.is_admin = TRUE AND r.is_active = TRUE`,
+          );
+          for (const administrator of administrators.rows) {
+            await notify(tx, {
+              userId: administrator.id,
+              title: 'Customer support ticket updated',
+              message: `Support ticket CMP-${String(id.data).padStart(6, '0')} has a new customer reply.`,
+              type: 'complaint',
+              relatedType: 'complaint',
+              relatedId: id.data,
+              actorId: req.platformUser.id,
+              idempotencyKey: `complaint:${id.data}:reply:${replyId}:${administrator.id}`,
+            });
+          }
+        }
+        await audit(tx, req, {
+          actorId: req.platformUser.id,
+          action: 'complaint.customer_reply',
+          entityType: 'complaint',
+          entityId: id.data,
+          details: { replyId },
+        });
+        return { id: replyId, createdAt: inserted.rows[0].created_at };
+      });
+      return res.status(201).json({ success: true, data: { ...reply, ticketId: id.data } });
+    } catch (error) {
+      if (error.status) return res.status(error.status).json({ error: error.message });
+      throw error;
+    }
+  }));
+
   router.get('/complaints/:id', requirePlatformUser, asyncHandler(async (req, res) => {
     const id = z.coerce.number().int().positive().safeParse(req.params.id);
     if (!id.success) return res.status(400).json({ error: 'Complaint ID is invalid.' });
@@ -1442,7 +1811,7 @@ function createPostgresCustomerRouter({ database }) {
         [id.data],
       ),
       database.query(
-        `SELECT action, from_status, to_status, reason, created_at
+        `SELECT id, actor_id, action, from_status, to_status, reason, details, created_at
          FROM complaint_history WHERE complaint_id = $1 ORDER BY id DESC`,
         [id.data],
       ),

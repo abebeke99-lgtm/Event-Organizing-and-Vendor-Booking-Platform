@@ -1,0 +1,20 @@
+name: Frontend Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm --workspace frontend test
+      - run: npm --workspace frontend run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}

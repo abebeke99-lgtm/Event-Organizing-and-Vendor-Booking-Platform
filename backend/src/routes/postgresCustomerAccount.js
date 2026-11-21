@@ -6,10 +6,19 @@ import { asyncHandler } from '../middleware/asyncHandler.js';
 import { requirePlatformUser } from '../middleware/requirePlatformUser.js';
 import { hashToken } from '../lib/security.js';
 import { isStrongPassword } from '../lib/authFlow.js';
+import { normalizePhoneNumber } from '../lib/accountValidation.js';
 
 function httpError(message, status) {
   return Object.assign(new Error(message), { status });
 }
+
+const customerPhoneSchema = z.string()
+  .trim()
+  .max(40)
+  .transform(normalizePhoneNumber)
+  .refine((phone) => !phone || /^\+[1-9]\d{7,14}$/.test(phone), 'Enter a valid phone number.')
+  .optional()
+  .default('');
 
 export function createPostgresCustomerAccountRouter({ database }) {
   const normalizedDatabase = normalizeDatabaseAdapter(database);
@@ -27,6 +36,11 @@ export function createPostgresCustomerAccountRouter({ database }) {
 
   router.get('/profile', asyncHandler(async (req, res) => {
     const user = req.platformUser;
+    const account = await normalizedDatabase.query(
+      'SELECT created_at, status FROM users WHERE id = $1',
+      [user.id],
+    );
+    const accountRow = account.rows[0];
     return res.json({
       success: true,
       data: {
@@ -34,7 +48,8 @@ export function createPostgresCustomerAccountRouter({ database }) {
         email: user.email,
         phone: user.phone,
         role: user.role,
-        status: user.status,
+        status: accountRow?.status || user.status,
+        createdAt: accountRow?.created_at || null,
       },
     });
   }));
@@ -42,7 +57,7 @@ export function createPostgresCustomerAccountRouter({ database }) {
   router.patch('/profile', asyncHandler(async (req, res) => {
     const parsed = z.object({
       fullName: z.string().trim().min(2).max(160),
-      phone: z.string().trim().max(40).optional().default(''),
+      phone: customerPhoneSchema,
     }).strict().safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ error: parsed.error.issues[0]?.message || 'Profile details are invalid.' });
@@ -83,7 +98,7 @@ export function createPostgresCustomerAccountRouter({ database }) {
     }).strict().safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({
-        error: 'Use at least 8 characters with uppercase and lowercase letters, a number, and a special character.',
+        error: 'Use 12–16 characters and no more than 72 UTF-8 bytes.',
       });
     }
     if (parsed.data.currentPassword === parsed.data.newPassword) {

@@ -5,6 +5,7 @@ const socialPlatforms = [
   { id: 'linkedin', labelKey: 'linkedin', environmentKey: 'VITE_LINKEDIN_URL', hosts: ['linkedin.com'] },
   { id: 'instagram', labelKey: 'instagram', environmentKey: 'VITE_INSTAGRAM_URL', hosts: ['instagram.com'] },
   { id: 'telegram', labelKey: 'telegram', environmentKey: 'VITE_TELEGRAM_URL', hosts: ['t.me'] },
+  { id: 'whatsapp', labelKey: 'whatsapp', environmentKey: 'VITE_WHATSAPP_URL', hosts: ['wa.me', 'whatsapp.com'] },
 ];
 
 const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : {
@@ -14,6 +15,16 @@ const viteEnvironment = typeof import.meta.env === 'undefined' ? {} : {
   VITE_LINKEDIN_URL: import.meta.env.VITE_LINKEDIN_URL,
   VITE_INSTAGRAM_URL: import.meta.env.VITE_INSTAGRAM_URL,
   VITE_TELEGRAM_URL: import.meta.env.VITE_TELEGRAM_URL,
+  VITE_WHATSAPP_URL: import.meta.env.VITE_WHATSAPP_URL,
+};
+
+const topBarPlatformIds = ['telegram', 'facebook', 'youtube', 'linkedin', 'whatsapp'];
+const topBarFallbackUrls = {
+  telegram: 'https://telegram.org',
+  facebook: 'https://www.facebook.com',
+  youtube: 'https://www.youtube.com',
+  linkedin: 'https://www.linkedin.com',
+  whatsapp: 'https://wa.me/251986481821',
 };
 
 export function getFooterSocialLinks(environment = viteEnvironment) {
@@ -67,6 +78,7 @@ function getSettingsSocialLinks(settings) {
       || candidate.id === 'youtube' && label === 'youtube'
       || candidate.id === 'linkedin' && label === 'linkedin'
       || candidate.id === 'telegram' && label === 'telegram'
+      || candidate.id === 'whatsapp' && label === 'whatsapp'
     ));
     if (!platform || parsedUrl.protocol !== 'https:' || platform.hosts.every((allowedHost) => host !== allowedHost)
       || parsedUrl.username || parsedUrl.password || parsedUrl.pathname === '/') continue;
@@ -80,27 +92,40 @@ function getSettingsSocialLinks(settings) {
 }
 
 export function getTopBarSocialLinks(environment = viteEnvironment, settings = []) {
-  if (Array.isArray(settings) && settings.length > 0) return getSettingsSocialLinks(settings);
+  const configured = new Map();
+
+  if (Array.isArray(settings) && settings.length > 0) {
+    for (const social of getSettingsSocialLinks(settings)) {
+      if (topBarPlatformIds.includes(social.id)) configured.set(social.id, social);
+    }
+  }
 
   const topBarEnvironment = Object.fromEntries(socialPlatforms.map((platform) => {
     const url = environment[platform.environmentKey]?.trim();
     if (!url) return [platform.environmentKey, ''];
-
-    let parsedUrl;
     try {
-      parsedUrl = new URL(url);
+      const parsedUrl = new URL(url);
+      const host = parsedUrl.hostname.toLowerCase().replace(/^www\./, '');
+      const validUrl = parsedUrl.protocol === 'https:'
+        && platform.hosts.includes(host)
+        && !parsedUrl.username
+        && !parsedUrl.password;
+      return [platform.environmentKey, validUrl ? url : ''];
     } catch {
       return [platform.environmentKey, ''];
     }
-
-    const host = parsedUrl.hostname.toLowerCase().replace(/^www\./, '');
-    const validUrl = parsedUrl.protocol === 'https:'
-      && platform.hosts.includes(host)
-      && !parsedUrl.username
-      && !parsedUrl.password;
-
-    return [platform.environmentKey, validUrl ? url : ''];
   }));
 
-  return getFooterSocialLinks(topBarEnvironment).filter(({ url }) => url);
+  for (const social of getFooterSocialLinks(topBarEnvironment).filter(({ url }) => url)) {
+    if (topBarPlatformIds.includes(social.id)) configured.set(social.id, social);
+  }
+
+  return topBarPlatformIds.map((id) => {
+    const platform = socialPlatforms.find((entry) => entry.id === id);
+    return configured.get(id) || {
+      id,
+      labelKey: platform.labelKey,
+      url: topBarFallbackUrls[id],
+    };
+  });
 }

@@ -41,6 +41,8 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
   const environment = await loadNeonTestEnvironment();
   const database = createPostgresDatabase(environment);
   const suffix = randomUUID();
+  const shortSuffix = suffix.replace(/-/g, '').slice(0, 12);
+  const phoneSuffix = suffix.replace(/\D/g, '').padEnd(10, '0').slice(0, 10);
   const customerEmail = `pg-auth-${suffix}@example.invalid`;
   const rollbackEmail = `pg-auth-rollback-${suffix}@example.invalid`;
   const vendorEmail = `pg-auth-vendor-${suffix}@example.invalid`;
@@ -161,7 +163,14 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     const rollbackResponse = await fetch(`${rollbackBaseUrl}/api/platform/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'Rollback Fixture', email: rollbackEmail, password }),
+      body: JSON.stringify({
+        fullName: 'Rollback Fixture',
+        email: rollbackEmail,
+        phone: `+1555${phoneSuffix}`,
+        password,
+        accountType: 'Customer',
+        acceptedTerms: true,
+      }),
     });
     assert.equal(rollbackResponse.status, 500);
     assert.equal(injectedRoleLinkErrorCode, '23503');
@@ -185,7 +194,7 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
       body: JSON.stringify({ email: adminEmail, password }),
     });
     assert.equal(adminLogin.status, 200);
-    const adminCookie = cookiePair(adminLogin, 'platform_session');
+    const adminCookie = cookiePair(adminLogin, 'admin_session');
     const adminSessionResponse = await fetch(`${baseUrl}/api/auth/me`, {
       headers: { Cookie: adminCookie },
     });
@@ -198,12 +207,14 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
 
     const endDate = new Date().toISOString().slice(0, 10);
     const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const dashboardQuery = new URLSearchParams({ startDate, endDate });
+    const dashboardQuery = new URLSearchParams({ range: 'custom', from: startDate, to: endDate });
     const adminDashboard = await fetch(`${baseUrl}/api/admin/dashboard/overview?${dashboardQuery}`, {
       headers: { Cookie: adminCookie },
     });
     assert.equal(adminDashboard.status, 200);
-    assert.ok((await adminDashboard.json()).data);
+    const dashboardBody = (await adminDashboard.json()).data;
+    assert.deepEqual(dashboardBody.period, { from: startDate, to: endDate });
+    assert.ok(Array.isArray(dashboardBody.recentActivity));
 
     const adminLoginLogout = await fetch(`${baseUrl}/api/auth/logout`, {
       method: 'POST',
@@ -219,10 +230,12 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.21' },
       body: JSON.stringify({
-        name: 'Invalid Role Fixture',
+        fullName: 'Invalid Role Fixture',
         email: invalidRoleEmail,
+        phone: `+1666${phoneSuffix}`,
         password,
-        role: 'admin',
+        accountType: 'Admin',
+        acceptedTerms: true,
       }),
     });
     assert.equal(invalidRole.status, 403);
@@ -234,7 +247,14 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
         'Accept-Language': 'am',
         'X-Forwarded-For': '198.51.100.22',
       },
-      body: JSON.stringify({ name: 'Neon Customer Fixture', email: customerEmail.toUpperCase(), password }),
+      body: JSON.stringify({
+        fullName: 'Neon Customer Fixture',
+        email: customerEmail.toUpperCase(),
+        phone: `+1777${phoneSuffix}`,
+        password,
+        accountType: 'Customer',
+        acceptedTerms: true,
+      }),
     });
     assert.equal(registration.status, 201);
     const registered = await registration.json();
@@ -256,7 +276,14 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
     const duplicate = await fetch(`${baseUrl}/api/platform/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '198.51.100.23' },
-      body: JSON.stringify({ name: 'Duplicate Fixture', email: customerEmail, password }),
+      body: JSON.stringify({
+        fullName: 'Duplicate Fixture',
+        email: customerEmail,
+        phone: `+1888${phoneSuffix}`,
+        password,
+        accountType: 'Customer',
+        acceptedTerms: true,
+      }),
     });
     assert.equal(duplicate.status, 409);
 
@@ -270,7 +297,14 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
           'Content-Type': 'application/json',
           'X-Forwarded-For': `198.51.100.${24 + index}`,
         },
-        body: JSON.stringify({ name: `Neon ${role} signup`, email, password, role }),
+        body: JSON.stringify({
+          fullName: `Neon ${role} signup`,
+          email,
+          phone: `+1999${phoneSuffix.slice(0, 6)}${index}`,
+          password,
+          accountType: role === 'organizer' ? 'Organizer' : 'Vendor',
+          acceptedTerms: true,
+        }),
       });
       assert.equal(roleRegistration.status, 201);
       assert.equal((await roleRegistration.json()).data.user.role, role);
@@ -322,13 +356,69 @@ test('Neon PostgreSQL authentication registration, sessions, vendor login, and r
       body: JSON.stringify({ fullName: 'Neon Customer Updated', phone: '+251900000000' }),
     });
     assert.equal(profileUpdate.status, 200);
-    assert.equal((await profileUpdate.json()).data.fullName, 'Neon Customer Updated');
+    const updatedProfile = (await profileUpdate.json()).data;
+    assert.equal(updatedProfile.fullName, 'Neon Customer Updated');
+    assert.equal(updatedProfile.phone, '+251900000000');
+    const invalidPhoneUpdate = await fetch(`${baseUrl}/api/customer/profile`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
+      body: JSON.stringify({ fullName: 'Neon Customer Updated', phone: 'not a phone number' }),
+    });
+    assert.equal(invalidPhoneUpdate.status, 400);
     const invalidProfileUpdate = await fetch(`${baseUrl}/api/customer/profile`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
       body: JSON.stringify({ fullName: 'x', unexpected: true }),
     });
     assert.equal(invalidProfileUpdate.status, 400);
+
+    const draftEventResponse = await fetch(`${baseUrl}/api/platform/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
+      body: JSON.stringify({
+        title: `Neon deletable event ${shortSuffix}`,
+        type: 'Integration test',
+        startDate: '2099-01-10T10:00',
+      }),
+    });
+    assert.equal(draftEventResponse.status, 201);
+    const draftEvent = (await draftEventResponse.json()).data;
+    const updatedEvent = await fetch(`${baseUrl}/api/platform/events/${draftEvent.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Cookie: platformCookie },
+      body: JSON.stringify({ title: `Updated Neon event ${shortSuffix}` }),
+    });
+    assert.equal(updatedEvent.status, 200);
+    assert.equal((await updatedEvent.json()).data.title, `Updated Neon event ${shortSuffix}`);
+    const publishedEvent = await fetch(`${baseUrl}/api/platform/events/${draftEvent.id}/publish`, {
+      method: 'PATCH',
+      headers: { Cookie: platformCookie },
+    });
+    assert.equal(publishedEvent.status, 200);
+    const activeEventDelete = await fetch(`${baseUrl}/api/platform/events/${draftEvent.id}`, {
+      method: 'DELETE',
+      headers: { Cookie: platformCookie },
+    });
+    assert.equal(activeEventDelete.status, 409);
+    const cancelledEvent = await fetch(`${baseUrl}/api/platform/events/${draftEvent.id}/cancel`, {
+      method: 'PATCH',
+      headers: { Cookie: platformCookie },
+    });
+    assert.equal(cancelledEvent.status, 200);
+    await database.runtimeAdapter.query(
+      "UPDATE events SET status = 'draft' WHERE id = $1 AND organizer_id = $2",
+      [draftEvent.id, userId],
+    );
+    const deletedDraftEvent = await fetch(`${baseUrl}/api/platform/events/${draftEvent.id}`, {
+      method: 'DELETE',
+      headers: { Cookie: platformCookie },
+    });
+    assert.equal(deletedDraftEvent.status, 204);
+    const deletedEventRecord = await database.runtimeAdapter.query(
+      'SELECT id FROM events WHERE id = $1',
+      [draftEvent.id],
+    );
+    assert.equal(deletedEventRecord.rowCount, 0);
 
     const secondarySessionToken = randomBytes(32).toString('hex');
     await database.runtimeAdapter.query(

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, BadgeCheck, Bell, Building2, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, ExternalLink, FileClock, MessageSquare, Search, Sparkles, Star, Trash2, X } from 'lucide-react';
+import { ArrowUpRight, BadgeCheck, Bell, Building2, CalendarDays, Check, ChevronLeft, ChevronRight, ClipboardList, Clock3, CreditCard, ExternalLink, FileClock, MessageSquare, Search, Sparkles, Star, Trash2, X } from 'lucide-react';
 import apiClient from './api/axios.js';
 import { translate as translateKey, translateText as translatePhrase } from './language.js';
 import { formatCustomerMoney as money } from './customerMoney.js';
+import { buildCustomerPaymentReceipt } from './customerPaymentReceipt.js';
 import { clearComparedServices, getComparedServiceIds, getComparedVendorIds, toggleComparedService, toggleComparedVendor } from './navigationFeatureUtils.js';
 import ServiceCategoriesPage from './ServiceCategoriesPage.jsx';
 import { CustomerBookingsList } from './CustomerBookings.jsx';
@@ -17,6 +18,14 @@ const formatDate = (value) => {
 
 const statusClass = (value) => String(value || '').toLowerCase().replaceAll('_', '-');
 const EMPTY_OBJECT = Object.freeze({});
+const SUPPORT_CATEGORIES = [
+  ['general_inquiry', 'General inquiry'],
+  ['event_booking_support', 'Booking support'],
+  ['vendor_support', 'Vendor support'],
+  ['payment_billing', 'Payments and billing'],
+  ['technical_support', 'Technical support'],
+  ['account_assistance', 'Account assistance'],
+];
 const SERVICE_SORTS = new Set(['relevance', 'popular', 'newest', 'highest-rated', 'most-reviewed', 'price-low', 'price-high', 'alphabetical']);
 const VENDOR_SEARCH_HISTORY_KEY = 'eventhub:customer-vendor-searches:v1';
 const SERVICE_SEARCH_HISTORY_KEY = 'eventhub:customer-service-searches:v1';
@@ -104,6 +113,20 @@ function ServiceCatalogImage({ service }) {
   return <img className="customer-vendor-image" src={src} alt={service.title} loading="lazy" onError={() => setFailed(true)} />;
 }
 
+function CustomerEventImage({ event }) {
+  const [failed, setFailed] = useState(false);
+  const path = event.coverImageUrl || event.coverImage || event.cover_image_url;
+  const baseUrl = apiClient.defaults.baseURL;
+  const src = path?.startsWith('/api/') && baseUrl && !baseUrl.startsWith('/')
+    ? new URL(path, baseUrl).toString()
+    : path;
+
+  useEffect(() => setFailed(false), [src]);
+
+  if (!src || failed) return <span className="customer-event-image-empty"><CalendarDays size={20}/></span>;
+  return <img className="customer-event-image" src={src} alt="" loading="lazy" onError={() => setFailed(true)} />;
+}
+
 function PageHeading({ eyebrow, title, description, action, className = '' }) {
   return <div className={`page-heading customer-workspace-heading ${className}`}><div><p className="eyebrow">{eyebrow}</p><h2>{title}</h2><p className="muted">{description}</p></div>{action}</div>;
 }
@@ -125,12 +148,21 @@ function CustomerRequestModal({ item, events, user, api, mutate, busy, onClose }
     notes: '',
   });
   const isBooking = item.kind === 'booking';
+  const isSaveService = item.kind === 'save-service';
   const availableEvents = events.filter((event) => (
     ['active', 'published', 'upcoming', 'open'].includes(String(event.status).toLowerCase())
     && new Date(String(event.startDate || event.date || '').replace(' ', 'T')).getTime() > Date.now()
   ));
   return <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={(event) => {
     event.preventDefault();
+    if (isSaveService) {
+      mutate(() => api('/customer/saved-services', {
+        method: 'POST',
+        body: JSON.stringify({ serviceId: Number(item.service.id) }),
+      }), 'Service saved to your favorites.');
+      onClose();
+      return;
+    }
     const body = isBooking
       ? { eventId: Number(form.eventId), serviceId: Number(item.service.id), notes: form.notes }
       : {
@@ -155,7 +187,7 @@ function CustomerRequestModal({ item, events, user, api, mutate, busy, onClose }
       ? `Booking request submitted. Current status: ${result?.data?.status || 'requested'}.`
       : `Quotation request submitted. Current status: ${result?.data?.status || 'pending vendor response'}.`);
   }}>
-    <div className="modal-head"><h2>{isBooking ? 'Request a booking' : 'Request a quotation'}</h2><button className="icon-button" type="button" aria-label="Close" onClick={onClose}>×</button></div>
+    <div className="modal-head"><h2>{isSaveService ? 'Save service' : isBooking ? 'Request a booking' : 'Request a quotation'}</h2><button className="icon-button" type="button" aria-label="Close" onClick={onClose}>×</button></div>
     <div className="modal-body"><p>{item.service.title} · {item.service.vendorName}{item.service.price != null ? ` · ${money(item.service.price, item.service.currency)}` : ''}</p>
       <label className="field"><span>Event</span><select required={isBooking} value={form.eventId} onChange={(event) => {
         const selected = availableEvents.find((entry) => Number(entry.id) === Number(event.target.value));
@@ -170,7 +202,7 @@ function CustomerRequestModal({ item, events, user, api, mutate, busy, onClose }
           budget: selected?.budget ?? current.budget,
         }));
       }}><option value="">Choose an event</option>{availableEvents.map((event) => <option value={event.id} key={event.id}>{event.title} · {new Date(String(event.startDate || event.date).replace(' ', 'T')).toLocaleDateString()}</option>)}</select></label>
-      {!isBooking && <>
+      {!isBooking && !isSaveService && <>
         <label className="field"><span>Event name (optional)</span><input maxLength="180" value={form.eventName} onChange={(event) => setForm((current) => ({ ...current, eventName: event.target.value }))} /></label>
         <label className="field"><span>Event date and time</span><input required type="datetime-local" min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)} value={form.eventDate} onChange={(event) => setForm((current) => ({ ...current, eventDate: event.target.value }))} /></label>
         <label className="field"><span>Event location</span><input required maxLength="120" value={form.eventLocation} onChange={(event) => setForm((current) => ({ ...current, eventLocation: event.target.value }))} /></label>
@@ -179,10 +211,10 @@ function CustomerRequestModal({ item, events, user, api, mutate, busy, onClose }
         <label className="field"><span>Expected guests</span><input type="number" min="1" max="100000" value={form.guestCount} onChange={(event) => setForm((current) => ({ ...current, guestCount: event.target.value }))} /></label>
         <label className="field"><span>Budget (ETB)</span><input type="number" min="0" max="100000000" step="0.01" value={form.budget} onChange={(event) => setForm((current) => ({ ...current, budget: event.target.value }))} /></label>
       </>}
-      <label className="field"><span>Requirements</span><textarea maxLength={isBooking ? 500 : 2000} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} /></label>
+      {!isSaveService && <label className="field"><span>Requirements</span><textarea maxLength={isBooking ? 500 : 2000} value={form.notes} onChange={(event) => setForm((current) => ({ ...current, notes: event.target.value }))} /></label>}
       {isBooking && form.eventId && <p className="muted">Event date: {formatDate(availableEvents.find((entry) => Number(entry.id) === Number(form.eventId))?.startDate || availableEvents.find((entry) => Number(entry.id) === Number(form.eventId))?.date)}. Availability and current service pricing are verified by the booking API.</p>}
     </div>
-    <div className="modal-foot"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>Cancel</button><button className="button" type="submit" disabled={busy || (isBooking && !form.eventId) || (!isBooking && (!form.eventDate || !form.eventLocation.trim() || !form.eventType.trim() || !form.contactPhone.trim()))}>{busy ? translateText('customerSendingRequest') : isBooking ? translateText('customerBookService') : translateText('customerRequestQuotation')}</button></div>
+    <div className="modal-foot"><button className="button secondary" type="button" onClick={onClose} disabled={busy}>Cancel</button><button className="button" type="submit" disabled={busy || (isBooking && !form.eventId) || (!isBooking && !isSaveService && (!form.eventDate || !form.eventLocation.trim() || !form.eventType.trim() || !form.contactPhone.trim()))}>{busy ? translateText('customerSendingRequest') : isSaveService ? 'Save service' : isBooking ? translateText('customerBookService') : translateText('customerRequestQuotation')}</button></div>
   </form></div>;
 }
 
@@ -339,6 +371,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   const messages = Array.isArray(data?.messages) ? data.messages.filter(Boolean) : [];
   const reviews = Array.isArray(data?.reviews) ? data.reviews.filter(Boolean) : [];
   const notifications = Array.isArray(data?.notifications) ? data.notifications.filter(Boolean) : [];
+  const complaints = Array.isArray(data?.complaints) ? data.complaints.filter(Boolean) : [];
   const profile = data?.profile ?? EMPTY_OBJECT;
   const overview = data?.overview ?? EMPTY_OBJECT;
   const [busy, setBusy] = useState(false);
@@ -385,6 +418,8 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   const [refundForm, setRefundForm] = useState(null);
   const [profileForm, setProfileForm] = useState({ fullName: profile.fullName || user.full_name || user.name || '', phone: profile.phone || user.phone || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
+  const [supportForm, setSupportForm] = useState({ bookingId: '', category: 'general_inquiry', subject: '', details: '' });
+  const [supportReplies, setSupportReplies] = useState({});
 
   useEffect(() => {
     setProfileForm({ fullName: profile.fullName || user.full_name || user.name || '', phone: profile.phone || user.phone || '' });
@@ -695,7 +730,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
       title: event.title || '', type: event.type || '', description: event.description || '', city: event.location || event.city || '',
       venue: event.venue || '', startDate: String(event.startDate || event.date || '').replace(' ', 'T').slice(0, 16),
       endDate: String(event.endDate || '').replace(' ', 'T').slice(0, 16), guestCount: event.guestCount ?? '',
-      budget: event.budget ?? '', capacity: event.capacity ?? '', notes: event.notes || '', coverImageUrl: event.coverImage || '',
+      budget: event.budget ?? '', capacity: event.capacity ?? '', notes: event.notes || '', coverImageUrl: event.coverImageUrl || event.coverImage || '',
     });
     setEventFormOpen(true);
   }
@@ -736,6 +771,10 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   }
 
   if (view === 'overview') {
+    const paidTotals = Array.isArray(overview.totalPaidByCurrency) ? overview.totalPaidByCurrency : [];
+    const paymentTotalLabel = paidTotals.length
+      ? paidTotals.map((payment) => money(payment.amount, payment.currency)).join(' · ')
+      : money(0, 'ETB');
     const upcomingEvents = events
       .filter((event) => String(event.status || '').toLowerCase() !== 'cancelled')
       .map((event) => ({ ...event, scheduledAt: new Date(String(event.startDate || event.date || '').replace(' ', 'T')) }))
@@ -744,35 +783,35 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
       .slice(0, 4);
     const summaryCards = [
       ['Total bookings', overview.totalBookings, ClipboardList, 'View all requests', 'bookings'],
-      ['Pending bookings', overview.pendingBookings, Clock3, 'Awaiting a decision', 'bookings'],
-      ['Confirmed bookings', overview.confirmedBookings, BadgeCheck, 'Accepted or in progress', 'bookings'],
+      ['Completed events', overview.completedEvents, BadgeCheck, 'Events marked complete', 'events'],
+      ['Payments', paymentTotalLabel, CreditCard, `${overview.paidPaymentCount || 0} successful transactions`, 'payments'],
+      ['Pending requests', (Number(overview.pendingBookings) || 0) + (Number(overview.pendingQuotations) || 0), Clock3, 'Bookings and quotes awaiting a response', 'bookings'],
       ['Upcoming events', overview.upcomingEvents, CalendarDays, 'Your scheduled events', 'events'],
-      ['Pending quotations', overview.pendingQuotations, FileClock, 'Review vendor quotes', 'quotations'],
     ];
 
     return <section className="customer-workspace">{feedback}
-      <PageHeading className="customer-overview-heading" eyebrow="YOUR EVENT SPACE" title={`Welcome, ${user.full_name || user.name || 'Customer'}`} description="Everything you need to plan, book, and keep up with your events." action={<button className="button customer-overview-cta" type="button" onClick={() => onNavigate('services')}><Sparkles size={16}/>Discover services<ArrowUpRight size={15}/></button>} />
+      <PageHeading className="customer-overview-heading" eyebrow="YOUR EVENT SPACE" title={`Welcome back, ${user.full_name || user.name || 'Customer'}!`} description="Everything you need to plan, book, and keep up with your events." action={<div className="customer-overview-actions"><button className="button customer-overview-cta" type="button" onClick={() => onNavigate('services')}><Sparkles size={16}/>Discover services<ArrowUpRight size={15}/></button><span className="customer-overview-illustration" aria-hidden="true"><CalendarDays/><Sparkles/></span></div>} />
       <div className="metric-grid customer-overview-metrics">{summaryCards.map(([label, value, Icon, description, target]) => <button className="metric-card customer-overview-stat" key={label} type="button" onClick={() => onNavigate(target)} aria-label={`${label}: ${value ?? 0}. ${description}`}><span className="customer-overview-stat-icon"><Icon size={18}/></span><span className="customer-overview-stat-copy"><span className="customer-overview-stat-label">{label}</span><strong>{value ?? 0}</strong><span className="customer-overview-stat-detail">{description}</span></span><ArrowUpRight className="customer-overview-stat-arrow" size={16}/></button>)}</div>
       <div className="customer-overview-grid">
         <section className="panel customer-overview-panel">
-          <div className="panel-header"><h3><CalendarDays size={17}/>Upcoming events</h3><button className="button secondary small" type="button" onClick={() => onNavigate('events')}>View events</button></div>
-          {upcomingEvents.length ? <div className="customer-overview-list">{upcomingEvents.map((event) => <article className="customer-overview-item" key={event.id}><span className="customer-overview-item-icon"><CalendarDays size={17}/></span><div><strong>{event.title}</strong><small>{[event.type, event.city || event.location].filter(Boolean).join(' · ') || 'Event'} · {formatDate(event.startDate || event.date)}</small></div><span className={`pill ${statusClass(event.status)}`}>{event.status}</span></article>)}</div> : <EmptyState>No upcoming events.</EmptyState>}
+          <div className="panel-header"><h3><CalendarDays size={17}/>Upcoming events</h3><button className="button secondary small" type="button" onClick={() => onNavigate('events')}>View all</button></div>
+          {upcomingEvents.length ? <div className="customer-overview-list">{upcomingEvents.map((event) => <button className="customer-overview-item customer-overview-event" type="button" key={event.id} onClick={() => onNavigate('events')}><CustomerEventImage event={event}/><span className="customer-overview-event-copy"><strong>{event.title}</strong><small>{[event.type, event.venue, event.city || event.location].filter(Boolean).join(' · ') || 'Event'} · {formatDate(event.startDate || event.date)}</small></span><span className={`pill ${statusClass(event.status)}`}>{event.status}</span></button>)}</div> : <EmptyState>No upcoming events.</EmptyState>}
         </section>
         <section className="panel customer-overview-panel">
-          <div className="panel-header"><h3><ClipboardList size={17}/>Recent bookings</h3><button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>View bookings</button></div>
-          {bookings.length ? <div className="customer-overview-list">{bookings.slice(0, 5).map((booking) => <article className="customer-overview-item" key={booking.id}><span className="customer-overview-item-icon"><ClipboardList size={17}/></span><div><strong>{booking.serviceTitle}</strong><small>{booking.reference} · {booking.eventTitle || 'Event'} · {formatDate(booking.eventDate)}</small></div><span className={`pill ${statusClass(booking.status)}`}>{booking.status}</span></article>)}</div> : <EmptyState>No bookings yet. Browse services to get started.</EmptyState>}
+          <div className="panel-header"><h3><ClipboardList size={17}/>Recent bookings</h3><button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>View all</button></div>
+          {bookings.length ? <div className="customer-overview-table-wrap"><table className="customer-overview-bookings"><thead><tr><th>Event / service</th><th>Vendor</th><th>Booking date</th><th>Amount</th><th>Status</th></tr></thead><tbody>{bookings.slice(0, 5).map((booking) => <tr key={booking.id} tabIndex={0} onClick={() => onNavigatePublic(`/customer/bookings/${booking.id}`)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onNavigatePublic(`/customer/bookings/${booking.id}`); } }} aria-label={`View booking ${booking.reference || booking.id}`}><td><strong>{booking.serviceTitle}</strong><small>{booking.reference || booking.eventTitle || 'Booking'}</small></td><td>{booking.vendorName || 'Vendor'}</td><td>{formatDate(booking.createdAt || booking.eventDate)}</td><td>{Number(booking.quotedAmount) > 0 ? money(booking.quotedAmount, booking.currency) : 'Pending quote'}</td><td><span className={`pill ${statusClass(booking.status)}`}>{booking.status}</span></td></tr>)}</tbody></table></div> : <EmptyState>No bookings yet. Browse services to get started.</EmptyState>}
         </section>
         <section className="panel customer-overview-panel">
           <div className="panel-header"><h3><MessageSquare size={17}/>Recent messages</h3><button className="button secondary small" type="button" onClick={() => onNavigate('messages')}>View messages</button></div>
-          {messages.length ? <div className="customer-overview-list">{messages.slice(0, 4).map((message) => <article className="customer-overview-item" key={message.id}><span className="customer-overview-item-icon"><MessageSquare size={17}/></span><div><strong>{message.vendor || message.sender || 'Message'}{message.event ? ` · ${message.event}` : ''}</strong><small>{message.subject || message.body}</small></div><span className={`pill ${message.read ? 'inactive' : 'active'}`}>{message.read ? 'Read' : 'Unread'}</span></article>)}</div> : <EmptyState>No recent messages.</EmptyState>}
+          {messages.length ? <div className="customer-overview-list">{messages.slice(0, 4).map((message) => <button className="customer-overview-item customer-overview-message" type="button" key={message.id} onClick={() => onNavigate('messages')}><span className="customer-overview-item-icon customer-vendor-avatar">{String(message.vendor || message.sender || 'V').trim().charAt(0).toUpperCase()}</span><span className="customer-overview-message-copy"><strong>{message.vendor || message.sender || 'Message'}{message.event ? ` · ${message.event}` : ''}</strong><small>{message.subject || message.body}</small><small>{formatDate(message.createdAt || message.sentAt)}</small></span>{!message.read && <span className="customer-message-unread-dot" aria-label="Unread"/>}</button>)}</div> : <EmptyState>No recent messages.</EmptyState>}
         </section>
         <section className="panel customer-overview-panel">
           <div className="panel-header"><h3><Sparkles size={17}/>Recommended vendors</h3><button className="button secondary small" type="button" onClick={() => onNavigate('vendors')}>Browse vendors</button></div>
-          {Array.isArray(data.vendors) && data.vendors.length ? <div className="customer-overview-list">{data.vendors.slice(0, 4).map((vendor) => <article className="customer-overview-item" key={vendor.id}><span className="customer-overview-item-icon customer-vendor-avatar">{String(vendor.business_name || vendor.name || 'V').trim().charAt(0).toUpperCase()}</span><div><strong>{vendor.business_name || vendor.name}</strong><small>{[vendor.category, vendor.city].filter(Boolean).join(' · ')}</small></div>{Number(vendor.rating) > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(vendor.rating).toFixed(1)}</span>}</article>)}</div> : <EmptyState>No recommended vendors are available.</EmptyState>}
+          {Array.isArray(data.vendors) && data.vendors.length ? <div className="customer-overview-list">{data.vendors.slice(0, 4).map((vendor) => <article className="customer-overview-item customer-overview-vendor" key={vendor.id}><VendorDirectoryImage vendor={vendor}/><div className="customer-overview-vendor-copy"><strong>{vendor.business_name || vendor.name}</strong><small>{[vendor.category, vendor.city].filter(Boolean).join(' · ') || 'Service provider'}</small><small>{Number(vendor.priceFrom) > 0 ? `From ${money(vendor.priceFrom, vendor.currency || 'ETB')}` : 'Pricing available on profile'}</small></div>{Number(vendor.rating) > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(vendor.rating).toFixed(1)}</span>}<button className="button secondary small" type="button" onClick={() => onNavigatePublic(`/vendors/${vendor.id}`)}>View profile</button></article>)}</div> : <EmptyState>No recommended vendors are available.</EmptyState>}
         </section>
         <section className="panel customer-overview-panel">
           <div className="panel-header"><h3><Bell size={17}/>Recent notifications</h3><button className="button secondary small" type="button" onClick={() => onNavigate('notifications')}>View all</button></div>
-          {notifications.length ? <div className="customer-overview-list">{notifications.slice(0, 5).map((item) => <article className="customer-overview-item" key={item.id}><span className="customer-overview-item-icon"><Bell size={17}/></span><div><strong>{item.title}</strong><small>{item.message}</small></div><span className={`pill ${item.read ? 'inactive' : 'active'}`}>{item.read ? 'Read' : 'New'}</span></article>)}</div> : <EmptyState>No notifications.</EmptyState>}
+          {notifications.length ? <div className="customer-overview-list">{notifications.slice(0, 5).map((item) => <button className="customer-overview-item customer-overview-message" type="button" key={item.id} onClick={() => onNavigate('notifications')}><span className="customer-overview-item-icon"><Bell size={17}/></span><span className="customer-overview-message-copy"><strong>{item.title}</strong><small>{item.message}</small><small>{formatDate(item.createdAt)}</small></span><span className={`pill ${item.read ? 'inactive' : 'active'}`}>{item.read ? 'Read' : 'New'}</span></button>)}</div> : <EmptyState>No notifications.</EmptyState>}
         </section>
       </div>
       <section className="panel customer-overview-panel customer-discovery-panel"><div className="panel-header"><h3><Sparkles size={17}/>Quick discovery</h3><button className="button secondary small" type="button" onClick={() => onNavigate('categories')}>Service categories</button></div><div className="customer-quick-services">{services.slice(0, 4).map((service) => <article className="customer-service-card" key={service.id}><strong>{service.title}</strong><small>{service.vendorName} · {service.category}</small><span>{money(service.price, service.currency)}</span><button className="button secondary small" type="button" onClick={() => onNavigate('services')}>View services</button></article>)}</div>{!services.length && <EmptyState>No published services are available.</EmptyState>}</section>
@@ -824,10 +863,27 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
         onRequestService={setRequestService}
       />;
     }
-    return <section className="customer-workspace">{feedback}<PageHeading eyebrow="DISCOVERY" title={isVendors ? 'Browse vendors' : 'Search services'} description="Search, compare, save, and request a service for one of your events." />
+    return <section className="customer-workspace">{feedback}
+      {isVendors
+        ? <div className="customer-vendor-hero">
+            <div>
+              <p className="eyebrow">DASHBOARD <span aria-hidden="true">›</span> BROWSE VENDORS</p>
+              <h2>Browse Vendors</h2>
+              <p>Discover trusted vendors and explore their services for your events.</p>
+            </div>
+            <div className="customer-vendor-hero-art" aria-hidden="true">
+              <span className="customer-vendor-hero-store">VENDOR</span>
+              <span className="customer-vendor-hero-search">⌕</span>
+              <span className="customer-vendor-hero-person">●</span>
+            </div>
+            <button className="button customer-vendor-hero-action" type="button" onClick={() => document.getElementById('customer-vendor-search')?.focus()}>
+              Find the Perfect Vendor <ArrowUpRight size={15}/>
+            </button>
+          </div>
+        : <PageHeading eyebrow="DISCOVERY" title="Search services" description="Search, compare, save, and request a service for one of your events." />}
       <div className="panel customer-catalog-filters">
         {isVendors
-          ? <label className="field customer-vendor-search-field"><span>{translateText('customerSearchVendorsServices')}</span><div className="customer-search"><Search size={16}/><input type="search" list="customer-vendor-search-suggestions" value={vendorSearchInput} onChange={(event) => setVendorSearchInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') rememberVendorSearch(vendorSearchInput); }} placeholder={translateText('customerSearchVendorPlaceholder')} aria-label={translateText('customerSearchVendorsServices')} />{vendorSearchInput && <button className="customer-search-clear" type="button" aria-label="Clear search" onClick={() => { setVendorSearchInput(''); rememberVendorSearch(''); }}><X size={15}/></button>}</div><datalist id="customer-vendor-search-suggestions">{vendorSearchHistory.map((term) => <option value={term} key={`history-${term}`} />)}{categoryOptions.map((category) => <option value={category.name} key={`category-${category.id}`} />)}</datalist></label>
+          ? <label className="field customer-vendor-search-field"><span>{translateText('customerSearchVendorsServices')}</span><div className="customer-search"><Search size={16}/><input id="customer-vendor-search" type="search" list="customer-vendor-search-suggestions" value={vendorSearchInput} onChange={(event) => setVendorSearchInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') rememberVendorSearch(vendorSearchInput); }} placeholder={translateText('customerSearchVendorPlaceholder')} aria-label={translateText('customerSearchVendorsServices')} />{vendorSearchInput && <button className="customer-search-clear" type="button" aria-label="Clear search" onClick={() => { setVendorSearchInput(''); rememberVendorSearch(''); }}><X size={15}/></button>}</div><datalist id="customer-vendor-search-suggestions">{vendorSearchHistory.map((term) => <option value={term} key={`history-${term}`} />)}{categoryOptions.map((category) => <option value={category.name} key={`category-${category.id}`} />)}</datalist></label>
           : <form className="customer-service-search" role="search" onSubmit={submitServiceSearch}>
             <label className="field"><span>Search services</span><div className="customer-search"><Search size={16}/><input type="search" maxLength="120" value={serviceSearchInput} onChange={(event) => setServiceSearchInput(event.target.value)} placeholder="Name, category, vendor, description, or city" /></div></label>
             <div className="customer-service-search-actions"><button className="button" type="submit" disabled={catalogLoading}>Search</button>{serviceSearchInput && <button className="button secondary" type="button" onClick={clearServiceSearch} aria-label="Clear search" title="Clear search"><X size={16}/>Clear</button>}</div>
@@ -849,7 +905,7 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
         const isCompared = isVendors && comparedVendorIds.includes(Number(item.id));
         return <article className="panel customer-catalog-card" key={item.id}>
         {isVendors ? <VendorDirectoryImage vendor={item}/> : (item.coverImageUrl || item.logoUrl || item.images?.[0]?.url) && <img src={item.coverImageUrl || item.logoUrl || item.images?.[0]?.url} alt={item.name || item.title} loading="lazy"/>}
-        <div className="customer-catalog-card-content"><div className="customer-vendor-card-badges"><span className={`pill ${item.verified ? 'verified' : 'active'}`}>{isVendors ? item.verified ? <><BadgeCheck size={12}/> Verified</> : 'Listing' : item.category}</span><span className="customer-vendor-card-labels">{isVendors && item.isFeatured && <span className="customer-featured-badge"><Sparkles size={12}/>{translateText('customerFeatured')}</span>}{isVendors && item.reviewCount > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(item.rating).toFixed(1)} <small>({item.reviewCount})</small></span>}</span></div><h3>{isVendors ? item.business_name || item.name : item.title}</h3><p className="customer-vendor-category">{isVendors ? item.category || 'Category not listed' : `${item.vendorName} · ${item.category}`}</p><p className="customer-vendor-location">{isVendors ? item.city || 'Location not listed' : item.city}</p><p className="customer-vendor-description">{item.description || (isVendors ? 'No business description provided.' : 'No service description provided.')}</p>
+        <div className="customer-catalog-card-content"><div className="customer-vendor-card-badges"><span className={`pill ${item.verified ? 'verified' : 'active'}`}>{isVendors ? item.verified ? <><BadgeCheck size={12}/> Verified</> : 'Listing' : item.category}</span><span className="customer-vendor-card-labels">{isVendors && item.isFeatured && <span className="customer-featured-badge"><Sparkles size={12}/>{translateText('customerFeatured')}</span>}{isVendors && item.reviewCount > 0 && <span className="customer-vendor-rating"><Star size={13} fill="currentColor"/>{Number(item.rating).toFixed(1)} <small>({item.reviewCount})</small></span>}</span></div><h3>{isVendors ? item.business_name || item.name : item.title}</h3><p className="customer-vendor-category">{isVendors ? item.category || item.services?.find((service) => service.category)?.category || translateText('customerServiceProvider') : `${item.vendorName} · ${item.category}`}</p><p className="customer-vendor-location">{isVendors ? item.city || item.services?.find((service) => service.city)?.city || translateText('customerLocationNotListed') : item.city}</p><p className="customer-vendor-description">{item.description || item.services?.find((service) => service.description)?.description || (isVendors ? translateText('customerNoBusinessDescription') : translateText('customerNoServiceDescription'))}</p>
         <div className="customer-vendor-card-price"><small>Starting price</small><strong>{(isVendors ? item.priceFrom : item.price) === null || (isVendors ? item.priceFrom : item.price) === undefined ? 'Price on request' : money(isVendors ? item.priceFrom : item.price, item.currency)}</strong></div>
           {isVendors && item.available && <span className="customer-availability-badge"><Check size={13}/>{filters.availableDate ? `${translateText('customerAvailablePrefix')} ${filters.availableDate}` : translateText('customerAvailabilityListed')}</span>}
           {isVendors && Array.isArray(item.portfolio) && item.portfolio.length > 0 && <small className="customer-portfolio-count">{item.portfolio.length} portfolio {item.portfolio.length === 1 ? 'item' : 'items'}</small>}
@@ -869,8 +925,8 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   if (view === 'history') return <CustomerBookingHistory api={api} onNavigate={onNavigatePublic} />;
 
   if (view === 'events') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="EVENT PLANNING" title="My events" description="Create events, track linked bookings, and update your own event details." action={<button className="button" type="button" onClick={() => { setEditingEventId(null); setEventForm({ title: '', type: '', description: '', city: '', venue: '', startDate: '', endDate: '', guestCount: '', budget: '', capacity: '', notes: '', coverImageUrl: '' }); setEventFormOpen((current) => !current); }}>New event</button>} />
-    {eventFormOpen && <form className="panel customer-workspace-form" onSubmit={saveEvent}><h3>{editingEventId ? 'Edit event' : 'Create event'}</h3><div className="customer-form-grid"><label className="field"><span>Event name</span><input required minLength="2" maxLength="180" value={eventForm.title} onChange={(event) => setEventForm((current) => ({ ...current, title: event.target.value }))} /></label><label className="field"><span>Event type</span><input required minLength="2" maxLength="80" value={eventForm.type} onChange={(event) => setEventForm((current) => ({ ...current, type: event.target.value }))} /></label><label className="field"><span>Start date and time</span><input type="datetime-local" required value={eventForm.startDate} onChange={(event) => setEventForm((current) => ({ ...current, startDate: event.target.value }))} /></label><label className="field"><span>End date and time</span><input type="datetime-local" value={eventForm.endDate} onChange={(event) => setEventForm((current) => ({ ...current, endDate: event.target.value }))} /></label><label className="field"><span>Location / city</span><input maxLength="120" value={eventForm.city} onChange={(event) => setEventForm((current) => ({ ...current, city: event.target.value }))} /></label><label className="field"><span>Venue</span><input maxLength="180" value={eventForm.venue} onChange={(event) => setEventForm((current) => ({ ...current, venue: event.target.value }))} /></label><label className="field"><span>Expected guests</span><input type="number" min="1" max="100000" value={eventForm.guestCount} onChange={(event) => setEventForm((current) => ({ ...current, guestCount: event.target.value }))} /></label><label className="field"><span>Budget</span><input type="number" min="0" max="100000000" step="0.01" value={eventForm.budget} onChange={(event) => setEventForm((current) => ({ ...current, budget: event.target.value }))} /></label><label className="field customer-form-wide"><span>Description</span><textarea maxLength="10000" value={eventForm.description} onChange={(event) => setEventForm((current) => ({ ...current, description: event.target.value }))} /></label><label className="field customer-form-wide"><span>Planning notes</span><textarea maxLength="2000" value={eventForm.notes} onChange={(event) => setEventForm((current) => ({ ...current, notes: event.target.value }))} /></label></div><div className="customer-actions"><button className="button" disabled={busy}>{busy ? 'Saving...' : editingEventId ? 'Save changes' : 'Save draft'}</button><button className="button secondary" type="button" onClick={() => setEventFormOpen(false)}>Cancel</button></div></form>}
-    {events.map((event) => <article className="panel customer-event-card" key={event.id}><div><span className={`pill ${statusClass(event.status)}`}>{event.status}</span><h3>{event.title}</h3><p>{event.type} · {formatDate(event.startDate || event.date)} · {event.location || event.city}</p><p>{event.guestCount ?? 0} guests · Budget {money(event.budget, event.currency)}</p><small>{event.description || event.notes}</small></div><div className="customer-actions"><button className="button secondary small" type="button" onClick={() => startEditEvent(event)}>Edit</button>{statusClass(event.status) === 'draft' && <button className="button small" type="button" disabled={busy} onClick={() => mutate(() => api(`/platform/events/${event.id}/publish`, { method: 'PATCH' }), 'Event published.')}>Publish</button>}{!['completed', 'cancelled'].includes(statusClass(event.status)) && <button className="button danger small" type="button" disabled={busy} onClick={() => window.confirm(translateText('Cancel this event? Active bookings must be resolved first.')) && mutate(() => api(`/platform/events/${event.id}/cancel`, { method: 'PATCH' }), 'Event cancelled.')}>Cancel</button>}<button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>View bookings</button></div></article>)}{!events.length && !eventFormOpen && <EmptyState>No events yet. Create your first event to start planning.</EmptyState>}
+    {eventFormOpen && <form className="panel customer-workspace-form" onSubmit={saveEvent}><h3>{editingEventId ? 'Edit event' : 'Create event'}</h3><div className="customer-form-grid"><label className="field"><span>Event name</span><input required minLength="2" maxLength="180" value={eventForm.title} onChange={(event) => setEventForm((current) => ({ ...current, title: event.target.value }))} /></label><label className="field"><span>Event type</span><input required minLength="2" maxLength="80" value={eventForm.type} onChange={(event) => setEventForm((current) => ({ ...current, type: event.target.value }))} /></label><label className="field"><span>Start date and time</span><input type="datetime-local" required value={eventForm.startDate} onChange={(event) => setEventForm((current) => ({ ...current, startDate: event.target.value }))} /></label><label className="field"><span>End date and time</span><input type="datetime-local" value={eventForm.endDate} onChange={(event) => setEventForm((current) => ({ ...current, endDate: event.target.value }))} /></label><label className="field"><span>Location / city</span><input maxLength="120" value={eventForm.city} onChange={(event) => setEventForm((current) => ({ ...current, city: event.target.value }))} /></label><label className="field"><span>Venue</span><input maxLength="180" value={eventForm.venue} onChange={(event) => setEventForm((current) => ({ ...current, venue: event.target.value }))} /></label><label className="field"><span>Expected guests</span><input type="number" min="1" max="100000" value={eventForm.guestCount} onChange={(event) => setEventForm((current) => ({ ...current, guestCount: event.target.value }))} /></label><label className="field"><span>Budget</span><input type="number" min="0" max="100000000" step="0.01" value={eventForm.budget} onChange={(event) => setEventForm((current) => ({ ...current, budget: event.target.value }))} /></label><label className="field customer-form-wide"><span>Cover image URL</span><input type="url" maxLength="1000" value={eventForm.coverImageUrl} onChange={(event) => setEventForm((current) => ({ ...current, coverImageUrl: event.target.value }))} /></label><label className="field customer-form-wide"><span>Description</span><textarea maxLength="10000" value={eventForm.description} onChange={(event) => setEventForm((current) => ({ ...current, description: event.target.value }))} /></label><label className="field customer-form-wide"><span>Planning notes</span><textarea maxLength="2000" value={eventForm.notes} onChange={(event) => setEventForm((current) => ({ ...current, notes: event.target.value }))} /></label></div><div className="customer-actions"><button className="button" disabled={busy}>{busy ? 'Saving...' : editingEventId ? 'Save changes' : 'Save draft'}</button><button className="button secondary" type="button" onClick={() => setEventFormOpen(false)}>Cancel</button></div></form>}
+    {events.map((event) => <article className="panel customer-event-card" key={event.id}><div><span className={`pill ${statusClass(event.status)}`}>{event.status}</span><h3>{event.title}</h3><p>{event.type} · {formatDate(event.startDate || event.date)} · {event.location || event.city}</p><p>{event.guestCount ?? 0} guests · Budget {money(event.budget, event.currency)}</p><small>{event.description || event.notes}</small></div><div className="customer-actions"><button className="button secondary small" type="button" onClick={() => startEditEvent(event)}>Edit</button>{statusClass(event.status) === 'draft' && <><button className="button small" type="button" disabled={busy} onClick={() => mutate(() => api(`/platform/events/${event.id}/publish`, { method: 'PATCH' }), 'Event published.')}>Publish</button><button className="button danger small" type="button" disabled={busy} onClick={() => window.confirm(translateText('Delete this draft event? It must not have bookings or planning records.')) && mutate(() => api(`/platform/events/${event.id}`, { method: 'DELETE' }), 'Draft event deleted.')}>Delete draft</button></>}{!['completed', 'cancelled'].includes(statusClass(event.status)) && <button className="button danger small" type="button" disabled={busy} onClick={() => window.confirm(translateText('Cancel this event? Active bookings must be resolved first.')) && mutate(() => api(`/platform/events/${event.id}/cancel`, { method: 'PATCH' }), 'Event cancelled.')}>Cancel</button>}<button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>View bookings</button></div></article>)}{!events.length && !eventFormOpen && <EmptyState>No events yet. Create your first event to start planning.</EmptyState>}
   </section>;
 
   if (view === 'favorites') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="WISHLIST" title="Saved vendors and services" description="Keep preferred providers and packages for later comparison." />
@@ -898,7 +954,19 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
   </section>;
 
   if (view === 'payments') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="FINANCIAL RECORDS" title="Payments and refunds" description="Statuses are read-only and reflect verified payment/refund records." />
-    <div className="table-wrap"><table><thead><tr><th>Payment</th><th>Event</th><th>Service</th><th>Status</th><th>Amount</th><th>Date</th><th></th></tr></thead><tbody>{payments.map((payment) => <tr key={payment.id}><td>{payment.reference}</td><td>{payment.event}</td><td>{payment.service}</td><td><span className={`pill ${statusClass(payment.status)}`}>{payment.status}</span></td><td>{money(payment.amount, payment.currency)}</td><td>{formatDate(payment.date)}</td><td>{['paid', 'partially_refunded'].includes(statusClass(payment.status)) && <button className="button secondary small" type="button" onClick={() => setRefundForm({ payment, amount: String(payment.amount ?? 0), reason: '' })}>Request refund</button>}</td></tr>)}</tbody></table></div>{!payments.length && <EmptyState>No payment records yet.</EmptyState>}
+    <div className="table-wrap"><table><thead><tr><th>Payment</th><th>Event</th><th>Service</th><th>Provider</th><th>Status</th><th>Amount</th><th>Date</th><th></th></tr></thead><tbody>{payments.map((payment) => <tr key={payment.id}><td>{payment.reference}</td><td>{payment.event}</td><td>{payment.service}</td><td>{payment.provider || '—'}</td><td><span className={`pill ${statusClass(payment.status)}`}>{payment.status}</span></td><td>{money(payment.amount, payment.currency)}</td><td>{formatDate(payment.date)}</td><td><div className="customer-actions">{['paid', 'partially_refunded'].includes(statusClass(payment.status)) && <button className="button secondary small" type="button" onClick={() => setRefundForm({ payment, amount: String(payment.amount ?? 0), reason: '' })}>Request refund</button>}{['paid', 'partially_refunded', 'refunded'].includes(statusClass(payment.status)) && <button className="button secondary small" type="button" disabled={busy} onClick={() => mutate(async () => {
+      const response = await api(`/customer/payments/${payment.id}`);
+      const receipt = buildCustomerPaymentReceipt(response?.data?.payment);
+      const blob = new Blob([receipt], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `eventhub-receipt-${payment.id}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }, 'Verified payment receipt downloaded.')}>Download receipt</button>}</div></td></tr>)}</tbody></table></div>{!payments.length && <EmptyState>No payment records yet.</EmptyState>}
     <section className="panel"><h3>Refund history</h3>{refunds.map((refund) => <article className="list-card" key={refund.id}><div><strong>Payment #{refund.paymentId} · {money(refund.amount, refund.currency)}</strong><small>{refund.reason} · {formatDate(refund.createdAt)}</small></div><span className={`pill ${statusClass(refund.status)}`}>{refund.status}</span></article>)}{!refunds.length && <p className="muted">No refund requests.</p>}</section>
     {refundForm && <div className="overlay" onMouseDown={(event) => event.target === event.currentTarget && !busy && setRefundForm(null)}><form className="modal" onSubmit={(event) => { event.preventDefault(); mutate(async () => { await api(`/customer/payments/${refundForm.payment.id}/refunds`, { method: 'POST', body: JSON.stringify({ amount: Number(refundForm.amount), reason: refundForm.reason, idempotencyKey: globalThis.crypto.randomUUID() }) }); setRefundForm(null); }, 'Refund request submitted.'); }}><div className="modal-head"><h2>Request refund</h2><button className="icon-button" type="button" aria-label="Close" onClick={() => setRefundForm(null)}>×</button></div><div className="modal-body"><p>{refundForm.payment.reference} · {money(refundForm.payment.amount, refundForm.payment.currency)}</p><label className="field"><span>Amount</span><input type="number" min="0.01" max={refundForm.payment.amount} step="0.01" required value={refundForm.amount} onChange={(event) => setRefundForm((current) => ({ ...current, amount: event.target.value }))} /></label><label className="field"><span>Reason</span><textarea required minLength="5" maxLength="500" value={refundForm.reason} onChange={(event) => setRefundForm((current) => ({ ...current, reason: event.target.value }))} /></label></div><div className="modal-foot"><button className="button secondary" type="button" onClick={() => setRefundForm(null)}>Cancel</button><button className="button" disabled={busy}>{busy ? 'Submitting...' : 'Submit refund request'}</button></div></form></div>}
   </section>;
@@ -917,13 +985,72 @@ export default function CustomerWorkspace({ view, data = {}, api, user = {}, onN
     </section>;
   }
 
-  if (view === 'notifications') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="UPDATES" title="Notifications" description="Booking, quotation, payment, message, and event updates sent to your account." action={<button className="button secondary" type="button" disabled={busy || !notifications.some((item) => !item.read)} onClick={() => mutate(() => api('/customer/notifications/read-all', { method: 'POST' }), 'All notifications marked as read.')}><Check size={16}/> Mark all read</button>} />
-    {notifications.map((item) => <article className={`panel customer-message ${item.read ? '' : 'unread'}`} key={item.id}><div><strong>{item.title}</strong><small>{item.type} · {formatDate(item.createdAt)}</small><p>{item.message}</p></div><div className="customer-actions">{item.relatedType === 'booking' && <button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>Open booking</button>}{item.relatedType === 'event' && <button className="button secondary small" type="button" onClick={() => onNavigate('events')}>Open event</button>}{!item.read && <button className="button secondary small" type="button" disabled={busy} onClick={() => mutate(() => api(`/customer/notifications/${item.id}/read`, { method: 'POST' }), 'Notification marked as read.')}><Bell size={14}/> Mark read</button>}</div></article>)}{!notifications.length && <EmptyState>No notifications yet.</EmptyState>}
+  if (view === 'notifications') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="UPDATES" title="Notifications" description="Booking, quotation, payment, support, message, and event updates sent to your account." action={<button className="button secondary" type="button" disabled={busy || !notifications.some((item) => !item.read)} onClick={() => mutate(() => api('/customer/notifications/read-all', { method: 'POST' }), 'All notifications marked as read.')}><Check size={16}/> Mark all read</button>} />
+    {notifications.map((item) => <article className={`panel customer-message ${item.read ? '' : 'unread'}`} key={item.id}><div><strong>{item.title}</strong><small>{item.type} · {formatDate(item.createdAt)}</small><p>{item.message}</p></div><div className="customer-actions">{item.relatedType === 'booking' && <button className="button secondary small" type="button" onClick={() => onNavigate('bookings')}>Open booking</button>}{item.relatedType === 'event' && <button className="button secondary small" type="button" onClick={() => onNavigate('events')}>Open event</button>}{item.relatedType === 'complaint' && <button className="button secondary small" type="button" onClick={() => onNavigate('support')}>Open support</button>}{item.relatedType === 'quotation' && <button className="button secondary small" type="button" onClick={() => onNavigate('quotations')}>Open quotation</button>}{item.relatedType === 'payment' && <button className="button secondary small" type="button" onClick={() => onNavigate('payments')}>Open payment</button>}{!item.read && <button className="button secondary small" type="button" disabled={busy} onClick={() => mutate(() => api(`/customer/notifications/${item.id}/read`, { method: 'POST' }), 'Notification marked as read.')}><Bell size={14}/> Mark read</button>}</div></article>)}{!notifications.length && <EmptyState>No notifications yet.</EmptyState>}
+  </section>;
+
+  if (view === 'support') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="HELP AND SUPPORT" title="Customer support" description="Create a private support ticket, track its status, and reply while the case is open." action={<button className="button secondary" type="button" onClick={() => onNavigatePublic('/about/faqs')}>View FAQs</button>} />
+    <form className="panel customer-workspace-form" onSubmit={(event) => {
+      event.preventDefault();
+      mutate(async () => {
+        const result = await api('/customer/complaints', {
+          method: 'POST',
+          body: JSON.stringify({
+            bookingId: supportForm.bookingId ? Number(supportForm.bookingId) : null,
+            category: supportForm.category,
+            subject: supportForm.subject,
+            details: supportForm.details,
+          }),
+        });
+        setSupportForm({ bookingId: '', category: 'general_inquiry', subject: '', details: '' });
+        return result;
+      }, 'Support ticket submitted.');
+    }}>
+      <h3>Create a support ticket</h3>
+      <div className="customer-form-grid">
+        <label className="field"><span>Category</span><select value={supportForm.category} onChange={(event) => setSupportForm((current) => ({ ...current, category: event.target.value }))}>{SUPPORT_CATEGORIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+        <label className="field"><span>Related booking (optional)</span><select value={supportForm.bookingId} onChange={(event) => setSupportForm((current) => ({ ...current, bookingId: event.target.value }))}><option value="">Not related to a booking</option>{bookings.map((booking) => <option value={booking.id} key={booking.id}>{booking.eventTitle} · {booking.vendorName}</option>)}</select></label>
+        <label className="field customer-form-wide"><span>Subject</span><input required minLength="3" maxLength="180" value={supportForm.subject} onChange={(event) => setSupportForm((current) => ({ ...current, subject: event.target.value }))} /></label>
+        <label className="field customer-form-wide"><span>What can we help with?</span><textarea required minLength="10" maxLength="10000" value={supportForm.details} onChange={(event) => setSupportForm((current) => ({ ...current, details: event.target.value }))} /></label>
+      </div>
+      <button className="button" disabled={busy}>{busy ? 'Submitting...' : 'Submit ticket'}</button>
+    </form>
+    <div className="customer-section-heading"><h3>Your support tickets</h3><span>{complaints.length} tickets</span></div>
+    {complaints.map((ticket) => {
+      const canReply = ['open', 'under_review', 'investigating'].includes(statusClass(ticket.status));
+      const history = Array.isArray(ticket.history) ? ticket.history : [];
+      return <article className="panel customer-message" key={ticket.id}>
+        <div className="customer-message-content">
+          <span className={`pill ${statusClass(ticket.status)}`}>{String(ticket.status || '').replaceAll('_', ' ')}</span>
+          <h3>{ticket.reference} · {ticket.subject}</h3>
+          <small>{SUPPORT_CATEGORIES.find(([value]) => value === ticket.category)?.[1] || 'General inquiry'} · {formatDate(ticket.created_at)}{ticket.booking_id ? ` · Booking #${ticket.booking_id}` : ''}</small>
+          <p>{ticket.details}</p>
+          {ticket.resolution && <p><strong>Support response:</strong> {ticket.resolution}</p>}
+          {history.filter((entry) => entry.action === 'customer_reply').map((entry) => <p key={entry.id}><strong>You · {formatDate(entry.createdAt)}:</strong> {entry.details?.message}</p>)}
+        </div>
+        {canReply && <form className="customer-support-reply" onSubmit={(event) => {
+          event.preventDefault();
+          const message = String(supportReplies[ticket.id] || '').trim();
+          mutate(async () => {
+            const result = await api(`/customer/complaints/${ticket.id}/replies`, {
+              method: 'POST',
+              body: JSON.stringify({ message }),
+            });
+            setSupportReplies((current) => ({ ...current, [ticket.id]: '' }));
+            return result;
+          }, 'Reply added to support ticket.');
+        }}>
+          <label className="field"><span>Reply to this ticket</span><textarea required minLength="5" maxLength="4000" value={supportReplies[ticket.id] || ''} onChange={(event) => setSupportReplies((current) => ({ ...current, [ticket.id]: event.target.value }))} /></label>
+          <button className="button secondary small" disabled={busy || String(supportReplies[ticket.id] || '').trim().length < 5}>{busy ? 'Sending...' : 'Send reply'}</button>
+        </form>}
+      </article>;
+    })}
+    {!complaints.length && <EmptyState>You have no support tickets yet.</EmptyState>}
   </section>;
 
   if (view === 'profile') return <section className="customer-workspace">{feedback}<PageHeading eyebrow="ACCOUNT" title="Profile management" description="Update your contact details and secure your account." />
-    <div className="two-column-layout"><form className="panel customer-workspace-form" onSubmit={(event) => { event.preventDefault(); mutate(async () => { const response = await api('/customer/profile', { method: 'PATCH', body: JSON.stringify(profileForm) }); onUserChange?.((current) => current ? { ...current, full_name: profileForm.fullName, name: profileForm.fullName, phone: profileForm.phone } : current); return response; }, 'Profile updated.'); }}><h3>Personal information</h3><label className="field"><span>Full name</span><input required minLength="2" maxLength="160" value={profileForm.fullName} onChange={(event) => setProfileForm((current) => ({ ...current, fullName: event.target.value }))} /></label><label className="field"><span>Email</span><input value={profile.email || user.email || ''} disabled /></label><label className="field"><span>Phone</span><input maxLength="40" value={profileForm.phone} onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))} /></label><p className="muted">Email changes require a separate verification flow and are not available here. Update your profile photo from the header.</p><button className="button" disabled={busy}>{busy ? 'Saving...' : 'Save profile'}</button></form>
-      <form className="panel customer-workspace-form" onSubmit={(event) => { event.preventDefault(); mutate(async () => { await api('/customer/profile/password', { method: 'POST', body: JSON.stringify(passwordForm) }); setPasswordForm({ currentPassword: '', newPassword: '' }); }, 'Password updated.'); }}><h3>Change password</h3><label className="field"><span>Current password</span><input type="password" autoComplete="current-password" required value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} /></label><label className="field"><span>New password</span><input type="password" autoComplete="new-password" required minLength="8" maxLength="128" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} /></label><small>Use at least 8 characters with uppercase and lowercase letters, a number, and a special character.</small><button className="button" disabled={busy}>{busy ? 'Saving...' : 'Change password'}</button></form></div>
+    <div className="two-column-layout"><form className="panel customer-workspace-form" onSubmit={(event) => { event.preventDefault(); mutate(async () => { const response = await api('/customer/profile', { method: 'PATCH', body: JSON.stringify(profileForm) }); const savedPhone = response?.data?.phone || ''; setProfileForm((current) => ({ ...current, phone: savedPhone })); onUserChange?.((current) => current ? { ...current, full_name: profileForm.fullName, name: profileForm.fullName, phone: savedPhone } : current); return response; }, 'Profile updated.'); }}><h3>Personal information</h3><label className="field"><span>Full name</span><input required minLength="2" maxLength="160" value={profileForm.fullName} onChange={(event) => setProfileForm((current) => ({ ...current, fullName: event.target.value }))} /></label><label className="field"><span>Email</span><input value={profile.email || user.email || ''} disabled /></label><label className="field"><span>Phone</span><input type="tel" maxLength="40" value={profileForm.phone} onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))} /></label><div className="customer-account-meta"><span>Account status: <strong>{profile.status || user.status || 'active'}</strong></span><span>Registered: <strong>{profile.createdAt ? formatDate(profile.createdAt) : 'Not available'}</strong></span></div><p className="muted">Email changes require a separate verification flow and are not available here. Update your profile photo from the header.</p><button className="button" disabled={busy}>{busy ? 'Saving...' : 'Save profile'}</button></form>
+      <form className="panel customer-workspace-form" onSubmit={(event) => { event.preventDefault(); mutate(async () => { await api('/customer/profile/password', { method: 'POST', body: JSON.stringify(passwordForm) }); setPasswordForm({ currentPassword: '', newPassword: '' }); }, 'Password updated.'); }}><h3>Change password</h3><label className="field"><span>Current password</span><input type="password" autoComplete="current-password" required value={passwordForm.currentPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, currentPassword: event.target.value }))} /></label><label className="field"><span>New password</span><input type="password" autoComplete="new-password" required minLength="12" maxLength="16" value={passwordForm.newPassword} onChange={(event) => setPasswordForm((current) => ({ ...current, newPassword: event.target.value }))} /></label><small>Use 12–16 characters and no more than 72 UTF-8 bytes.</small><button className="button" disabled={busy}>{busy ? 'Saving...' : 'Change password'}</button></form></div>
   </section>;
 
   return <section className="customer-workspace">{feedback}<EmptyState>This customer section is unavailable.</EmptyState></section>;

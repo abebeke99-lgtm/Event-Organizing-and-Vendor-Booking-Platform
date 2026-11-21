@@ -10,10 +10,10 @@ import { hashToken } from '../src/lib/security.js';
 const adminToken = 'test-administrator-session-token';
 const adminId = 1;
 const roles = new Map([
-  [1, { id: 1, name: 'Administrator' }],
-  [2, { id: 2, name: 'Customer' }],
-  [3, { id: 3, name: 'Organizer' }],
-  [4, { id: 4, name: 'Vendor' }],
+  [1, { id: 1, name: 'Administrator', is_admin: true, is_active: true }],
+  [2, { id: 2, name: 'Customer', is_admin: false, is_active: true }],
+  [3, { id: 3, name: 'Organizer', is_admin: false, is_active: true }],
+  [4, { id: 4, name: 'Vendor', is_admin: false, is_active: true }],
 ]);
 
 function createDatabase() {
@@ -50,6 +50,10 @@ function createDatabase() {
       const user = [...users.values()].find((candidate) => candidate.email.toLowerCase() === String(values[0]).toLowerCase());
       return { rows: user ? [{ id: user.id }] : [], rowCount: user ? 1 : 0 };
     }
+    if (sql.startsWith('SELECT id FROM users WHERE LOWER(username)')) {
+      const user = [...users.values()].find((candidate) => candidate.username?.toLowerCase() === String(values[0]).toLowerCase());
+      return { rows: user ? [{ id: user.id }] : [], rowCount: user ? 1 : 0 };
+    }
     if (sql.startsWith('SELECT id FROM users WHERE phone')) {
       const user = [...users.values()].find((candidate) => candidate.phone === values[0]);
       return { rows: user ? [{ id: user.id }] : [], rowCount: user ? 1 : 0 };
@@ -59,11 +63,12 @@ function createDatabase() {
       users.set(id, {
         id,
         full_name: values[0],
-        email: values[1],
-        phone: values[2],
-        password_hash: values[3],
-        digital_id: values[4],
-        fid_number: values[5],
+        username: values[1],
+        email: values[2],
+        phone: values[3],
+        password_hash: values[4],
+        digital_id: values[5],
+        fid_number: values[6],
         status: 'active',
         created_at: new Date(),
       });
@@ -72,6 +77,24 @@ function createDatabase() {
     }
     if (sql.startsWith('INSERT INTO user_roles')) {
       assignments.set(values[0], values[1]);
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes('EXISTS (SELECT 1 FROM user_roles')) {
+      const user = users.get(values[0]);
+      const role = user && roles.get(assignments.get(user.id));
+      return {
+        rows: user ? [{
+          id: user.id,
+          status: user.status,
+          is_admin: Boolean(role?.is_admin),
+          current_role_id: role?.id || null,
+          current_role_name: role?.name || null,
+        }] : [],
+        rowCount: user ? 1 : 0,
+      };
+    }
+    if (sql.startsWith('DELETE FROM user_roles ur USING roles r')) {
+      assignments.delete(values[0]);
       return { rows: [], rowCount: 1 };
     }
     if (sql.startsWith('INSERT INTO vendor_profiles')) {
@@ -181,6 +204,7 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
     method: 'POST',
     body: {
       full_name: 'Created Organizer',
+      username: 'created_organizer',
       email: 'organizer@example.test',
       phone: '+12025550123',
       password: 'StrongPass123',
@@ -189,7 +213,7 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
       fid_number: 'FID-ORG-123',
     },
   });
-  assert.equal(organizerResponse.status, 201);
+assert.equal(organizerResponse.status, 201);
   const organizerBody = await organizerResponse.json();
   const organizerId = organizerBody.data.id;
   const organizer = database.users.get(organizerId);
@@ -210,6 +234,7 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
     method: 'POST',
     body: {
       full_name: 'Created Vendor',
+      username: 'created_vendor',
       email: 'vendor@example.test',
       phone: '+12025550124',
       password: 'StrongPass123',
@@ -233,7 +258,8 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
   const customerResponse = await request('/users', {
     method: 'POST',
     body: {
-      full_name: 'Blocked Customer',
+      full_name: 'Created Customer',
+      username: 'created_customer',
       email: 'customer@example.test',
       phone: '+12025550125',
       password: 'StrongPass123',
@@ -241,25 +267,44 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
       role_id: 2,
     },
   });
-  assert.equal(customerResponse.status, 400);
-  assert.equal([...database.users.values()].some((user) => user.email === 'customer@example.test'), false);
+  assert.equal(customerResponse.status, 201);
+  const customerBody = await customerResponse.json();
+  assert.equal(database.assignments.get(customerBody.data.id), 2);
 
   const adminRole = await request('/users', {
     method: 'POST',
     body: {
-      full_name: 'Blocked Admin',
-      email: 'blocked-admin@example.test',
+      full_name: 'Created Admin',
+      username: 'created_admin',
+      email: 'created-admin@example.test',
       phone: '+12025550126',
       password: 'StrongPass123',
       confirm_password: 'StrongPass123',
       role_id: 1,
     },
   });
-  assert.equal(adminRole.status, 400);
+  assert.equal(adminRole.status, 201);
+  const adminBody = await adminRole.json();
+  assert.equal(database.assignments.get(adminBody.data.id), 1);
+  assert.equal(await bcrypt.compare('StrongPass123', database.users.get(adminBody.data.id).password_hash), true);
+
+  const promotion = await request(`/users/${organizerId}/role`, {
+    method: 'PATCH',
+    body: { role_id: 1 },
+  });
+  assert.equal(promotion.status, 200);
+  assert.equal(database.assignments.get(organizerId), 1);
+  const protectedAdminRole = await request(`/users/${adminBody.data.id}/role`, {
+    method: 'PATCH',
+    body: { role_id: 2 },
+  });
+  assert.equal(protectedAdminRole.status, 409);
+
   const passwordMismatch = await request('/users', {
     method: 'POST',
     body: {
       full_name: 'Rejected Password',
+      username: 'rejected_password',
       email: 'rejected@example.test',
       phone: '+12025550127',
       role_id: 3,
@@ -268,7 +313,6 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
     },
   });
   assert.equal(passwordMismatch.status, 400);
-  assert.equal([...database.users.values()].some((user) => user.email === 'blocked-admin@example.test'), false);
 
   const missingRequired = await request('/users', {
     method: 'POST',
@@ -279,6 +323,7 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
     method: 'POST',
     body: {
       full_name: 'Invalid Email',
+      username: 'invalid_email',
       email: 'not-an-email',
       phone: '+12025550128',
       password: 'StrongPass123',
@@ -292,6 +337,7 @@ test('PostgreSQL admin creates active organizer/vendor accounts with hashed pass
     method: 'POST',
     body: {
       full_name: 'Duplicate Email',
+      username: 'duplicate_email',
       email: 'ORGANIZER@example.test',
       phone: '+12025550129',
       password: 'StrongPass123',
